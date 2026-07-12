@@ -2,6 +2,7 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
+import { authHeader } from './helpers/testUsers.js';
 
 function extractCookie(res, name) {
   const setCookie = res.headers['set-cookie'] || [];
@@ -172,5 +173,22 @@ describe('POST /api/auth/logout', () => {
 
     const row = await db('audit_logs').where({ action_type: 'AUTH_LOGOUT' }).first();
     expect(row).toBeTruthy();
+  });
+});
+
+describe('GET /api/auth/me', () => {
+  test('returns the current user for a valid access token', async () => {
+    const signupRes = await request(app)
+      .post('/api/auth/signup')
+      .send({ username: 'henry', email: 'henry@example.com', password: 'correct-horse-battery' });
+
+    const res = await request(app).get('/api/auth/me').set(authHeader(signupRes.body.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.user).toMatchObject({ username: 'henry', email: 'henry@example.com' });
+  });
+
+  test('rejects a missing or invalid access token', async () => {
+    const res = await request(app).get('/api/auth/me');
+    expect(res.status).toBe(401);
   });
 });

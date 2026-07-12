@@ -2,7 +2,7 @@
 
 This runbook covers day-to-day operation of the local test environment: first-time setup, starting/stopping, migrations, health checks, logs, and troubleshooting. For the design rationale behind any of these choices (why ports are bound to 127.0.0.1, why there are two Postgres roles, why the audit log uses an advisory lock, etc.), see `PROJECT_PLAN.md` — this document assumes that reasoning and just tells you what to run.
 
-**Current implementation status**: Phases 1–2 (Local Foundation And Database Setup; Local Auth And API Base). Auth, workspaces/channels/DMs, and paginated messaging all work over REST. There is still no WebSocket layer, no LLM integration, and no real chat UI — the frontend is still the Phase 1 placeholder screen. See `PROJECT_PLAN.md` Section 11 for exactly what exists, and Section 8 for what's still to come. Sections below marked *(Phase N+)* describe future behavior and don't work yet.
+**Current implementation status**: Phases 1–3 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI). The app is a working real-time chat client: sign up, create workspaces/channels, join public channels, send and receive messages live over WebSocket, reply in threads, see presence. There is still no LLM integration and no admin audit dashboard. See `PROJECT_PLAN.md` Section 11 for exactly what exists, and Section 8 for what's still to come. Sections below marked *(Phase N+)* describe future behavior and don't work yet.
 
 ## Start / Stop
 
@@ -33,10 +33,10 @@ docker compose run --rm migrate
 
 | Service | Local URL | Notes |
 |---|---|---|
-| Frontend (Vite dev server) | http://localhost:3101 | placeholder screen only until Phase 3 |
+| Frontend (Vite dev server) | http://localhost:3101 | full chat UI — login/signup, workspaces, channels, threads |
 | Backend health | http://localhost:8101/health | `{"status":"ok","db":"ok","uptimeSeconds":N}` |
 | Backend REST API | http://localhost:8101/api | see API Reference below |
-| Backend WebSocket | ws://localhost:8101/ws | *(Phase 3+ — doesn't exist yet)* |
+| Backend WebSocket | ws://localhost:8101/ws | authenticate-frame handshake — see WebSocket Protocol below |
 | Postgres | localhost:5433 | `psql -h localhost -p 5433 -U <PGUSER> -d silent_whisper` |
 
 In production, these are reached via `whisper.silentlattice.dev` (see `PROJECT_PLAN.md` Section 2, Serving Under Silent Lattice) — the shared nginx proxy reaches this stack through `host.docker.internal` on the ports above, not by joining `wireservice_default`.
@@ -125,6 +125,7 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | POST | `/api/auth/login` | `{username, password}` → `{accessToken, user}` + refresh cookie |
 | POST | `/api/auth/refresh` | reads refresh cookie, rotates it → `{accessToken}` + new refresh cookie |
 | POST | `/api/auth/logout` | reads refresh cookie, revokes it → `204` |
+| GET | `/api/auth/me` | requires a bearer token → `{user}` — added in Phase 3 so the frontend can restore a session after a bare `/refresh` (which only returns a token, not the user) |
 | POST | `/api/workspaces` | `{name}` → creates a workspace; creator becomes its `ADMIN` |
 | GET | `/api/workspaces` | list workspaces the caller belongs to |
 | POST | `/api/workspaces/:workspaceId/channels` | `{name, type: "PUBLIC"\|"PRIVATE"}` — creator auto-joined |
@@ -145,9 +146,29 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 
 ### Auth token lifecycle
 
-- Access tokens expire in 15 minutes (`ACCESS_TOKEN_TTL`). There is no frontend token-refresh wiring yet (Phase 3) — for manual testing, call `/api/auth/refresh` yourself once the token expires.
-- Refresh tokens rotate on every use: each `/api/auth/refresh` call revokes the presented token and returns a new one. **Reusing an old, already-rotated refresh token revokes every other active session for that user** — this is deliberate reuse detection (a replayed token is either a client bug or a stolen token), not a bug, and is audited as `AUTH_REFRESH_REUSE_DETECTED`. If you're testing manually with a saved cookie jar, remember each `curl -b cookies.txt -c cookies.txt` refresh invalidates the previous cookie value.
+- Access tokens expire in 15 minutes (`ACCESS_TOKEN_TTL`). The frontend (`frontend/src/api/client.js`) handles this itself now: any `401` triggers one silent `/api/auth/refresh` call and retries the original request. For manual `curl` testing, call `/api/auth/refresh` yourself once the token expires.
+- Refresh tokens rotate on every use: each `/api/auth/refresh` call revokes the presented token and returns a new one. **Reusing an old, already-rotated refresh token revokes every other active session for that user** — this is deliberate reuse detection (a replayed token is either a client bug or a stolen token), not a bug, and is audited as `AUTH_REFRESH_REUSE_DETECTED`. If you're testing manually with a saved cookie jar, remember each `curl -b cookies.txt -c cookies.txt` refresh invalidates the previous cookie value. (This bit the frontend during Phase 3 development — see Common Problems, "StrictMode" entry below.)
 - `JWT_KEY_ID` (default `v1`) is embedded in every token's header. Bump it alongside rotating `JWT_SECRET` to invalidate all outstanding tokens predictably — see `PROJECT_PLAN.md` Section 3, Secrets & Configuration.
+
+## WebSocket Protocol
+
+Connect to `ws://localhost:8101/ws` (or `WS_PATH` if changed). The connection is unauthenticated — no room data, no joins accepted — until an `authenticate` frame validates.
+
+| Direction | Frame | Notes |
+|---|---|---|
+| → server | `{type: "authenticate", accessToken}` | required first frame; also used to renew on an already-open connection before the token expires |
+| ← server | `{type: "authenticated", userId, reauth, presence}` | `presence` is a `{userId: status}` snapshot of everyone currently tracked |
+| → server | `{type: "join", channelId}` | re-validates membership every time, including on reconnect |
+| ← server | `{type: "joined", channelId}` | |
+| → server | `{type: "leave", channelId}` | |
+| → server | `{type: "message", channelId, content, parentMessageId?, clientNonce?}` | `clientNonce` is echoed back only to the sender, for optimistic-UI reconciliation |
+| ← server | `{type: "message_created", message, clientNonce}` | broadcast to every socket joined to `channelId` |
+| → server | `{type: "heartbeat"}` | send periodically (frontend does this every 20s) to stay marked `online` |
+| ← server | `{type: "heartbeat_ack"}` | |
+| ← server | `{type: "presence_update", userId, status}` | `status` is `online`, `away`, or `offline` |
+| ← server | `{type: "error", error, context}` | never closes the connection except for auth failures / identity mismatch / connection-cap — a bad `join` or rate-limited `message` just gets an error frame |
+
+Close codes: `4001` invalid/missing auth or identity mismatch, `4002` token expired without renewal, `4003` too many concurrent connections for that user (`WS_MAX_CONNECTIONS_PER_USER`, default 5).
 
 ## Rebuilding After Code Changes
 
@@ -246,6 +267,8 @@ The frontend dev server runs Vite with `--host` (so it's reachable from outside 
 docker compose up -d --build frontend
 ```
 
+No automated frontend test suite exists yet (no Vitest/RTL configured) — this is a real gap, not a decision. Phase 3 was verified with the backend Jest suite plus actually driving the app in a real headless-Chromium session (see PROJECT_PLAN.md Section 11); that browser run is what caught a React 18 StrictMode double-effect race that no backend test could have (see Common Problems below).
+
 ## Health Checks
 
 ```bash
@@ -302,6 +325,18 @@ docker compose run --rm --build migrate
 ### `429 Too many attempts` while manually testing signup/login
 
 Expected, not a bug — `backend/src/auth/rateLimit.js` caps signup at 10/hour per IP and login at 20/15min per IP + 10/15min per username. If you're exploring the API by hand and hit this, wait out the window or temporarily raise the limits in that file (never disable them outright, and never in a way that ships to production).
+
+### Composer stays disabled after selecting a channel
+
+The message input is intentionally disabled until the WebSocket `join` for that channel is acknowledged (`joined` frame) — this proves the client actually has a live, membership-validated room subscription before letting you send. If it never enables: open the browser console and check for WS `error` frames (most likely a stale/expired access token — reload), or confirm the backend container is actually up (`docker compose ps`).
+
+### A page reload logs you out unexpectedly, or session restore is flaky
+
+This was a real bug during Phase 3 development: React 18 StrictMode double-invokes mount effects in development, so `AuthContext`'s session-restore effect fired `POST /api/auth/refresh` twice. Since refresh tokens rotate-on-use, the second call could hit reuse detection and 401 — and if it resolved after the first call's success, it could clobber `authenticated` back to `anonymous`. Fixed with a `useRef` call-once guard in `frontend/src/context/AuthContext.jsx`. If you ever see spurious logouts on load again, check for a similar un-guarded effect calling a rotate-on-use endpoint.
+
+### WebSocket connects but never receives messages / presence updates
+
+Check the browser console for the `authenticated` frame — if it never arrives, the access token is likely invalid or expired (an access token obtained before a backend restart won't necessarily still verify, depending on `JWT_SECRET`/`JWT_KEY_ID`). Also confirm you're not hitting the per-user concurrent-connection cap (`WS_MAX_CONNECTIONS_PER_USER`, default 5) — e.g. many open tabs during testing.
 
 ### Port already in use (`5433`, `8101`, or `3101`)
 

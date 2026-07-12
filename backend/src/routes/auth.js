@@ -13,6 +13,7 @@ import {
   RefreshReuseDetectedError,
 } from '../auth/refreshTokens.js';
 import { loginIpLimiter, loginUsernameLimiter, signupIpLimiter } from '../auth/rateLimit.js';
+import { requireAuth } from '../auth/requireAuth.js';
 import { ConflictError, UnauthorizedError, ValidationError } from '../errors.js';
 
 export const authRouter = Router();
@@ -74,6 +75,22 @@ authRouter.post('/signup', signupIpLimiter, async (req, res, next) => {
     });
 
     res.status(201).json({ accessToken, user: { id: user.id, username: user.username, email: user.email } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Lets the frontend restore a session after a page reload: it can silently
+// call /refresh to get a fresh access token from the httpOnly cookie, but
+// /refresh only returns a token, not the user object — this fills that gap
+// without requiring the client to have cached user info anywhere itself.
+authRouter.get('/me', requireAuth, async (req, res, next) => {
+  try {
+    const user = await db('users').where({ id: req.user.id }).first(['id', 'username', 'email']);
+    if (!user) {
+      throw new UnauthorizedError('User no longer exists');
+    }
+    res.json({ user });
   } catch (err) {
     next(err);
   }

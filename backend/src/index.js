@@ -1,3 +1,4 @@
+import http from 'node:http';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { config } from './config.js';
@@ -8,6 +9,8 @@ import { authRouter } from './routes/auth.js';
 import { workspacesRouter } from './routes/workspaces.js';
 import { directMessagesRouter, groupDirectMessagesRouter } from './routes/directMessages.js';
 import { messagesRouter } from './routes/messages.js';
+import { attachWebSocketServer } from './ws/server.js';
+import { startPresenceSweep, stopPresenceSweep } from './ws/presence.js';
 
 const app = express();
 
@@ -42,15 +45,23 @@ app.use('/api', messagesRouter);
 
 app.use(errorHandler);
 
-function start() {
-  const server = app.listen(config.port, () => {
+// HTTP and WebSocket share one server/port (config.ws.path, e.g. /ws) —
+// simplest possible port topology for a reverse proxy to sit in front of,
+// and keeps the WS path the only thing that needs to be configurable
+// (PROJECT_PLAN.md Section 8, Phase 3).
+function start(port = config.port) {
+  const server = http.createServer(app);
+  attachWebSocketServer(server);
+  startPresenceSweep();
+  server.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.log(`Silent Whisper backend listening on :${config.port} (${config.nodeEnv})`);
+    console.log(`Silent Whisper backend listening on :${port} (${config.nodeEnv}), ws path ${config.ws.path}`);
   });
   return server;
 }
 
 async function shutdown(server) {
+  stopPresenceSweep();
   await new Promise((resolve) => server.close(resolve));
   await db.destroy();
 }

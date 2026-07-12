@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { requireChannelMember } from '../authz/membershipService.js';
-import { assertUuid, assertMessageContent, parsePagination } from '../validation.js';
-import { ValidationError } from '../errors.js';
+import { assertUuid, parsePagination } from '../validation.js';
+import { createMessage } from '../services/messageService.js';
+import { broadcastToRoom } from '../ws/connectionRegistry.js';
 
 export const messagesRouter = Router();
 
@@ -20,26 +21,40 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
     await requireChannelMember(db, req.user.id, channelId);
     const { limit, before } = parsePagination(req.query);
 
-    let query = db('messages').where({ channel_id: channelId });
+    // Every filter/order column is qualified with `messages.` — both
+    // messages and users have a created_at column, and an unqualified
+    // reference is ambiguous the moment the join below is added (Postgres
+    // rejects the whole query, it doesn't guess).
+    let query = db('messages').where({ 'messages.channel_id': channelId });
     if (req.query.parentMessageId !== undefined) {
-      query = query.where({ parent_message_id: assertUuid(req.query.parentMessageId, 'parentMessageId') });
+      query = query.where({ 'messages.parent_message_id': assertUuid(req.query.parentMessageId, 'parentMessageId') });
     } else {
-      query = query.whereNull('parent_message_id');
+      query = query.whereNull('messages.parent_message_id');
     }
     if (before) {
-      query = query.where('created_at', '<', before);
+      query = query.where('messages.created_at', '<', before);
     }
 
     const rows = await query
-      .orderBy('created_at', 'desc')
+      .join('users', 'users.id', 'messages.user_id')
+      .orderBy('messages.created_at', 'desc')
       .limit(limit)
-      .select('id', 'channel_id', 'user_id', 'content', 'parent_message_id', 'created_at');
+      .select(
+        'messages.id',
+        'messages.channel_id',
+        'messages.user_id',
+        'users.username',
+        'messages.content',
+        'messages.parent_message_id',
+        'messages.created_at',
+      );
 
     res.json(
       rows.map((r) => ({
         id: r.id,
         channelId: r.channel_id,
         userId: r.user_id,
+        username: r.username,
         content: r.content,
         parentMessageId: r.parent_message_id,
         createdAt: r.created_at,
@@ -50,33 +65,27 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
   }
 });
 
+// Sends over REST also broadcast to WebSocket-joined clients (ws/server.js
+// handles sends that arrive over the socket itself) — the same
+// messageService.createMessage call backs both transports, and both notify
+// the same room registry, so a message sent by one client's REST call still
+// appears in real time for everyone else connected via WS.
 messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
   try {
     const channelId = assertUuid(req.params.channelId, 'channelId');
     await requireChannelMember(db, req.user.id, channelId);
 
-    const content = assertMessageContent(req.body?.content);
-    let parentMessageId = null;
-    if (req.body?.parentMessageId !== undefined && req.body?.parentMessageId !== null) {
-      parentMessageId = assertUuid(req.body.parentMessageId, 'parentMessageId');
-      const parent = await db('messages').where({ id: parentMessageId, channel_id: channelId }).first('id');
-      if (!parent) {
-        throw new ValidationError('parentMessageId must reference a message in the same channel');
-      }
-    }
-
-    const [message] = await db('messages')
-      .insert({ channel_id: channelId, user_id: req.user.id, content, parent_message_id: parentMessageId })
-      .returning(['id', 'channel_id', 'user_id', 'content', 'parent_message_id', 'created_at']);
-
-    res.status(201).json({
-      id: message.id,
-      channelId: message.channel_id,
-      userId: message.user_id,
-      content: message.content,
-      parentMessageId: message.parent_message_id,
-      createdAt: message.created_at,
+    const message = await createMessage(db, {
+      channelId,
+      userId: req.user.id,
+      username: req.user.username,
+      content: req.body?.content,
+      parentMessageId: req.body?.parentMessageId,
     });
+
+    broadcastToRoom(channelId, { type: 'message_created', message });
+
+    res.status(201).json(message);
   } catch (err) {
     next(err);
   }

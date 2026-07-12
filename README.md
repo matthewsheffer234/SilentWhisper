@@ -11,14 +11,14 @@ Designed to be deployable alongside the existing Silent Lattice stack, served un
 
 ## Status
 
-Phases 1–2 (Local Foundation And Database Setup; Local Auth And API Base) are complete and verified end-to-end: auth (signup/login/refresh rotation with reuse detection/logout), workspaces, channels (public/private), direct messages, group DMs, and paginated threaded messaging all work over REST. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested so far, and `RUNBOOK.md`'s API Reference for the endpoint list. WebSockets, the LLM proxy, and the real chat UI are not yet implemented (Phases 3–5) — the frontend is still the Phase 1 placeholder screen.
+Phases 1–3 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI) are complete and verified end-to-end, including driving the real UI in a headless browser: sign up, create a workspace, create/join channels, send and receive messages live over WebSocket with optimistic rendering, reply in threads, presence badges, and session restore across a page reload all work. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested — including three real bugs found and fixed along the way — and `RUNBOOK.md`'s API Reference / WebSocket Protocol sections for the wire format. The LLM proxy and admin audit dashboard are not yet implemented (Phases 4–5).
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
 | Frontend | Vite + React |
-| Backend | Node.js (Express), `ws` (Phase 3+) |
+| Backend | Node.js (Express + `ws`) |
 | Database | PostgreSQL via Knex.js (query building + migrations) |
 | AI | Ollama (this test environment, CPU-only) / vLLM (target GPU-backed network) — Phase 4 |
 | Container runtime | Docker Compose |

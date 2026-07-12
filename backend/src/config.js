@@ -42,4 +42,25 @@ export const config = {
     refreshTokenTtlMs: Number(process.env.REFRESH_TOKEN_TTL_MS || 30 * 24 * 60 * 60 * 1000), // 30 days
     bcryptSaltRounds: Math.max(12, Number(process.env.BCRYPT_SALT_ROUNDS || 12)),
   },
+
+  ws: {
+    // Configurable for reverse-proxy deployment (PROJECT_PLAN.md Section 8,
+    // Phase 3: "Make the WebSocket path configurable").
+    path: process.env.WS_PATH || '/ws',
+    // A connection whose access token has expired and hasn't been renewed
+    // via a fresh `authenticate` frame gets disconnected the next time this
+    // sweep runs (Section 3, "Long-lived connections outlive the access
+    // token"). Checked well inside the 15-minute access-token TTL.
+    tokenExpirySweepIntervalMs: Number(process.env.WS_TOKEN_SWEEP_INTERVAL_MS || 30_000),
+    // Presence heartbeat: a connection not heard from within this window is
+    // downgraded from Online to Away (still connected, just stale) — server-
+    // observed, never trusting a client-supplied timestamp (Section 6).
+    presenceStaleMs: Number(process.env.WS_PRESENCE_STALE_MS || 45_000),
+    presenceSweepIntervalMs: Number(process.env.WS_PRESENCE_SWEEP_INTERVAL_MS || 15_000),
+    // Rate Limiting & Abuse Prevention (Section 3): bound both message-send
+    // rate and total concurrent connections per user.
+    maxMessagesPerWindow: Number(process.env.WS_MAX_MESSAGES_PER_WINDOW || 10),
+    messageWindowMs: Number(process.env.WS_MESSAGE_WINDOW_MS || 10_000),
+    maxConnectionsPerUser: Number(process.env.WS_MAX_CONNECTIONS_PER_USER || 5),
+  },
 };

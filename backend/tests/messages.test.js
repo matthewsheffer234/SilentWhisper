@@ -22,6 +22,24 @@ async function createChannel(owner) {
   return chRes.body.id;
 }
 
+describe('message author display', () => {
+  test('both the history list and a fresh send include the sender username', async () => {
+    const owner = await signup(app, 'msgowner0');
+    const channelId = await createChannel(owner);
+
+    const sendRes = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'hi' });
+    expect(sendRes.body.username).toBe('msgowner0');
+
+    const listRes = await request(app)
+      .get(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken));
+    expect(listRes.body[0].username).toBe('msgowner0');
+  });
+});
+
 describe('message pagination', () => {
   test('returns newest-first and respects the limit', async () => {
     const owner = await signup(app, 'msgowner1');
