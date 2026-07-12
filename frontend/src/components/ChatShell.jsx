@@ -6,6 +6,7 @@ import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
 import AiSettingsPanel from './AiSettingsPanel.jsx';
+import AuditDashboard from './AuditDashboard.jsx';
 
 const styles = {
   shell: { display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' },
@@ -28,6 +29,7 @@ export default function ChatShell() {
   const [threadRoot, setThreadRoot] = useState(null);
   const [threadReplies, setThreadReplies] = useState([]);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [auditLogOpen, setAuditLogOpen] = useState(false);
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -226,8 +228,24 @@ export default function ChatShell() {
         onLogout={logout}
         canManageAi={canManageAi}
         onOpenAiSettings={() => setAiSettingsOpen(true)}
+        onOpenAuditLog={() => setAuditLogOpen(true)}
       />
+      {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
+          accessibility pass: index.html's static skip link (present on
+          every page, before React even mounts) has pointed at `#main`
+          since Phase 1, but no element with that id existed anywhere —
+          a genuinely dead skip link this pass caught and fixes here rather
+          than by adding a second, competing skip link. The id/tabIndex live
+          directly on ChannelView's own wrapper (via mainContentId), not on
+          an extra `display: contents` div around it — that combination
+          (tabIndex on a boxless element) turned out to break Chromium's
+          *entire page's* Tab-key sequential focus order, not just this one
+          element's own focusability: the skip link itself remained
+          perfectly focusable via script, just unreachable by pressing Tab
+          at all, anywhere on the page. Caught by the accessibility e2e
+          test, not by eye. */}
       <ChannelView
+        mainContentId="main"
         channel={selectedChannel}
         messages={messagesByChannel[selectedChannelId] ?? []}
         presence={presence}
@@ -244,6 +262,7 @@ export default function ChatShell() {
         onClose={() => setThreadRoot(null)}
       />
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
+      {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
     </div>
   );
 }

@@ -5,6 +5,8 @@ import { requireChannelMember } from '../authz/membershipService.js';
 import { assertUuid, parsePagination } from '../validation.js';
 import { createMessage } from '../services/messageService.js';
 import { broadcastToRoom } from '../ws/connectionRegistry.js';
+import { isMessageRateLimited } from '../ws/rateLimiter.js';
+import { RateLimitedError } from '../errors.js';
 
 export const messagesRouter = Router();
 
@@ -74,6 +76,17 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
   try {
     const channelId = assertUuid(req.params.channelId, 'channelId');
     await requireChannelMember(db, req.user.id, channelId);
+
+    // Section 3, Rate Limiting & Abuse Prevention: "Rate-limit message sends
+    // per user/connection so a single client cannot flood a channel..." —
+    // shares one counter with the WebSocket `message` frame path
+    // (ws/server.js's handleMessage) rather than each transport getting its
+    // own independent budget, since the actual requirement is a per-user
+    // send rate, not a per-transport one; sending via REST must not be a way
+    // to get a second, uncounted allowance on top of WS.
+    if (isMessageRateLimited(req.user.id)) {
+      throw new RateLimitedError('Too many messages — slow down');
+    }
 
     const message = await createMessage(db, {
       channelId,

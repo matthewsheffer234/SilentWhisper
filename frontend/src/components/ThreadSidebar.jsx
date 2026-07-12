@@ -22,14 +22,20 @@ const styles = {
     color: 'var(--text-1)',
   },
   headerActions: { display: 'flex', alignItems: 'center', gap: 10 },
+  // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — this
+  // sidebar header is visually compact, but the button itself still needs
+  // the full hit area even though it doesn't need to look 44px tall.
   extractButton: {
+    minHeight: 44,
+    display: 'inline-flex',
+    alignItems: 'center',
     fontSize: 'var(--text-xs)',
     fontWeight: 600,
     color: 'var(--brg)',
     background: 'none',
     border: '1px solid var(--brg)',
     borderRadius: 999,
-    padding: '3px 10px',
+    padding: '0 12px',
     cursor: 'pointer',
   },
   taskPanel: {
@@ -54,7 +60,18 @@ const styles = {
     letterSpacing: '0.04em',
   },
   taskError: { color: '#c0392b' },
-  closeButton: { background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 'var(--text-md)' },
+  closeButton: {
+    minWidth: 44,
+    minHeight: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-3)',
+    cursor: 'pointer',
+    fontSize: 'var(--text-md)',
+  },
   root: { padding: '12px 16px', borderBottom: '1px solid var(--border)' },
   rootAuthor: { fontWeight: 700, fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
   rootContent: { fontSize: 'var(--text-sm)', color: 'var(--text-2)', marginTop: 4, whiteSpace: 'pre-wrap' },

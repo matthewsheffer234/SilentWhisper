@@ -14,11 +14,25 @@ const styles = {
   userRow: {
     display: 'flex',
     alignItems: 'center',
+    gap: 8,
     padding: '14px 16px',
     borderBottom: '1px solid var(--border)',
     fontSize: 'var(--text-sm)',
     color: 'var(--text-1)',
     fontWeight: 600,
+  },
+  username: { flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  // A separate row from userRow, not more items crammed into it — a fixed
+  // 260px sidebar has no room for a long username plus three text buttons
+  // on one line without clipping (a real overflow bug an e2e test caught:
+  // "AI Settings" was rendering visually cut off to a single "S"). Wraps
+  // naturally if both admin links are present and space is tight.
+  adminToolsRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    padding: '8px 10px',
+    borderBottom: '1px solid var(--border)',
+    gap: 4,
   },
   section: { padding: '12px 10px', overflowY: 'auto', flex: 1 },
   sectionTitle: {
@@ -72,22 +86,48 @@ const styles = {
     background: 'none',
     cursor: 'pointer',
   },
-  userRowActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 },
+  // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — visually
+  // compact text links, but the invisible hit area is full-size.
   aiSettingsButton: {
+    minHeight: 44,
+    padding: '0 8px',
+    display: 'flex',
+    alignItems: 'center',
     fontSize: 'var(--text-xs)',
     color: 'var(--text-3)',
     background: 'none',
     border: 'none',
     cursor: 'pointer',
+    whiteSpace: 'nowrap',
   },
   logout: {
+    minHeight: 44,
+    marginLeft: 'auto',
+    padding: '0 8px',
+    display: 'flex',
+    alignItems: 'center',
     fontSize: 'var(--text-xs)',
     color: 'var(--text-3)',
     background: 'none',
     border: 'none',
     cursor: 'pointer',
+    whiteSpace: 'nowrap',
   },
 };
+
+// PROJECT_PLAN.md Section 8, Phase 5 accessibility pass: workspace/channel
+// rows are plain divs (not <button>s — a channel row needs to nest its own
+// separately-clickable "Join" button, and nested interactive elements
+// inside a real <button> are invalid HTML), so keyboard activation isn't
+// free the way it is for an actual button — this restores it explicitly.
+function activateOnKey(handler) {
+  return (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handler();
+    }
+  };
+}
 
 function InlineCreateForm({ placeholder, onSubmit, extra }) {
   const [value, setValue] = useState('');
@@ -127,6 +167,7 @@ export default function WorkspaceSidebar({
   onLogout,
   canManageAi,
   onOpenAiSettings,
+  onOpenAuditLog,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
@@ -134,17 +175,20 @@ export default function WorkspaceSidebar({
   return (
     <aside style={styles.sidebar}>
       <div style={styles.userRow}>
-        {user?.username}
+        <span style={styles.username}>{user?.username}</span>
         <PresenceBadge status={presence[user?.id] ?? 'online'} />
-        <div style={styles.userRowActions}>
-          {canManageAi && (
-            <button type="button" style={styles.aiSettingsButton} onClick={onOpenAiSettings}>
-              AI Settings
-            </button>
-          )}
-          <button type="button" style={styles.logout} onClick={onLogout}>Sign out</button>
-        </div>
+        <button type="button" style={styles.logout} onClick={onLogout}>Sign out</button>
       </div>
+      {canManageAi && (
+        <div style={styles.adminToolsRow}>
+          <button type="button" style={styles.aiSettingsButton} onClick={onOpenAiSettings}>
+            AI Settings
+          </button>
+          <button type="button" style={styles.aiSettingsButton} onClick={onOpenAuditLog}>
+            Audit Log
+          </button>
+        </div>
+      )}
 
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Workspaces</div>
@@ -152,8 +196,11 @@ export default function WorkspaceSidebar({
           <div
             key={ws.id}
             className="sl-row"
+            role="button"
+            tabIndex={0}
             style={{ ...styles.row, ...(ws.id === selectedWorkspaceId ? styles.rowActive : {}) }}
             onClick={() => onSelectWorkspace(ws.id)}
+            onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
           >
             {ws.name}
           </div>
@@ -179,8 +226,11 @@ export default function WorkspaceSidebar({
               <div
                 key={ch.id}
                 className="sl-row"
+                role="button"
+                tabIndex={0}
                 style={{ ...styles.row, ...(ch.id === selectedChannelId ? styles.rowActive : {}) }}
                 onClick={() => onSelectChannel(ch.id)}
+                onKeyDown={activateOnKey(() => onSelectChannel(ch.id))}
               >
                 <span>{ch.type === 'PRIVATE' ? '🔒' : '#'} {ch.name}</span>
                 {!ch.isMember && (

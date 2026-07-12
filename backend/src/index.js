@@ -10,6 +10,7 @@ import { workspacesRouter } from './routes/workspaces.js';
 import { directMessagesRouter, groupDirectMessagesRouter } from './routes/directMessages.js';
 import { messagesRouter } from './routes/messages.js';
 import { aiRouter } from './routes/ai.js';
+import { auditRouter } from './routes/audit.js';
 import { attachWebSocketServer } from './ws/server.js';
 import { startPresenceSweep, stopPresenceSweep } from './ws/presence.js';
 import { ensureDefaultSettingsSeeded } from './llm/settingsService.js';
@@ -46,6 +47,7 @@ app.use('/api/direct-messages', directMessagesRouter);
 app.use('/api/group-direct-messages', groupDirectMessagesRouter);
 app.use('/api', messagesRouter);
 app.use('/api', aiRouter);
+app.use('/api', auditRouter);
 
 app.use(errorHandler);
 

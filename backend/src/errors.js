@@ -43,6 +43,17 @@ export class ConflictError extends AppError {
   }
 }
 
+// Section 3, Rate Limiting & Abuse Prevention: shared by every rate-limited
+// path that isn't already handled by express-rate-limit's own handler
+// (auth/rateLimit.js, llm/aiRateLimit.js) — e.g. the in-process per-user
+// message-send limiter, which is shared across both the REST and WebSocket
+// send paths (ws/rateLimiter.js) and so isn't itself Express middleware.
+export class RateLimitedError extends AppError {
+  constructor(message = 'Too many requests') {
+    super(429, message);
+  }
+}
+
 // Phase 4: the configured LLM provider is `disabled`, or busy at
 // LLM_MAX_CONCURRENT_REQUESTS capacity — the caller's request was well-formed,
 // the AI feature itself just isn't available right now.

@@ -212,21 +212,34 @@ button:active:not(:disabled) { opacity: 0.78; }
 }
 
 /* ── Skip link ───────────────────────────────────────────────────────────── */
+/* Hidden via `transform`, not by moving it to a negative `top` — real (this
+   was verified against actual Chromium, not assumed): a plain `top: -40px`
+   box is still technically in the layout, but at least this browser's
+   sequential (Tab-key) focus navigation excludes elements positioned
+   entirely outside the viewport that way, even though they remain
+   perfectly focusable via `tabIndex`/script (`.focus()` works, Tab doesn't
+   reach it). `transform` moves it the same visual distance without
+   triggering that exclusion — a real, working skip link needs both
+   properties true (focusable AND actually reachable by pressing Tab), and
+   this pattern is what got both to hold under an actual browser check
+   rather than by inspection. PROJECT_PLAN.md Section 8, Phase 5
+   accessibility pass. */
 .sl-skip-link {
   position: absolute;
-  top: -40px;
+  top: 6px;
   left: 6px;
   z-index: 10000;
   padding: 8px 16px;
   background: var(--text-1);
   color: var(--surface);
-  border-radius: 0 0 8px 8px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
-  transition: top 0.1s;
+  transform: translateY(-150%);
+  transition: transform 0.1s;
 }
-.sl-skip-link:focus { top: 0; }
+.sl-skip-link:focus { transform: translateY(0); }
 
 /* ── Scrollbars ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -235,6 +248,21 @@ button:active:not(:disabled) { opacity: 0.78; }
 
 /* ── Input / select focus ring ───────────────────────────────────────────── */
 input:focus, select:focus, textarea:focus {
+  outline: 1.5px solid var(--brg);
+  outline-offset: 1px;
+}
+
+/* ── Button focus ring (PROJECT_PLAN.md Section 8, Phase 5 accessibility
+   pass) ─────────────────────────────────────────────────────────────────
+   :focus-visible rather than :focus so a mouse click doesn't show a ring —
+   only actual keyboard navigation does, matching how :focus-visible is
+   meant to be used and avoiding the "focus ring on every click" complaint
+   plain :focus has. No button in this app ever sets outline:none, so
+   without this rule buttons still get SOME default focus indication from
+   the browser — this rule exists to make it visually consistent with the
+   inputs' brand-colored ring above, not to restore indication that was
+   otherwise missing. */
+button:focus-visible, [role="button"]:focus-visible {
   outline: 1.5px solid var(--brg);
   outline-offset: 1px;
 }

@@ -1,11 +1,14 @@
 import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
+import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, authHeader } from './helpers/testUsers.js';
+import { _resetForTests as resetMessageRateLimiter } from '../src/ws/rateLimiter.js';
 
 beforeEach(async () => {
   await resetDb(db);
+  resetMessageRateLimiter();
 });
 
 afterAll(async () => {
@@ -170,5 +173,49 @@ describe('message length limits', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: 'cross-channel reply attempt', parentMessageId: root.body.id });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('REST send rate limiting (Section 3, Rate Limiting & Abuse Prevention)', () => {
+  test('a single user flooding the REST endpoint eventually gets 429, not an unbounded flood', async () => {
+    const owner = await signup(app, 'msgratelimited0');
+    const channelId = await createChannel(owner);
+
+    const statuses = [];
+    for (let i = 0; i < config.ws.maxMessagesPerWindow + 2; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await request(app)
+        .post(`/api/channels/${channelId}/messages`)
+        .set(authHeader(owner.accessToken))
+        .send({ content: `flood ${i}` });
+      statuses.push(res.status);
+    }
+
+    expect(statuses.filter((s) => s === 201)).toHaveLength(config.ws.maxMessagesPerWindow);
+    expect(statuses.slice(config.ws.maxMessagesPerWindow)).toEqual([429, 429]);
+  });
+
+  test('the limit is shared across users — one user hitting it does not affect another', async () => {
+    const userA = await signup(app, 'msgratelimited1');
+    const userB = await signup(app, 'msgratelimited2');
+    const channelId = await createChannel(userA);
+    // userB needs to be a member of the same channel to send to it.
+    await db('channel_members').insert({ channel_id: channelId, user_id: userB.userId });
+
+    for (let i = 0; i < config.ws.maxMessagesPerWindow; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(userA.accessToken)).send({ content: `a${i}` });
+    }
+    const userAExtra = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(userA.accessToken))
+      .send({ content: 'one too many' });
+    expect(userAExtra.status).toBe(429);
+
+    const userBFirst = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(userB.accessToken))
+      .send({ content: 'userB should be unaffected' });
+    expect(userBFirst.status).toBe(201);
   });
 });

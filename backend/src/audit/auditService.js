@@ -113,3 +113,53 @@ export async function appendAuditEvent(db, event) {
     return inserted;
   });
 }
+
+/**
+ * Walks the whole chain in insertion order, recomputing every row's hash
+ * from its own fields plus the previous row's `curr_row_hash`, and checks it
+ * against what's actually stored (PROJECT_PLAN.md Section 6: "A verification
+ * script walks the audit log in order, recomputes each row hash, and reports
+ * either 'Log Integrity Verified' or the first row that fails validation.").
+ * Used by both the admin audit route (`routes/audit.js`) and the standalone
+ * `/scripts` CLI tool — the CLI tool re-implements the DB read with a plain
+ * `pg` client instead of importing this function directly (no Knex/app
+ * dependency there), but calls `computeRowHash`/`GENESIS_HASH` from this same
+ * module either way, so the hash math itself is never duplicated.
+ *
+ * @param {import('knex').Knex} db
+ * @returns {Promise<{verified: boolean, rowsChecked: number, firstFailure?: {id: number, reason: string}}>}
+ */
+export async function verifyAuditChain(db) {
+  const rows = await db('audit_logs')
+    .orderBy('id', 'asc')
+    .select('id', 'actor_id', 'actor_ip', 'action_type', 'target_resource', 'payload', 'prev_row_hash', 'curr_row_hash');
+
+  let expectedPrevHash = GENESIS_HASH;
+  for (const row of rows) {
+    if (row.prev_row_hash !== expectedPrevHash) {
+      return {
+        verified: false,
+        rowsChecked: rows.length,
+        firstFailure: { id: row.id, reason: 'prev_row_hash does not match the previous row\'s curr_row_hash' },
+      };
+    }
+    const recomputed = computeRowHash({
+      prevRowHash: row.prev_row_hash,
+      actorId: row.actor_id,
+      actorIp: row.actor_ip,
+      actionType: row.action_type,
+      targetResource: row.target_resource,
+      payload: row.payload,
+    });
+    if (recomputed !== row.curr_row_hash) {
+      return {
+        verified: false,
+        rowsChecked: rows.length,
+        firstFailure: { id: row.id, reason: 'curr_row_hash does not match the recomputed hash — row contents changed' },
+      };
+    }
+    expectedPrevHash = row.curr_row_hash;
+  }
+
+  return { verified: true, rowsChecked: rows.length };
+}

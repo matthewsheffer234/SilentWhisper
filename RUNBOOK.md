@@ -63,6 +63,8 @@ Chosen to avoid collision with the existing Silent Lattice stack, which already 
 
 `https://whisper.silentlattice.dev` is served by the same shared `wireservice-nginx-1` container that fronts `silentlattice.dev` and `dev.silentlattice.dev`. Full incident/deployment writeup: `PROJECT_PLAN.md` Section 11, "Production Deployment: whisper.silentlattice.dev live."
 
+**Everything in this section is an operational change to shared infrastructure outside this repo, not an app-code change** — none of it is versioned alongside Silent Whisper's own commits, none of it is deployed by `docker compose up --build` in this repo, and it isn't reviewed the way a PR to `/backend` or `/frontend` is. `/root/wireservice`'s `nginx.conf`, the certbot renewal hooks, and the bare `docker run` invocation that starts `wireservice-nginx-1` all live in a *different* repo/host state that Silent Lattice deliberately keeps separate from normal app-code promotion, specifically because it's shared by three domains at once — a mistake here doesn't just affect Silent Whisper. Treat any change described below as something to apply deliberately and by hand (confirm with the user first if you're an agent, per this repo's own Rules of Engagement), never as a step to fold into routine Silent Whisper deploys.
+
 ### How nginx actually reaches this stack
 
 **Not** `host.docker.internal`, despite what an earlier version of this doc and `PROJECT_PLAN.md` Section 2 assumed. `backend` and `frontend` are bound to `127.0.0.1` on the host (see Port Topology above) specifically so they aren't reachable from the internet directly — but that same loopback-only bind also blocks `host.docker.internal` traffic, which arrives via the Docker bridge gateway, a different source address than localhost. `dev.silentlattice.dev`'s equivalent ports are bound to `0.0.0.0`, which is why that pattern happens to work for it.
@@ -203,6 +205,10 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | PATCH | `/api/ai/settings` | admin only — partial update of non-secret settings; unknown fields or out-of-range values are rejected with 400 |
 | POST | `/api/channels/:channelId/ai/summarize` | `{limit?}` (default 50, max 200 recent messages) — streamed `text/plain` summary; requires channel membership |
 | POST | `/api/messages/:messageId/ai/extract-tasks` | streamed `text/plain` checklist for the thread rooted at `:messageId`; requires membership in that message's channel |
+| GET | `/api/audit/logs` | admin only — `?limit=&beforeId=` paginated recent audit events, newest first; **each call is itself audited** (`AUDIT_DASHBOARD_ACCESSED`) |
+| POST | `/api/audit/verify` | admin only — recomputes the whole hash chain server-side, returns `{verified, rowsChecked, firstFailure?}`; audited as `AUDIT_VERIFICATION_ATTEMPTED` |
+
+`audit_logs.id` is `BIGSERIAL` — node-postgres returns it as a JSON **string**, not a number (Postgres `int8` avoids silent precision loss beyond 2^53 by round-tripping through the driver as text). Treat `beforeId` as an opaque cursor, never do arithmetic on it.
 
 ### Authorization status codes
 
@@ -379,9 +385,26 @@ docker exec silentwhisper-postgres-1 psql -U <PGUSER> -d silent_whisper -c \
 
 Expect `SELECT, INSERT, UPDATE, DELETE` on every table except `audit_logs`, which should show only `SELECT, INSERT`.
 
-### Audit log verification script *(Phase 5 — doesn't exist yet)*
+### Audit log verification script
 
-Will live at `/scripts/verify-audit-log.js` and walk `audit_logs` recomputing each row's hash, per `PROJECT_PLAN.md` Section 6.
+```bash
+cd scripts
+npm install       # first time only — its own small dependency tree (dotenv, pg), separate from /backend
+node verify-audit-log.mjs
+```
+
+Walks `audit_logs` in order, recomputes every row's hash (reusing `computeRowHash`/`GENESIS_HASH` from `backend/src/audit/auditService.js` directly, imported by relative path — safe because that file has zero external package dependencies of its own), and prints either `Log Integrity Verified` (exit 0) or the first row that fails, with its id/timestamp/action/actor and the specific reason (exit 1). Connects read-only as `app_runtime_user`, reusing `backend/.env`'s connection settings — never writes, and works even if the backend app itself isn't running. The admin dashboard's "Verify Integrity" button (`POST /api/audit/verify`) does the same recompute-and-compare over the API instead, and additionally audits the attempt (`AUDIT_VERIFICATION_ATTEMPTED`) — use the CLI tool when you want a check that doesn't depend on the app being up, or don't have an admin account handy.
+
+### Load test
+
+```bash
+cd scripts
+node load-test.mjs
+# Tunable via env vars: LOAD_TEST_USERS (default 100), LOAD_TEST_DURATION_SECONDS (30),
+# LOAD_TEST_MESSAGES_PER_USER (5), LOAD_TEST_REST_FRACTION (0.2 — the rest send over WebSocket).
+```
+
+Seeds `LOAD_TEST_USERS` users, a workspace, and a channel directly in Postgres (bypassing the signup/login rate limiters entirely — see the script's own header comment for why that's the correct call here, not a workaround), mints access tokens directly with the same `JWT_SECRET`, opens that many concurrent WebSocket connections, runs a mixed WS/REST send phase, and prints p50/p95/p99 latency for connection setup, WS message round-trip, REST message POST, and REST message GET — then deletes everything it seeded. See `PROJECT_PLAN.md` Section 11's Phase 5 log entry for the last recorded baseline numbers on this host.
 
 ## Running Tests
 
@@ -434,7 +457,24 @@ The frontend dev server runs Vite with `--host` (so it's reachable from outside 
 docker compose up -d --build frontend
 ```
 
-No automated frontend test suite exists yet (no Vitest/RTL configured) — this is a real gap, not a decision. Phase 3 was verified with the backend Jest suite plus actually driving the app in a real headless-Chromium session (see PROJECT_PLAN.md Section 11); that browser run is what caught a React 18 StrictMode double-effect race that no backend test could have (see Common Problems below).
+No component-level unit test suite exists (no Vitest/RTL configured) — real end-to-end coverage against the actual running stack (`frontend/e2e/`, Playwright — see Integration Tests below) is what this project has instead, not a placeholder for it. That real-browser approach is also what caught a React 18 StrictMode double-effect race in Phase 3 that no component-level test could have (see Common Problems below).
+
+## Integration Tests (End-to-End)
+
+```bash
+cd frontend
+npm install                                      # first time only
+npx playwright install chromium                  # first time only, downloads the browser binary
+npm run test:e2e
+```
+
+Drives the real stack in headless Chromium (`frontend/e2e/workflows.spec.js`) — signup/workspace/channel/message/thread/session-restore, AI summarize + extract-tasks against a real Ollama instance, the admin AI Settings and Audit Log dashboards, keyboard/accessibility checks (skip link, keyboard-only workspace/channel selection, focus rings), and virtual scrolling under a seeded 50-message history. Not mocked anywhere — this is the same kind of verification every phase's manual Playwright scripts already did, just committed and re-runnable instead of thrown away.
+
+**Defaults to `https://whisper.silentlattice.dev`, not `localhost:3101`** (`playwright.config.js`). This isn't arbitrary: `VITE_API_URL`/`VITE_WS_URL` are baked into the frontend bundle at build time (see Frontend Development above), and in this environment that's normally the public domain. Running the tests against bare `localhost:3101` while the bundle talks to a different origin makes every API call cross-origin — and the refresh-token cookie is `SameSite=Strict` (Section 3), so a cross-site request never sends it, breaking session-restore-on-reload in a way that has nothing to do with the app being broken. Override both `E2E_BASE_URL` and `E2E_API_BASE` together if the frontend was instead built pointing at a same-origin local backend.
+
+**Mind the signup rate limiter while iterating.** Each full run signs up ~8 new users (`signupIpLimiter`: 10/hour/IP — Section 3). Re-running the suite repeatedly while debugging can exhaust that budget from real test traffic, not an attack — you'll see every subsequent signup 429 with `"Too many attempts"`. `docker compose restart backend` clears the in-process limiter state (acceptable in this dev/test environment; never do this to route around the limiter against real traffic). Tests that only need an *existing* user (not a fresh signup) can log in instead, which has a much higher budget (`loginIpLimiter`: 20/15min).
+
+A real, non-hypothetical example of what this suite catches that nothing else would: bulk-seeding many messages via a tight loop of REST `POST`s hit the very message-send rate limit Section 3 requires (correctly) — the fix was seeding test data directly in Postgres (same pattern as `scripts/load-test.mjs`), not weakening the limiter. See `workflows.spec.js`'s virtual-scrolling test for the pattern.
 
 ## Health Checks
 

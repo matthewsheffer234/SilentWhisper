@@ -91,7 +91,7 @@ export default function LoginScreen() {
   }
 
   return (
-    <div style={styles.outer}>
+    <div id="main" tabIndex={-1} style={styles.outer}>
       <div className="sl-card" style={styles.card}>
         <h1 style={styles.title}>Silent Whisper</h1>
         <p style={styles.subtitle}>{mode === 'login' ? 'Sign in to your workspace' : 'Create an account'}</p>

@@ -30,7 +30,20 @@ const styles = {
   },
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   title: { fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-1)' },
-  closeButton: { background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 'var(--text-lg)' },
+  // 44px minimum tap target (PROJECT_PLAN.md Section 7) — the visible × glyph
+  // stays small; the invisible hit box around it is full-size.
+  closeButton: {
+    minWidth: 44,
+    minHeight: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-3)',
+    cursor: 'pointer',
+    fontSize: 'var(--text-lg)',
+  },
   subtitle: { fontSize: 'var(--text-sm)', color: 'var(--text-3)', marginBottom: 16 },
   healthRow: {
     display: 'flex',
@@ -54,7 +67,7 @@ const styles = {
   label: { display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 },
   input: {
     width: '100%',
-    minHeight: 38,
+    minHeight: 44,
     padding: '6px 10px',
     borderRadius: 8,
     border: '1px solid var(--border)',
@@ -65,7 +78,7 @@ const styles = {
   },
   select: {
     width: '100%',
-    minHeight: 38,
+    minHeight: 44,
     padding: '6px 10px',
     borderRadius: 8,
     border: '1px solid var(--border)',
@@ -77,7 +90,7 @@ const styles = {
   checkboxRow: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
   saveButton: {
     marginTop: 6,
-    minHeight: 40,
+    minHeight: 44,
     padding: '0 20px',
     borderRadius: 8,
     border: 'none',
