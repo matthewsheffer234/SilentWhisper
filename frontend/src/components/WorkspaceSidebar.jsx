@@ -11,8 +11,12 @@ const styles = {
     borderRight: '1px solid var(--border)',
     fontFamily: 'var(--font-sans)',
   },
+  // flexWrap so a fourth item (the notification toggle) added alongside
+  // username/presence/sign-out never repeats the fixed-260px overflow bug
+  // adminToolsRow's own comment below already documents finding once.
   userRow: {
     display: 'flex',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
     padding: '14px 16px',
@@ -135,7 +139,57 @@ const styles = {
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
+  notificationButton: {
+    minHeight: 44,
+    padding: '0 8px',
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-3)',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  notificationButtonDisabled: { cursor: 'default', opacity: 0.6 },
 };
+
+// A small, explicit, click-to-opt-in control — browsers increasingly
+// suppress or penalize Notification.requestPermission() calls that aren't
+// triggered by a direct user gesture, so this is never called automatically
+// on mount. Once the browser has answered ('granted'/'denied'), the
+// permission can't be re-prompted from script — the button just reflects
+// that status rather than pretending to still be actionable.
+function NotificationPermissionButton() {
+  const supported = typeof window !== 'undefined' && 'Notification' in window;
+  const [permission, setPermission] = useState(supported ? window.Notification.permission : 'unsupported');
+
+  if (!supported) return null;
+
+  async function handleClick() {
+    if (permission !== 'default') return;
+    const result = await window.Notification.requestPermission();
+    setPermission(result);
+  }
+
+  const label =
+    permission === 'granted'
+      ? '🔔 Notifications on'
+      : permission === 'denied'
+        ? '🔕 Notifications blocked'
+        : '🔔 Enable notifications';
+
+  return (
+    <button
+      type="button"
+      style={{ ...styles.notificationButton, ...(permission !== 'default' ? styles.notificationButtonDisabled : {}) }}
+      onClick={handleClick}
+      disabled={permission !== 'default'}
+    >
+      {label}
+    </button>
+  );
+}
 
 // PROJECT_PLAN.md Section 8, Phase 5 accessibility pass: workspace/channel
 // rows are plain divs (not <button>s — a channel row needs to nest its own
@@ -251,6 +305,7 @@ export default function WorkspaceSidebar({
       <div style={styles.userRow}>
         <span style={styles.username}>{user?.username}</span>
         <PresenceBadge status={presence[user?.id] ?? 'online'} />
+        <NotificationPermissionButton />
         <button type="button" style={styles.logout} onClick={onLogout}>Sign out</button>
       </div>
       {canManageAi && (

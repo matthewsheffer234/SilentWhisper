@@ -72,6 +72,7 @@ const styles = {
   messageMeta: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
   messageAuthor: { fontWeight: 700, color: 'var(--text-1)' },
   messageContent: { fontSize: 'var(--text-base)', color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  mention: { color: 'var(--brg)', fontWeight: 700 },
   pending: { opacity: 0.55 },
   replyButton: {
     alignSelf: 'flex-start',
@@ -107,6 +108,29 @@ const styles = {
   },
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '20px 0' },
 };
+
+// Same shape/length bound as the backend's mention regex (mentionService.js)
+// — a purely visual highlight, not a re-validation of who was actually
+// notified (an @mention of a nonexistent or non-member username still
+// renders highlighted here even though the backend silently notified
+// nobody, matching the existence-hiding convention: this view has no way to
+// know which mentions resolved). Content is still rendered as plain React
+// text nodes, never HTML, so this stays untrusted-content-safe.
+const MENTION_RE = /@[a-zA-Z0-9_.-]{3,50}/g;
+
+function renderContentWithMentions(content) {
+  const segments = content.split(MENTION_RE);
+  const matches = content.match(MENTION_RE) ?? [];
+  const nodes = [];
+  segments.forEach((segment, i) => {
+    if (segment) nodes.push(segment);
+    if (matches[i]) {
+      // eslint-disable-next-line react/no-array-index-key
+      nodes.push(<span key={i} style={styles.mention}>{matches[i]}</span>);
+    }
+  });
+  return nodes;
+}
 
 export default function ChannelView({ channel, messages, presence, currentUser, joined, onSend, onOpenThread, mainContentId }) {
   const [draft, setDraft] = useState('');
@@ -246,7 +270,7 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
                   <PresenceBadge status={presence[m.userId] ?? 'offline'} />
                   <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
-                <div style={styles.messageContent}>{m.content}</div>
+                <div style={styles.messageContent}>{renderContentWithMentions(m.content)}</div>
                 {!m.parentMessageId && !m.pending && (
                   <button type="button" style={styles.replyButton} onClick={() => onOpenThread(m)}>
                     Reply in thread

@@ -75,6 +75,24 @@ export function broadcastToRoom(channelId, event, { excludeWs } = {}) {
   }
 }
 
+// Targeted delivery, not a room broadcast — reaches a user regardless of
+// which channel (if any) they currently have joined/selected, including a
+// backgrounded tab where the socket is still open but no room-specific UI is
+// active (mentions, Section 8 Phase 6). A user with multiple open
+// connections (WS_MAX_CONNECTIONS_PER_USER) gets it on all of them. Zero
+// open connections for the target (offline) is a silent no-op — nothing to
+// push to yet.
+export function sendToUser(userId, event) {
+  const set = userConnections.get(userId);
+  if (!set) return;
+  const payload = JSON.stringify(event);
+  for (const ws of set) {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(payload);
+    }
+  }
+}
+
 export function broadcastToAllAuthenticated(event) {
   const payload = JSON.stringify(event);
   for (const set of userConnections.values()) {

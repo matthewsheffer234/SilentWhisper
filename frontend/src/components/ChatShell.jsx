@@ -7,9 +7,34 @@ import ChannelView from './ChannelView.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
 import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
+import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
   shell: { display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' },
+  // Fixed, top-right — never obscures the composer or sidebar. No
+  // transition/animation, matching every other panel in this app (none of
+  // AiSettingsPanel/AuditDashboard animate either), which sidesteps needing
+  // a separate prefers-reduced-motion branch for this one surface.
+  mentionToastContainer: {
+    position: 'fixed',
+    top: 12,
+    right: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    zIndex: 60,
+    maxWidth: 320,
+  },
+  mentionToast: {
+    padding: '10px 14px',
+    borderRadius: 10,
+    background: 'var(--surface)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+    border: '1px solid var(--border)',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-1)',
+  },
+  mentionToastAuthor: { fontWeight: 700 },
 };
 
 function toDisplayMessage(m) {
@@ -30,6 +55,7 @@ export default function ChatShell() {
   const [threadReplies, setThreadReplies] = useState([]);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [auditLogOpen, setAuditLogOpen] = useState(false);
+  const [mentionToasts, setMentionToasts] = useState([]);
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -99,6 +125,37 @@ export default function ChatShell() {
         return;
       }
       reconcileMessage(frame.message.channelId, frame);
+    });
+
+    // A mention frame is a side effect of message creation on the backend
+    // (Section 8, Phase 6), delivered to every open connection for the
+    // mentioned user regardless of which channel/room they currently have
+    // joined. The in-app toast always fires; the OS notification is an
+    // enhancement layered on top, gated on both permission and the tab
+    // being unfocused — an already-visible tab doesn't need an OS popup on
+    // top of what's already on screen.
+    socket.on('mention', (frame) => {
+      const toastId = crypto.randomUUID();
+      setMentionToasts((prev) => [...prev, { id: toastId, mentionedBy: frame.mentionedBy, content: frame.message.content }]);
+      setTimeout(() => {
+        setMentionToasts((prev) => prev.filter((t) => t.id !== toastId));
+      }, 6000);
+
+      if (
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        window.Notification.permission === 'granted' &&
+        !document.hasFocus()
+      ) {
+        // Locally bundled asset (imported the normal Vite way, rewritten to
+        // a bundled, content-hashed path at build time), never a remote
+        // URL — Section 9, no runtime asset fetches.
+        const notification = new window.Notification(`${frame.mentionedBy} mentioned you`, {
+          body: frame.message.content,
+          icon: mentionIcon,
+        });
+        notification.onclick = () => window.focus();
+      }
     });
 
     socket.on('disconnected', () => setJoinedChannels(new Set()));
@@ -274,6 +331,15 @@ export default function ChatShell() {
       />
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
+      {mentionToasts.length > 0 && (
+        <div style={styles.mentionToastContainer} role="status" aria-live="polite">
+          {mentionToasts.map((t) => (
+            <div key={t.id} style={styles.mentionToast}>
+              <span style={styles.mentionToastAuthor}>{t.mentionedBy}</span> mentioned you: {t.content}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

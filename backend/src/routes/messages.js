@@ -4,7 +4,8 @@ import { requireAuth } from '../auth/requireAuth.js';
 import { requireChannelMember } from '../authz/membershipService.js';
 import { assertUuid, parsePagination } from '../validation.js';
 import { createMessage } from '../services/messageService.js';
-import { broadcastToRoom } from '../ws/connectionRegistry.js';
+import { extractMentionedUserIds } from '../services/mentionService.js';
+import { broadcastToRoom, sendToUser } from '../ws/connectionRegistry.js';
 import { isMessageRateLimited } from '../ws/rateLimiter.js';
 import { RateLimitedError } from '../errors.js';
 
@@ -97,6 +98,18 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
     });
 
     broadcastToRoom(channelId, { type: 'message_created', message });
+
+    // A side effect of message creation, not part of it — mirrors
+    // messageService.js's own header comment on why mention parsing lives
+    // in a sibling service rather than inside createMessage.
+    const mentionedUserIds = await extractMentionedUserIds(db, {
+      content: message.content,
+      channelId,
+      excludeUserId: req.user.id,
+    });
+    for (const mentionedUserId of mentionedUserIds) {
+      sendToUser(mentionedUserId, { type: 'mention', message, channelId, mentionedBy: req.user.username });
+    }
 
     res.status(201).json(message);
   } catch (err) {

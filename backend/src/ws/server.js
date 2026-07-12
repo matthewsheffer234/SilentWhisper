@@ -4,6 +4,7 @@ import { db } from '../db.js';
 import { verifyAccessToken } from '../auth/jwt.js';
 import { requireChannelMember } from '../authz/membershipService.js';
 import { createMessage } from '../services/messageService.js';
+import { extractMentionedUserIds } from '../services/mentionService.js';
 import {
   registerConnection,
   unregisterConnection,
@@ -12,6 +13,7 @@ import {
   leaveRoom,
   leaveAllRooms,
   broadcastToRoom,
+  sendToUser,
 } from './connectionRegistry.js';
 import { recordHeartbeat, handleDisconnect, getAllStatuses } from './presence.js';
 import { isMessageRateLimited } from './rateLimiter.js';
@@ -208,6 +210,18 @@ async function handleMessage(ws, frame) {
     // clients in the room receive it too but have no matching placeholder,
     // so they simply ignore it.
     broadcastToRoom(channelId, { type: 'message_created', message, clientNonce: frame.clientNonce ?? null });
+
+    // A side effect of message creation, not part of it — see
+    // routes/messages.js's identical call after its own broadcastToRoom, so
+    // the two transports can't drift on when/how mentions fire.
+    const mentionedUserIds = await extractMentionedUserIds(db, {
+      content: message.content,
+      channelId,
+      excludeUserId: ws.userId,
+    });
+    for (const mentionedUserId of mentionedUserIds) {
+      sendToUser(mentionedUserId, { type: 'mention', message, channelId, mentionedBy: ws.username });
+    }
   } catch (err) {
     sendError(ws, err.message || 'Failed to send message', 'message');
   }

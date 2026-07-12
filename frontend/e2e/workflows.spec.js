@@ -75,6 +75,38 @@ async function sendMessage(accessToken, channelId, content) {
   return res.json();
 }
 
+async function inviteToWorkspace(accessToken, workspaceId, username) {
+  const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ username }),
+  });
+  return res.json();
+}
+
+// Replaces window.Notification entirely rather than relying on the real OS
+// popup (which isn't part of the page DOM and can't be asserted on
+// directly) — captures constructor calls in window.__notificationCalls so
+// the test can assert on title/body, and stubs .permission directly since
+// ChatShell.jsx's mention handler reads it synchronously. document.hasFocus
+// is also overridden here so the "is the tab backgrounded" gate is
+// deterministic instead of depending on real OS/window focus, which
+// headless multi-context runs can't reliably control.
+async function stubNotifications(page, { focused }) {
+  await page.addInitScript((isFocused) => {
+    window.__notificationCalls = [];
+    class FakeNotification {
+      constructor(title, options) {
+        window.__notificationCalls.push({ title, body: options?.body });
+      }
+    }
+    FakeNotification.permission = 'granted';
+    FakeNotification.requestPermission = async () => 'granted';
+    window.Notification = FakeNotification;
+    document.hasFocus = () => isFocused;
+  }, focused);
+}
+
 async function loginViaUi(page, username, password) {
   await page.goto('/');
   await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
@@ -324,6 +356,61 @@ test.describe('accessibility', () => {
     await expect(signOutButton).toBeFocused();
     const outlineStyle = await signOutButton.evaluate((el) => getComputedStyle(el).outlineStyle);
     expect(outlineStyle).not.toBe('none');
+  });
+});
+
+test.describe('mentions', () => {
+  // One seeded sender/recipient pair covers both the unfocused (OS
+  // notification fires) and focused (OS notification suppressed) cases —
+  // deliberately not two separate tests each calling seedUserWithChannel/
+  // seedPlainUser, per this file's own signup-budget note above
+  // (signupIpLimiter: 10/hour/IP, and a full suite run is already close to
+  // that ceiling without doubling up on fresh signups here too).
+  test('a mentioned user always gets an in-app toast, and an OS notification only while the tab is unfocused', async ({
+    page,
+    context,
+  }) => {
+    const sender = await seedUserWithChannel('mentionsender');
+    const recipient = await seedPlainUser('mentionrecipient');
+    await inviteToWorkspace(sender.accessToken, sender.workspace.id, recipient.username);
+
+    await context.grantPermissions(['notifications']);
+    await stubNotifications(page, { focused: false });
+
+    await loginViaUi(page, recipient.username, recipient.password);
+    await page.click(`text=${sender.workspace.name}`);
+    await page.click('button:has-text("Join")');
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    await sendMessage(sender.accessToken, sender.channel.id, `hey @${recipient.username} check this out`);
+
+    // In-app fallback always renders — this is the mechanism a user who
+    // never granted OS-level permission still relies on.
+    await expect(page.locator('text=mentioned you')).toBeVisible({ timeout: 10_000 });
+
+    await page.waitForFunction(() => window.__notificationCalls?.length > 0, { timeout: 10_000 });
+    let calls = await page.evaluate(() => window.__notificationCalls);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].title).toContain(sender.username);
+    expect(calls[0].body).toContain('check this out');
+
+    // Flip the tab to "focused" on the same page/session (no new signup) and
+    // confirm a second mention still toasts in-app but does not add a
+    // second OS notification call — an already-visible tab doesn't need an
+    // OS popup on top of what's already on screen.
+    await page.evaluate(() => {
+      document.hasFocus = () => true;
+    });
+    await sendMessage(sender.accessToken, sender.channel.id, `hey @${recipient.username} focused test`);
+    // .first() — "focused test" legitimately appears twice once this lands
+    // (the feed row and the toast text both contain it), which is exactly
+    // the expected behavior, not a bug to disambiguate around.
+    await expect(page.locator('text=focused test').first()).toBeVisible({ timeout: 10_000 });
+    // Give the (expected-absent) second notification a moment it would have needed to fire.
+    // eslint-disable-next-line playwright/no-wait-for-timeout
+    await page.waitForTimeout(500);
+    calls = await page.evaluate(() => window.__notificationCalls);
+    expect(calls).toHaveLength(1);
   });
 });
 
