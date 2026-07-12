@@ -9,6 +9,7 @@ Deployed alongside the existing Silent Lattice stack, served under its own hostn
 **Full design rationale, security baseline, scalability targets, and phase-by-phase roadmap**: see [`PROJECT_PLAN.md`](./PROJECT_PLAN.md).
 **Day-to-day operations (start/stop, migrations, troubleshooting)**: see [`RUNBOOK.md`](./RUNBOOK.md).
 **Agent-facing rules of engagement and offline run commands**: see [`CLAUDE.md`](./CLAUDE.md).
+**Proposed/planned feature backlog, ranked by utility**: see [`FEATURE_REQUEST.md`](./FEATURE_REQUEST.md).
 
 ## Status
 
