@@ -4,14 +4,14 @@ Offline-first, workspace-based messaging platform for project teams — Slack-st
 
 Runs fully on local or intranet infrastructure. No external CDNs, no externally hosted assets, no public AI APIs.
 
-Designed to be deployable alongside the existing Silent Lattice stack, served under its own hostname (`whisper.silentlattice.dev`) through the same shared nginx entrypoint.
+Deployed alongside the existing Silent Lattice stack, served under its own hostname through the same shared nginx entrypoint: **https://whisper.silentlattice.dev**.
 
 **Full design rationale, security baseline, scalability targets, and phase-by-phase roadmap**: see [`PROJECT_PLAN.md`](./PROJECT_PLAN.md).
 **Day-to-day operations (start/stop, migrations, troubleshooting)**: see [`RUNBOOK.md`](./RUNBOOK.md).
 
 ## Status
 
-Phases 1–3 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI) are complete and verified end-to-end, including driving the real UI in a headless browser: sign up, create a workspace, create/join channels, send and receive messages live over WebSocket with optimistic rendering, reply in threads, presence badges, and session restore across a page reload all work. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested — including three real bugs found and fixed along the way — and `RUNBOOK.md`'s API Reference / WebSocket Protocol sections for the wire format. The LLM proxy and admin audit dashboard are not yet implemented (Phases 4–5).
+Phases 1–3 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI) are complete and verified end-to-end, including driving the real UI in a headless browser against both the local environment and the live public URL: sign up, create a workspace, create/join channels, send and receive messages live over WebSocket with optimistic rendering, reply in threads, presence badges, and session restore across a page reload all work. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested — including several real bugs found and fixed along the way — and `RUNBOOK.md`'s API Reference / WebSocket Protocol / Production Deployment sections for the wire format and how the public URL is actually wired up. The LLM proxy and admin audit dashboard are not yet implemented (Phases 4–5). **Known issue**: certbot's renewal hooks are currently non-functional for all three domains on this server (not just Silent Whisper's) — see RUNBOOK.md.
 
 ## Stack
 

@@ -1,9 +1,16 @@
-# Local test environment for Silent Whisper. Follows the ~/wireservice-dev
-# pattern (PROJECT_PLAN.md Section 2, Serving Under Silent Lattice): this is
-# an independent Compose stack, not joined to wireservice_default. Silent
-# Lattice's nginx reaches these services via host.docker.internal on the
-# published ports below, all bound to 127.0.0.1 only — never 0.0.0.0 (see
-# Section 2's note on wireservice-dev-frontend-1/-api-1 currently doing that).
+# Local test environment for Silent Whisper. Independent Compose stack (its
+# own network, `postgres`/`migrate` never join anything else) — but `backend`
+# and `frontend` are ALSO attached to `wireservice_default` (declared as
+# external below) so the shared nginx can reach them by container name.
+#
+# This supersedes an earlier design note that assumed a host.docker.internal
+# pattern like wireservice-dev's: that doesn't actually work here, because
+# these ports are bound to 127.0.0.1 (deliberately, for security — never
+# 0.0.0.0, see the note on wireservice-dev-frontend-1/-api-1 doing that) and
+# host.docker.internal traffic arrives via the Docker bridge gateway, a
+# different source address than localhost, which a loopback-only bind
+# rejects. Joining wireservice_default directly avoids needing to choose
+# between "reachable from nginx" and "not reachable from the internet."
 #
 # Resource limits follow the Local Test Environment Resource Envelope
 # (Section 2): this host has 8 vCPU / 30GB RAM / no GPU, and memory is not
@@ -77,6 +84,9 @@ services:
       retries: 5
       start_period: 10s
     mem_limit: 512m
+    networks:
+      - default
+      - wireservice_default
 
   frontend:
     build:
@@ -87,6 +97,16 @@ services:
     ports:
       - "127.0.0.1:3101:3000"
     mem_limit: 128m
+    networks:
+      - default
+      - wireservice_default
 
 volumes:
   silent_whisper_pgdata:
+
+networks:
+  # Already created by ~/wireservice's own `docker compose` (or, currently,
+  # its ad hoc `docker run` — either way this network already exists on the
+  # host before Silent Whisper's stack comes up).
+  wireservice_default:
+    external: true

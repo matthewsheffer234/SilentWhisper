@@ -39,7 +39,7 @@ docker compose run --rm migrate
 | Backend WebSocket | ws://localhost:8101/ws | authenticate-frame handshake — see WebSocket Protocol below |
 | Postgres | localhost:5433 | `psql -h localhost -p 5433 -U <PGUSER> -d silent_whisper` |
 
-In production, these are reached via `whisper.silentlattice.dev` (see `PROJECT_PLAN.md` Section 2, Serving Under Silent Lattice) — the shared nginx proxy reaches this stack through `host.docker.internal` on the ports above, not by joining `wireservice_default`.
+In production, these are reached via `https://whisper.silentlattice.dev` — live since 2026-07-12. See "Production Deployment" below for exactly how nginx reaches this stack (container-name routing over a shared Docker network, **not** `host.docker.internal` — that was the original plan but doesn't actually work given these ports are loopback-only; see below).
 
 ### Port Topology and Network Security
 
@@ -52,6 +52,52 @@ In production, these are reached via `whisper.silentlattice.dev` (see `PROJECT_P
 All three are loopback-only, matching Oracle/Elasticsearch's pattern in the Silent Lattice stack — **not** `0.0.0.0`, which is what `wireservice-dev-frontend-1`/`-api-1` currently do (directly reachable from the internet, bypassing nginx/TLS entirely). Don't change these to `0.0.0.0`; the only public entry point should ever be nginx.
 
 Chosen to avoid collision with the existing Silent Lattice stack, which already uses `3000`/`3001`/`8000`/`8001` (frontend/API), `1521`/`1522` (Oracle), `9201`/`9202` (Elasticsearch), and `11434`–`11436` (Ollama).
+
+## Production Deployment
+
+`https://whisper.silentlattice.dev` is served by the same shared `wireservice-nginx-1` container that fronts `silentlattice.dev` and `dev.silentlattice.dev`. Full incident/deployment writeup: `PROJECT_PLAN.md` Section 11, "Production Deployment: whisper.silentlattice.dev live."
+
+### How nginx actually reaches this stack
+
+**Not** `host.docker.internal`, despite what an earlier version of this doc and `PROJECT_PLAN.md` Section 2 assumed. `backend` and `frontend` are bound to `127.0.0.1` on the host (see Port Topology above) specifically so they aren't reachable from the internet directly — but that same loopback-only bind also blocks `host.docker.internal` traffic, which arrives via the Docker bridge gateway, a different source address than localhost. `dev.silentlattice.dev`'s equivalent ports are bound to `0.0.0.0`, which is why that pattern happens to work for it.
+
+Instead, `docker-compose.yml` declares `wireservice_default` as an `external` network and attaches `backend`/`frontend` to it (in addition to their own `default` network for talking to `postgres`). Nginx's `whisper.silentlattice.dev` server block proxies to `http://silentwhisper-backend-1:8000` / `http://silentwhisper-frontend-1:3000` directly by container name. This survives normal `docker compose up --build` recreates without any manual `docker network connect` — confirmed by testing a full rebuild+recreate cycle.
+
+### After rebuilding backend or frontend, reload nginx
+
+Recreating a container gives it a new IP. Nginx resolves `proxy_pass` hostnames once (at start/reload) and does **not** notice the IP changed — traffic will 502 with "connect() failed (111: Connection refused)" in nginx's error log against the old, now-dead IP until you reload:
+
+```bash
+docker exec wireservice-nginx-1 nginx -s reload
+```
+
+Do this every time after `docker compose up -d --build backend` or `... frontend` if the public URL is what you're testing against.
+
+### `wireservice-nginx-1` is not Compose-managed
+
+Despite `sl-admin.py`'s infra menu assuming otherwise (`docker compose ... nginx` — there is no `nginx` service in `/root/wireservice/docker-compose.yml`; that menu's nginx options are currently non-functional no-ops). It's a plain container: image `wireservice-nginx`, built from `/root/wireservice/nginx/Dockerfile` (`COPY nginx.conf /etc/nginx/nginx.conf` — baked in at build time, not bind-mounted), run directly via:
+
+```bash
+docker run -d --name wireservice-nginx-1 \
+  --network wireservice_default \
+  --add-host host.docker.internal:host-gateway \
+  --restart unless-stopped \
+  -p 80:80 -p 443:443 \
+  -v /etc/letsencrypt:/etc/letsencrypt:ro \
+  wireservice-nginx
+```
+
+To change `nginx.conf`: edit `/root/wireservice/nginx/nginx.conf`, then either:
+- **Fast, no port downtime**: `docker cp` the file into the running container + `nginx -s reload` (validate first with `nginx -t`).
+- **Full rebuild** (needed if you also changed the Dockerfile, or want the image itself to match): `docker build -t wireservice-nginx /root/wireservice/nginx/`, then `docker rm -f wireservice-nginx-1` and re-run the `docker run` command above. This briefly drops port 80/443 for **all three domains** — silentlattice.dev and dev.silentlattice.dev included, not just Silent Whisper.
+
+### ⚠ Certbot renewal is currently broken for all three domains
+
+`/etc/letsencrypt/renewal-hooks/pre/stop-nginx.sh` and `post/start-nginx.sh` both run `docker compose stop/start nginx` from `/root/wireservice` — but there's no `nginx` Compose service (see above), so these hooks silently do nothing. `certbot renew`'s standalone authenticator needs port 80 free; nginx occupies it permanently. Left unaddressed, **all three certs** (not just `whisper.silentlattice.dev`'s) will fail to auto-renew around 60 days after issuance (`renew_before_expiry = 30 days` on a 90-day cert). This predates Silent Whisper and isn't specific to it — flagging here because it was discovered while wiring this domain up, and it now affects Silent Whisper's own cert too. Needs a decision: fix the hook scripts to `docker stop`/`docker start wireservice-nginx-1` directly, or migrate to the `webroot` authenticator (no port-80 contention at all — see `PROJECT_PLAN.md` Section 2's original recommendation, not yet acted on).
+
+### Known cosmetic issue: Vite HMR over the public domain
+
+Browser console shows `WebSocket connection ... failed: Unexpected response code: 200` and a Vite HMR warning when loading via `https://whisper.silentlattice.dev`. This is Vite's *own* dev-server hot-reload client failing (nginx's `/` location has no WebSocket upgrade headers, only `/ws` does) — it does not affect the application, whose own `/ws` endpoint is proxied correctly and was verified directly. Harmless; the real fix is serving a production static build instead of a dev server behind the public URL, not yet done.
 
 ## First-Time Setup
 
