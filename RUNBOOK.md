@@ -149,6 +149,23 @@ Rerunning is safe — Knex tracks applied migrations in `knex_migrations` and on
 cd backend && npx knex --knexfile knexfile.js migrate:status
 ```
 
+### 2b. Create and migrate the test database (before ever running `npm test`)
+
+```bash
+cd backend
+node --input-type=module -e "
+import 'dotenv/config';
+import pg from 'pg';
+const client = new pg.Client({host: process.env.PGHOST, port: Number(process.env.PGPORT), user: process.env.PGUSER, password: process.env.PGPASSWORD, database: process.env.PGDATABASE});
+await client.connect();
+await client.query('CREATE DATABASE silent_whisper_test');
+await client.end();
+"
+npm run migrate:test-db
+```
+
+**Do this before the first `npm test` run, not after.** The test suite deletes data unconditionally on every run (see Running Tests below) — it must never point at the same `silent_whisper` database this step and step 2 just set up.
+
 ### 3. Bring up the backend and frontend
 
 ```bash
@@ -414,7 +431,24 @@ npm install
 npm test
 ```
 
-Tests connect to Postgres using `backend/.env` — they run against a real database (currently `localhost:5433`, i.e. the `docker compose up -d postgres` instance), not a mock. `npm test` sets `NODE_ENV=test`, which disables the login/signup rate limiters (`backend/src/auth/rateLimit.js`) — a real test run legitimately signs up far more than 10-20 times from one address, which isn't the credential-stuffing pattern those limiters exist to catch. The limits themselves are unchanged in dev/production.
+Tests connect to Postgres using `backend/.env`'s host/port/credentials, not a mock — but a **separate database**, `silent_whisper_test`, not the same `silent_whisper` database the live/dev stack uses. `npm test` sets `PGDATABASE=silent_whisper_test` (alongside `NODE_ENV=test`) at the shell level, before Node starts — every file that reads `process.env.PGDATABASE` (`src/config.js`, and the few test files with their own direct `pg`/Knex connections — `resetDb.js`, `auditService.test.js`, `auditDashboard.test.js`) picks it up automatically, since dotenv never overwrites an already-set env var. `npm test` also sets `NODE_ENV=test`, which disables the login/signup rate limiters (`backend/src/auth/rateLimit.js`) — a real test run legitimately signs up far more than 10-20 times from one address, which isn't the credential-stuffing pattern those limiters exist to catch. The limits themselves are unchanged in dev/production.
+
+**⚠ This database separation is load-bearing, not a nicety.** `resetDb()` (`tests/helpers/resetDb.js`) unconditionally deletes every row from `users` (and everything that cascades from it) in `beforeEach` of nearly every test file. Before this was fixed, tests connected to the *same* `silent_whisper` database backing the live deployment — running `npm test` once destroyed every real account on `https://whisper.silentlattice.dev`, discovered when it silently wiped freshly-provisioned admin/user credentials. See `PROJECT_PLAN.md` Section 11's dated "Test suite was deleting real user data" entry for the full incident writeup. If `silent_whisper_test` doesn't exist yet (a fresh clone, or a fresh Postgres volume), create and migrate it first:
+
+```bash
+# From backend/, using the admin/migration credentials already in backend/.env
+node --input-type=module -e "
+import 'dotenv/config';
+import pg from 'pg';
+const client = new pg.Client({host: process.env.PGHOST, port: Number(process.env.PGPORT), user: process.env.PGUSER, password: process.env.PGPASSWORD, database: process.env.PGDATABASE});
+await client.connect();
+await client.query('CREATE DATABASE silent_whisper_test');
+await client.end();
+"
+npm run migrate:test-db
+```
+
+Never point `npm test` (or any test file) at the real `silent_whisper` database. If you ever need to verify something against real data, do it read-only, by hand, outside the test suite.
 
 The audit service suite specifically proves:
 
@@ -472,7 +506,7 @@ Drives the real stack in headless Chromium (`frontend/e2e/workflows.spec.js`) �
 
 **Defaults to `https://whisper.silentlattice.dev`, not `localhost:3101`** (`playwright.config.js`). This isn't arbitrary: `VITE_API_URL`/`VITE_WS_URL` are baked into the frontend bundle at build time (see Frontend Development above), and in this environment that's normally the public domain. Running the tests against bare `localhost:3101` while the bundle talks to a different origin makes every API call cross-origin — and the refresh-token cookie is `SameSite=Strict` (Section 3), so a cross-site request never sends it, breaking session-restore-on-reload in a way that has nothing to do with the app being broken. Override both `E2E_BASE_URL` and `E2E_API_BASE` together if the frontend was instead built pointing at a same-origin local backend.
 
-**Mind the signup rate limiter while iterating.** Each full run signs up ~8 new users (`signupIpLimiter`: 10/hour/IP — Section 3). Re-running the suite repeatedly while debugging can exhaust that budget from real test traffic, not an attack — you'll see every subsequent signup 429 with `"Too many attempts"`. `docker compose restart backend` clears the in-process limiter state (acceptable in this dev/test environment; never do this to route around the limiter against real traffic). Tests that only need an *existing* user (not a fresh signup) can log in instead, which has a much higher budget (`loginIpLimiter`: 20/15min).
+**Mind the signup rate limiter while iterating.** A full run signs up 11 new users as of the workspace-invite tests (`signupIpLimiter`: 10/hour/IP — Section 3) — right at the ceiling from one clean backend start. Re-running the suite repeatedly while debugging can exhaust that budget from real test traffic, not an attack — you'll see every subsequent signup 429 with `"Too many attempts"`. `docker compose restart backend` clears the in-process limiter state (acceptable in this dev/test environment; never do this to route around the limiter against real traffic). Tests that only need an *existing* user (not a fresh signup) can log in instead, which has a much higher budget (`loginIpLimiter`: 20/15min). If the suite keeps growing, prefer adding new tests that reuse an already-seeded user over ones that call `seedUserWithChannel`/`seedPlainUser` again.
 
 A real, non-hypothetical example of what this suite catches that nothing else would: bulk-seeding many messages via a tight loop of REST `POST`s hit the very message-send rate limit Section 3 requires (correctly) — the fix was seeding test data directly in Postgres (same pattern as `scripts/load-test.mjs`), not weakening the limiter. See `workflows.spec.js`'s virtual-scrolling test for the pattern.
 

@@ -2,14 +2,16 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertName, assertEnum, CREATABLE_CHANNEL_TYPES } from '../validation.js';
+import { assertUuid, assertName, assertUsername, assertEnum, CREATABLE_CHANNEL_TYPES, WORKSPACE_ROLES } from '../validation.js';
 import {
   requireWorkspaceMember,
+  requireWorkspaceAdmin,
   requireChannelMember,
+  getWorkspaceRole,
   getChannel,
   isChannelMember,
 } from '../authz/membershipService.js';
-import { ValidationError } from '../errors.js';
+import { ValidationError, ConflictError } from '../errors.js';
 
 export const workspacesRouter = Router();
 
@@ -54,6 +56,51 @@ workspacesRouter.get('/', async (req, res, next) => {
       .orderBy('w.created_at', 'asc');
 
     res.json(rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id, role: r.system_role })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-only invite (Section 3, Authorization Model): workspace membership
+// is the broader, more consequential grant — implicit visibility into every
+// PUBLIC channel in the workspace — so it's gated tighter than adding an
+// already-workspace-member to one specific channel below, which any channel
+// member can do. Takes a username, not a userId, unlike the channel-members
+// endpoint: this is the one membership-write route with an actual frontend
+// form behind it (WorkspaceSidebar's "Invite" control), and a human typing
+// into that form knows a username, not a UUID.
+workspacesRouter.post('/:workspaceId/members', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+
+    const username = assertUsername(req.body?.username);
+    const role = req.body?.role !== undefined ? assertEnum(req.body.role, WORKSPACE_ROLES, 'role') : 'MEMBER';
+
+    const targetUser = await db('users').where({ username }).first('id', 'username');
+    if (!targetUser) {
+      // ValidationError (400), matching the existing channel-members
+      // endpoint's "target user issue" convention below — this is a problem
+      // with the request body's content, not with :workspaceId itself.
+      throw new ValidationError('No user with that username exists');
+    }
+
+    const existingRole = await getWorkspaceRole(db, targetUser.id, workspaceId);
+    if (existingRole) {
+      throw new ConflictError('User is already a member of this workspace');
+    }
+
+    await db('workspace_members').insert({ workspace_id: workspaceId, user_id: targetUser.id, system_role: role });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'WORKSPACE_MEMBERSHIP_CHANGE',
+      targetResource: workspaceId,
+      payload: { action: 'add', addedUserId: targetUser.id, addedUsername: targetUser.username, role },
+    });
+
+    res.status(201).json({ userId: targetUser.id, username: targetUser.username, role });
   } catch (err) {
     next(err);
   }

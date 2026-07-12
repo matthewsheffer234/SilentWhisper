@@ -2,6 +2,8 @@ import { apiFetch } from './client.js';
 
 export const listWorkspaces = () => apiFetch('/workspaces');
 export const createWorkspace = (name) => apiFetch('/workspaces', { method: 'POST', body: { name } });
+export const inviteWorkspaceMember = (workspaceId, username, role) =>
+  apiFetch(`/workspaces/${workspaceId}/members`, { method: 'POST', body: { username, role } });
 
 export const listChannels = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/channels`);
 export const createChannel = (workspaceId, name, type) =>

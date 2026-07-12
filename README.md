@@ -72,7 +72,7 @@ npm install
 npm test
 ```
 
-The audit service tests run against a real Postgres (the one from `docker compose up -d postgres`) — the correctness guarantee they check is a database-level advisory lock, so there's no meaningful way to mock it out.
+Tests run against a real Postgres — but a separate `silent_whisper_test` database on that same instance, never the one the running app itself uses (`RUNBOOK.md`'s Running Tests section explains why that separation matters and how to set it up on a fresh clone). The audit service tests specifically need a real database, not a mock, since the correctness guarantee they check is a database-level advisory lock.
 
 Real-browser integration tests (signup through AI features to the admin audit dashboard, against the actual running stack) live in `frontend/e2e/` and run via `cd frontend && npm run test:e2e` — see `RUNBOOK.md`'s Integration Tests section before running these, including a note on the signup rate limiter. The audit log's own integrity can be checked independently with `cd scripts && node verify-audit-log.mjs`, and the system can be load-tested at 100 concurrent users with `cd scripts && node load-test.mjs`.
 

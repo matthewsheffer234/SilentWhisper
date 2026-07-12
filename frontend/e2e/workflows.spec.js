@@ -53,6 +53,19 @@ async function seedUserWithChannel(label) {
   return { username, password: 'correct-horse-battery', accessToken, userId: user.id, workspace, channel };
 }
 
+// A plain signup with no workspace of their own — used as the invite
+// target for the workspace-invite tests below.
+async function seedPlainUser(label) {
+  const username = uniqueUsername(label);
+  const res = await fetch(`${API_BASE}/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, email: `${username}@example.com`, password: 'correct-horse-battery' }),
+  });
+  const { user } = await res.json();
+  return { username, password: 'correct-horse-battery', userId: user.id };
+}
+
 async function sendMessage(accessToken, channelId, content) {
   const res = await fetch(`${API_BASE}/channels/${channelId}/messages`, {
     method: 'POST',
@@ -198,6 +211,43 @@ test.describe('admin surfaces', () => {
     await expect(page.locator('text=/Log Integrity Verified/')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="Close audit log"]');
+  });
+});
+
+test.describe('workspace invite', () => {
+  test('a workspace admin can invite an existing user by username, and the invitee sees the workspace after logging in', async ({
+    page,
+  }) => {
+    const admin = await seedUserWithChannel('inviteadmin');
+    const invitee = await seedPlainUser('inviteuser');
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click(`text=${admin.workspace.name}`);
+
+    await page.click('button:has-text("+ Invite member")');
+    await page.fill('input[placeholder="Username to invite"]', invitee.username);
+    await page.click('button:has-text("Add")');
+    await expect(page.locator(`text=Added ${invitee.username} to the workspace`)).toBeVisible({ timeout: 10_000 });
+
+    // The sidebar's own admin-only invite control must not be visible to a
+    // plain member — verified by actually logging in as the invitee, not
+    // just asserting on the admin's own screen.
+    await page.click('button:has-text("Sign out")');
+    await loginViaUi(page, invitee.username, invitee.password);
+    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    await page.click(`text=${admin.workspace.name}`);
+    await expect(page.locator('button:has-text("+ Invite member")')).not.toBeVisible();
+  });
+
+  test('inviting an unknown username shows an inline error, not a silent failure', async ({ page }) => {
+    const admin = await seedUserWithChannel('inviteadmin2');
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click(`text=${admin.workspace.name}`);
+
+    await page.click('button:has-text("+ Invite member")');
+    await page.fill('input[placeholder="Username to invite"]', 'no-such-user-anywhere');
+    await page.click('button:has-text("Add")');
+    await expect(page.locator('text=No user with that username exists')).toBeVisible({ timeout: 10_000 });
   });
 });
 

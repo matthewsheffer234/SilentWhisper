@@ -78,6 +78,28 @@ const styles = {
     color: 'var(--text-1)',
     fontSize: 'var(--text-sm)',
   },
+  roleSelect: {
+    minHeight: 36,
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'var(--surface)',
+    color: 'var(--text-1)',
+    fontSize: 'var(--text-sm)',
+  },
+  inviteSubmit: {
+    minHeight: 36,
+    padding: '0 10px',
+    borderRadius: 6,
+    border: 'none',
+    background: 'var(--brg)',
+    color: '#fff',
+    fontWeight: 600,
+    fontSize: 'var(--text-sm)',
+    cursor: 'pointer',
+  },
+  inviteFeedback: { padding: '4px 8px', fontSize: 'var(--text-xs)' },
+  inviteError: { color: '#c0392b' },
+  inviteSuccess: { color: 'var(--brg)' },
   joinPill: {
     fontSize: 'var(--text-xs)',
     color: 'var(--brg)',
@@ -152,6 +174,55 @@ function InlineCreateForm({ placeholder, onSubmit, extra }) {
   );
 }
 
+// PROJECT_PLAN.md Section 11's "Post-Phase-5 finding" — there was previously
+// no way for an admin to add anyone to a workspace they created except
+// direct database access. `onSubmit` is expected to reject with a real
+// `Error` (apiFetch's convention — see api/client.js) carrying a useful
+// `.message` (unknown username, already a member, etc.) so it can be shown
+// inline rather than swallowed.
+function InviteMemberForm({ onSubmit }) {
+  const [username, setUsername] = useState('');
+  const [role, setRole] = useState('MEMBER');
+  const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    setStatus(null);
+    try {
+      await onSubmit(trimmed, role);
+      setStatus({ type: 'success', message: `Added ${trimmed} to the workspace` });
+      setUsername('');
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to add member' });
+    }
+  }
+
+  return (
+    <div>
+      <form style={styles.inlineForm} onSubmit={handleSubmit}>
+        <input
+          style={styles.inlineInput}
+          placeholder="Username to invite"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <select style={styles.roleSelect} value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
+          <option value="MEMBER">Member</option>
+          <option value="ADMIN">Admin</option>
+        </select>
+        <button type="submit" style={styles.inviteSubmit}>Add</button>
+      </form>
+      {status && (
+        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
+          {status.message}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkspaceSidebar({
   user,
   presence,
@@ -168,9 +239,12 @@ export default function WorkspaceSidebar({
   canManageAi,
   onOpenAiSettings,
   onOpenAuditLog,
+  isSelectedWorkspaceAdmin,
+  onInviteMember,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
+  const [showInvite, setShowInvite] = useState(false);
 
   return (
     <aside style={styles.sidebar}>
@@ -217,6 +291,20 @@ export default function WorkspaceSidebar({
           <button type="button" style={styles.addButton} onClick={() => setShowNewWorkspace(true)}>
             + New workspace
           </button>
+        )}
+
+        {selectedWorkspaceId && isSelectedWorkspaceAdmin && (
+          <div style={{ marginTop: 10 }}>
+            {showInvite ? (
+              <InviteMemberForm
+                onSubmit={(username, role) => onInviteMember(selectedWorkspaceId, username, role)}
+              />
+            ) : (
+              <button type="button" style={styles.addButton} onClick={() => setShowInvite(true)}>
+                + Invite member
+              </button>
+            )}
+          </div>
         )}
 
         {selectedWorkspaceId && (

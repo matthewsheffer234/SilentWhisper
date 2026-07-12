@@ -15,6 +15,7 @@ Offline-first Slack-style messaging platform. Full design rationale: `PROJECT_PL
 - Rate-limit authentication, message-send, and AI proxy endpoints — not optional, not a later phase.
 - Write tests alongside each backend module, frontend feature, and script, including negative-authorization tests.
 - Zero hardcoded secrets — see `PROJECT_PLAN.md` Section 3, Secrets & Configuration, and the `.env.example` files.
+- **`backend/tests/helpers/resetDb.js` unconditionally deletes every user (and everything that cascades from it) before nearly every test.** `npm test` must run against `silent_whisper_test`, never the real `silent_whisper` database — it already does (`PGDATABASE=silent_whisper_test` is baked into the `test` script), but if you ever construct your own DB connection outside that script, or change how `PGDATABASE` is resolved, double-check this before running anything. This has already destroyed real login credentials once — see `PROJECT_PLAN.md` Section 11's "Test suite was deleting real user data" entry and `RUNBOOK.md`'s Running Tests section.
 
 ## Offline run commands
 
@@ -44,7 +45,10 @@ Frontend: http://localhost:3101 — Backend API: http://localhost:8101/api — W
 ### Running the test suites offline
 
 ```bash
-# Backend unit/integration tests (against the live Postgres from step 1 above)
+# Backend unit/integration tests (against a SEPARATE silent_whisper_test
+# database on the same Postgres instance from step 1 — never the real one;
+# see RUNBOOK.md's Running Tests section if silent_whisper_test doesn't
+# exist yet)
 cd backend && npm test
 
 # Audit log integrity check (standalone CLI, its own small node_modules)

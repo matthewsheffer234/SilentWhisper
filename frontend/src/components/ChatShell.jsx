@@ -149,6 +149,10 @@ export default function ChatShell() {
     selectChannel(ch.id);
   }
 
+  function handleInviteMember(workspaceId, username, role) {
+    return workspacesApi.inviteWorkspaceMember(workspaceId, username, role);
+  }
+
   async function handleJoinChannel(channelId) {
     await workspacesApi.joinChannel(selectedWorkspaceId, channelId);
     setChannels((prev) => prev.map((c) => (c.id === channelId ? { ...c, isMember: true } : c)));
@@ -210,6 +214,11 @@ export default function ChatShell() {
   // mirrors that same rule rather than the currently-selected workspace's
   // role.
   const canManageAi = workspaces.some((ws) => ws.role === 'ADMIN');
+  // Inviting to a *specific* workspace, unlike AI Settings/Audit Log above,
+  // is gated on being ADMIN of *that* workspace, not any workspace — the
+  // backend's requireWorkspaceAdmin (routes/workspaces.js's new
+  // POST /:workspaceId/members) checks the same thing.
+  const isSelectedWorkspaceAdmin = workspaces.find((ws) => ws.id === selectedWorkspaceId)?.role === 'ADMIN';
 
   return (
     <div style={styles.shell}>
@@ -229,6 +238,8 @@ export default function ChatShell() {
         canManageAi={canManageAi}
         onOpenAiSettings={() => setAiSettingsOpen(true)}
         onOpenAuditLog={() => setAuditLogOpen(true)}
+        isSelectedWorkspaceAdmin={isSelectedWorkspaceAdmin}
+        onInviteMember={handleInviteMember}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on

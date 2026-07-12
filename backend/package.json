@@ -12,7 +12,8 @@
     "migrate": "knex --knexfile knexfile.js migrate:latest",
     "migrate:rollback": "knex --knexfile knexfile.js migrate:rollback",
     "migrate:status": "knex --knexfile knexfile.js migrate:status",
-    "test": "NODE_ENV=test node --experimental-vm-modules node_modules/.bin/jest --runInBand"
+    "migrate:test-db": "PGDATABASE=silent_whisper_test knex --knexfile knexfile.js migrate:latest",
+    "test": "NODE_ENV=test PGDATABASE=silent_whisper_test node --experimental-vm-modules node_modules/.bin/jest --runInBand"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

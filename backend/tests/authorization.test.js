@@ -47,11 +47,10 @@ describe('workspace + channel authorization', () => {
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
 
-    // Add member3 to the workspace by having them... actually workspace
-    // membership is only granted at creation in Phase 2 — simulate a second
-    // member by inserting directly, since there's no "invite to workspace"
-    // endpoint yet (out of Phase 2 scope).
-    await db('workspace_members').insert({ workspace_id: workspaceId, user_id: member.userId, system_role: 'MEMBER' });
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'member3' });
 
     const privateRes = await request(app)
       .post(`/api/workspaces/${workspaceId}/channels`)
@@ -131,6 +130,127 @@ describe('workspace + channel authorization', () => {
 
     const badAuth = await request(app).get('/api/workspaces').set('Authorization', 'Bearer not-a-real-token');
     expect(badAuth.status).toBe(401);
+  });
+});
+
+describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
+  test('a workspace ADMIN can add an existing user by username, defaulting to MEMBER', async () => {
+    const owner = await signup(app, 'inviteowner1');
+    const invitee = await signup(app, 'invitee1');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const workspaceId = wsRes.body.id;
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'invitee1' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ userId: invitee.userId, username: 'invitee1', role: 'MEMBER' });
+
+    // The invited user can now see the workspace themselves.
+    const listRes = await request(app).get('/api/workspaces').set(authHeader(invitee.accessToken));
+    expect(listRes.body.find((w) => w.id === workspaceId)?.role).toBe('MEMBER');
+  });
+
+  test('an ADMIN can invite someone directly as ADMIN too', async () => {
+    const owner = await signup(app, 'inviteowner2');
+    await signup(app, 'invitee2');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'invitee2', role: 'ADMIN' });
+    expect(res.status).toBe(201);
+    expect(res.body.role).toBe('ADMIN');
+  });
+
+  test('a non-admin workspace member cannot invite anyone (403, not the channel-add rule)', async () => {
+    const owner = await signup(app, 'inviteowner3');
+    const member = await signup(app, 'invitemember3');
+    const target = await signup(app, 'invitee3');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const workspaceId = wsRes.body.id;
+    await db('workspace_members').insert({ workspace_id: workspaceId, user_id: member.userId, system_role: 'MEMBER' });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/members`)
+      .set(authHeader(member.accessToken))
+      .send({ username: 'invitee3' });
+    expect(res.status).toBe(403);
+    expect(await db('workspace_members').where({ workspace_id: workspaceId, user_id: target.userId }).first()).toBeUndefined();
+  });
+
+  test('a non-member (including a stranger) gets 404, not 403 or 400, for a workspace they cannot see', async () => {
+    const owner = await signup(app, 'inviteowner4');
+    const outsider = await signup(app, 'inviteoutsider4');
+    await signup(app, 'invitee4');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/members`)
+      .set(authHeader(outsider.accessToken))
+      .send({ username: 'invitee4' });
+    expect(res.status).toBe(404);
+  });
+
+  test('rejects an unknown username with 400', async () => {
+    const owner = await signup(app, 'inviteowner5');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'no-such-user-exists' });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects re-inviting an existing member with 409', async () => {
+    const owner = await signup(app, 'inviteowner6');
+    await signup(app, 'invitee6');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const workspaceId = wsRes.body.id;
+
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'invitee6' });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'invitee6' });
+    expect(res.status).toBe(409);
+  });
+
+  test('rejects an invalid role value with 400', async () => {
+    const owner = await signup(app, 'inviteowner7');
+    await signup(app, 'invitee7');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'invitee7', role: 'SUPERUSER' });
+    expect(res.status).toBe(400);
+  });
+
+  test('a successful invite is audited as WORKSPACE_MEMBERSHIP_CHANGE', async () => {
+    const owner = await signup(app, 'inviteowner8');
+    const invitee = await signup(app, 'invitee8');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const workspaceId = wsRes.body.id;
+
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'invitee8' });
+
+    const auditRow = await db('audit_logs').where({ action_type: 'WORKSPACE_MEMBERSHIP_CHANGE' }).first();
+    expect(auditRow).toBeDefined();
+    expect(auditRow.actor_id).toBe(owner.userId);
+    expect(auditRow.target_resource).toBe(workspaceId);
+    expect(auditRow.payload).toMatchObject({ action: 'add', addedUserId: invitee.userId, addedUsername: 'invitee8', role: 'MEMBER' });
   });
 });
 
