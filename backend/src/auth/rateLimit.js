@@ -48,3 +48,20 @@ export const signupIpLimiter = rateLimit({
   skip: skipInTest,
   handler: jsonRateLimitHandler,
 });
+
+// Per-user, not per-IP (like llm/aiRateLimit.js's aiProxyRateLimiter) —
+// requires requireAuth to already have populated req.user, since a
+// currentPassword-guessing attempt only makes sense against one specific,
+// already-authenticated account. Same 10/15min ceiling as
+// loginUsernameLimiter's credential-guessing budget, applied here because a
+// short-lived stolen access token is otherwise an unlimited number of
+// currentPassword guesses against the real owner's account.
+export const changePasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `change-password:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

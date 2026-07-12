@@ -12,6 +12,12 @@ export async function login({ username, password }) {
   return data.user;
 }
 
+export async function changePassword({ currentPassword, newPassword }) {
+  const data = await apiFetch('/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+  setAccessToken(data.accessToken);
+  return data.user;
+}
+
 export async function logout() {
   await apiFetch('/auth/logout', { method: 'POST' });
   setAccessToken(null);

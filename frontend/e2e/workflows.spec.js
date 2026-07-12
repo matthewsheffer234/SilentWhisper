@@ -414,6 +414,49 @@ test.describe('mentions', () => {
   });
 });
 
+test.describe('change password', () => {
+  test('wrong current password shows an inline error; the correct flow changes the password and the new one works on next login', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('changepw');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    await page.click('button:has-text("Change Password")');
+    await page.waitForSelector('text=Change Password', { timeout: 10_000 });
+
+    // button[type="submit"] specifically — the sidebar's own "Change
+    // Password" control (type="button") also matches a bare
+    // :has-text("Change password") selector case-insensitively, and it
+    // sits behind the modal backdrop once the panel is open.
+    const submitButton = page.locator('button[type="submit"]:has-text("Change password")');
+
+    await page.fill('#current-password', 'totally-wrong-password');
+    await page.fill('#new-password', 'a-brand-new-password');
+    await submitButton.click();
+    await expect(page.locator('text=Current password is incorrect')).toBeVisible({ timeout: 10_000 });
+
+    await page.fill('#current-password', seeded.password);
+    await page.fill('#new-password', 'a-brand-new-password');
+    await submitButton.click();
+    await expect(page.locator('text=Saved')).toBeVisible({ timeout: 10_000 });
+
+    await page.click('button[aria-label="Close change password"]');
+    await page.click('button:has-text("Sign out")');
+
+    // Old password no longer works.
+    await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
+    await page.fill('#username', seeded.username);
+    await page.fill('#password', seeded.password);
+    await page.click('button:has-text("Sign In")');
+    await expect(page.locator('text=Invalid username or password')).toBeVisible({ timeout: 10_000 });
+
+    // New password does.
+    await page.fill('#password', 'a-brand-new-password');
+    await page.click('button:has-text("Sign In")');
+    await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
+  });
+});
+
 test.describe('virtual scrolling', () => {
   test('a long channel history renders only a window of message rows, not all of them', async ({ page }) => {
     const seeded = await seedUserWithChannel('scroll');

@@ -7,6 +7,7 @@ import ChannelView from './ChannelView.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
 import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
+import ChangePasswordPanel from './ChangePasswordPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -55,6 +56,7 @@ export default function ChatShell() {
   const [threadReplies, setThreadReplies] = useState([]);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [auditLogOpen, setAuditLogOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
 
   const socketRef = useRef(null);
@@ -297,6 +299,7 @@ export default function ChatShell() {
         onOpenAuditLog={() => setAuditLogOpen(true)}
         isSelectedWorkspaceAdmin={isSelectedWorkspaceAdmin}
         onInviteMember={handleInviteMember}
+        onOpenChangePassword={() => setChangePasswordOpen(true)}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -331,6 +334,7 @@ export default function ChatShell() {
       />
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
+      {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
       {mentionToasts.length > 0 && (
         <div style={styles.mentionToastContainer} role="status" aria-live="polite">
           {mentionToasts.map((t) => (

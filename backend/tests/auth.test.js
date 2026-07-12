@@ -176,6 +176,92 @@ describe('POST /api/auth/logout', () => {
   });
 });
 
+describe('POST /api/auth/change-password', () => {
+  async function signupUser(username) {
+    const res = await request(app)
+      .post('/api/auth/signup')
+      .send({ username, email: `${username}@example.com`, password: 'correct-horse-battery' });
+    return { accessToken: res.body.accessToken, refreshCookie: extractCookie(res, 'refresh_token'), userId: res.body.user.id };
+  }
+
+  test('rejects a wrong currentPassword with 401 and does not change the password', async () => {
+    const { accessToken } = await signupUser('ivan');
+
+    const res = await request(app)
+      .post('/api/auth/change-password')
+      .set(authHeader(accessToken))
+      .send({ currentPassword: 'totally-wrong', newPassword: 'a-brand-new-password' });
+    expect(res.status).toBe(401);
+
+    // The old password still works.
+    const loginRes = await request(app).post('/api/auth/login').send({ username: 'ivan', password: 'correct-horse-battery' });
+    expect(loginRes.status).toBe(200);
+  });
+
+  test('rejects a newPassword that fails the password policy', async () => {
+    const { accessToken } = await signupUser('julia');
+
+    const res = await request(app)
+      .post('/api/auth/change-password')
+      .set(authHeader(accessToken))
+      .send({ currentPassword: 'correct-horse-battery', newPassword: 'short' });
+    expect(res.status).toBe(400);
+  });
+
+  test('succeeds: new tokens work, the old password no longer works, and AUTH_PASSWORD_CHANGE is audited', async () => {
+    const { accessToken, userId } = await signupUser('karl');
+
+    const res = await request(app)
+      .post('/api/auth/change-password')
+      .set(authHeader(accessToken))
+      .send({ currentPassword: 'correct-horse-battery', newPassword: 'a-brand-new-password' });
+    expect(res.status).toBe(200);
+    expect(res.body.accessToken).toEqual(expect.any(String));
+
+    const oldPasswordLogin = await request(app).post('/api/auth/login').send({ username: 'karl', password: 'correct-horse-battery' });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newPasswordLogin = await request(app).post('/api/auth/login').send({ username: 'karl', password: 'a-brand-new-password' });
+    expect(newPasswordLogin.status).toBe(200);
+
+    const row = await db('audit_logs').where({ action_type: 'AUTH_PASSWORD_CHANGE' }).first();
+    expect(row.actor_id).toBe(userId);
+  });
+
+  test('the current session keeps working via the freshly issued refresh token, but the pre-change refresh token is revoked', async () => {
+    const { accessToken, refreshCookie } = await signupUser('liam');
+
+    const changeRes = await request(app)
+      .post('/api/auth/change-password')
+      .set(authHeader(accessToken))
+      .send({ currentPassword: 'correct-horse-battery', newPassword: 'a-brand-new-password' });
+    expect(changeRes.status).toBe(200);
+    const newRefreshCookie = extractCookie(changeRes, 'refresh_token');
+    expect(newRefreshCookie).toBeTruthy();
+    expect(newRefreshCookie).not.toBe(refreshCookie);
+
+    // Check the newly issued token *first* — replaying the pre-change
+    // (already-revoked) token trips reuse detection, which itself revokes
+    // every outstanding token including the fresh one, so asserting in the
+    // other order would make this test's own old-token check clobber the
+    // very thing it's trying to prove still works.
+    const newRefreshAttempt = await request(app).post('/api/auth/refresh').set('Cookie', [`refresh_token=${newRefreshCookie}`]);
+    expect(newRefreshAttempt.status).toBe(200);
+
+    // The pre-change refresh token was revoked along with every other
+    // outstanding token for this user.
+    const oldRefreshAttempt = await request(app).post('/api/auth/refresh').set('Cookie', [`refresh_token=${refreshCookie}`]);
+    expect(oldRefreshAttempt.status).toBe(401);
+  });
+
+  test('rejects an unauthenticated request', async () => {
+    const res = await request(app)
+      .post('/api/auth/change-password')
+      .send({ currentPassword: 'whatever', newPassword: 'a-brand-new-password' });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('GET /api/auth/me', () => {
   test('returns the current user for a valid access token', async () => {
     const signupRes = await request(app)

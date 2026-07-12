@@ -10,9 +10,10 @@ import {
   issueRefreshToken,
   rotateRefreshToken,
   revokeRefreshToken,
+  revokeAllRefreshTokensForUser,
   RefreshReuseDetectedError,
 } from '../auth/refreshTokens.js';
-import { loginIpLimiter, loginUsernameLimiter, signupIpLimiter } from '../auth/rateLimit.js';
+import { loginIpLimiter, loginUsernameLimiter, signupIpLimiter, changePasswordLimiter } from '../auth/rateLimit.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { ConflictError, UnauthorizedError, ValidationError } from '../errors.js';
 
@@ -172,6 +173,60 @@ authRouter.post('/refresh', async (req, res, next) => {
       }).finally(() => next(new UnauthorizedError('Invalid refresh token')));
       return;
     }
+    next(err);
+  }
+});
+
+// Self-service password change (FEATURE_REQUEST.md entry: there was
+// previously no way for any user to change their own password without
+// direct database access). currentPassword mismatch -> 401
+// (UnauthorizedError), like login — this is a credential check, not a
+// validation failure.
+authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof currentPassword !== 'string') {
+      throw new ValidationError('currentPassword is required');
+    }
+
+    const user = await db('users').where({ id: req.user.id }).first();
+    if (!user) {
+      throw new UnauthorizedError('User no longer exists');
+    }
+
+    const passwordMatches = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!passwordMatches) {
+      throw new UnauthorizedError('Current password is incorrect');
+    }
+
+    const passwordError = assertValidPassword(newPassword);
+    if (passwordError) throw new ValidationError(passwordError);
+
+    const passwordHash = await bcrypt.hash(newPassword, config.auth.bcryptSaltRounds);
+    await db('users').where({ id: user.id }).update({ password_hash: passwordHash });
+
+    // A password change is exactly the kind of event that should force
+    // re-authentication everywhere else (the same reuse-detection precedent
+    // in auth/refreshTokens.js) — revokes every outstanding refresh token,
+    // including this request's own current one. That doesn't log *this*
+    // session out, though: a fresh access token + refresh token are issued
+    // immediately below, the same shape /login returns, so this tab keeps
+    // working without interruption while every other session is forced to
+    // sign back in.
+    await revokeAllRefreshTokensForUser(db, user.id);
+
+    const accessToken = signAccessToken({ userId: user.id, username: user.username });
+    const refreshToken = await issueRefreshToken(db, user.id);
+    setRefreshCookie(res, refreshToken);
+
+    await appendAuditEvent(db, {
+      actorId: user.id,
+      actorIp: req.ip,
+      actionType: 'AUTH_PASSWORD_CHANGE',
+    });
+
+    res.json({ accessToken, user: { id: user.id, username: user.username, email: user.email } });
+  } catch (err) {
     next(err);
   }
 });

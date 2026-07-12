@@ -62,7 +62,21 @@ export function AuthProvider({ children }) {
     setStatus('anonymous');
   }, []);
 
-  const value = useMemo(() => ({ user, status, login, signup, logout }), [user, status, login, signup, logout]);
+  // No user/status change needed on success — same account, still
+  // authenticated; authApi.changePassword already swaps in the freshly
+  // issued access token (client.js's setAccessToken), the same way
+  // login/signup do. A wrong-currentPassword/policy-rejection throw
+  // propagates to the caller (ChangePasswordPanel) to show inline, same
+  // convention as every other form in this app (see WorkspaceSidebar's
+  // InviteMemberForm).
+  const changePassword = useCallback(async (credentials) => {
+    await authApi.changePassword(credentials);
+  }, []);
+
+  const value = useMemo(
+    () => ({ user, status, login, signup, logout, changePassword }),
+    [user, status, login, signup, logout, changePassword],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
