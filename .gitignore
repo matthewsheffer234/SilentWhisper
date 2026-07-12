@@ -1,0 +1,5 @@
+.env
+.env.local
+.aws/
+node_modules/
+.claude/settings.local.json
