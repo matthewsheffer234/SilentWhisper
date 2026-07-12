@@ -65,3 +65,28 @@ export const changePasswordLimiter = rateLimit({
   keyGenerator: (req) => `change-password:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// Admin dashboard (FEATURE_REQUEST.md): account creation and another user's
+// credential mutation are exactly the "authentication endpoints" category
+// this file's other limiters already cover, regardless of who initiates
+// them — keyed by the *admin's* req.user.id (not IP), same shape as
+// changePasswordLimiter above.
+export const adminUserCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `admin-user-create:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});
+
+export const adminPasswordResetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `admin-password-reset:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

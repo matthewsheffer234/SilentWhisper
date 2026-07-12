@@ -5,6 +5,14 @@ export const createWorkspace = (name) => apiFetch('/workspaces', { method: 'POST
 export const inviteWorkspaceMember = (workspaceId, username, role) =>
   apiFetch(`/workspaces/${workspaceId}/members`, { method: 'POST', body: { username, role } });
 
+export const listWorkspaceMembers = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/members`);
+export const changeWorkspaceMemberRole = (workspaceId, userId, role) =>
+  apiFetch(`/workspaces/${workspaceId}/members/${userId}`, { method: 'PATCH', body: { role } });
+export const createWorkspaceUser = (workspaceId, { username, email, password, role }) =>
+  apiFetch(`/workspaces/${workspaceId}/users`, { method: 'POST', body: { username, email, password, role } });
+export const resetWorkspaceMemberPassword = (workspaceId, userId, newPassword) =>
+  apiFetch(`/workspaces/${workspaceId}/members/${userId}/reset-password`, { method: 'POST', body: { newPassword } });
+
 export const listChannels = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/channels`);
 export const createChannel = (workspaceId, name, type) =>
   apiFetch(`/workspaces/${workspaceId}/channels`, { method: 'POST', body: { name, type } });

@@ -457,6 +457,48 @@ test.describe('change password', () => {
   });
 });
 
+test.describe('admin user management', () => {
+  test('an admin can add a user, promote them to admin, and reset their password — all through the panel', async ({ page }) => {
+    const admin = await seedUserWithChannel('usermgmt');
+    await loginViaUi(page, admin.username, admin.password);
+
+    await page.click('button:has-text("Manage Users")');
+    await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
+
+    const newUsername = `mgmt_created_${Date.now()}`;
+    await page.fill('#new-user-username', newUsername);
+    await page.fill('#new-user-email', `${newUsername}@example.com`);
+    await page.fill('#new-user-password', 'correct-horse-battery');
+    await page.click('button:has-text("Add user")');
+    await expect(page.locator(`text=Created ${newUsername}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`td:has-text("${newUsername}")`)).toBeVisible({ timeout: 10_000 });
+
+    await page.selectOption(`select[aria-label="Role for ${newUsername}"]`, 'ADMIN');
+    // The role <select> reflects the change immediately from local state;
+    // give the PATCH a moment to land before proceeding to reset-password
+    // against the same row.
+    await expect(page.locator(`select[aria-label="Role for ${newUsername}"]`)).toHaveValue('ADMIN', { timeout: 10_000 });
+
+    const memberRow = page.locator('tr', { has: page.locator(`td:has-text("${newUsername}")`) });
+    await memberRow.locator('button:has-text("Reset password")').click();
+    await page.fill('input[placeholder="New password"]', 'a-brand-new-password');
+    await memberRow.locator('button:has-text("Confirm")').click();
+    await expect(page.locator('text=Password reset')).toBeVisible({ timeout: 10_000 });
+
+    await page.click('button[aria-label="Close manage users"]');
+    await page.click('button:has-text("Sign out")');
+
+    await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
+    await page.fill('#username', newUsername);
+    await page.fill('#password', 'a-brand-new-password');
+    await page.click('button:has-text("Sign In")');
+    await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
+    // The role promotion took effect: this account is now an ADMIN and
+    // sees the same admin-only controls the original admin does.
+    await expect(page.locator('button:has-text("Manage Users")')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
 test.describe('virtual scrolling', () => {
   test('a long channel history renders only a window of message rows, not all of them', async ({ page }) => {
     const seeded = await seedUserWithChannel('scroll');

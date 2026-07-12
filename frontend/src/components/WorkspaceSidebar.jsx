@@ -296,6 +296,7 @@ export default function WorkspaceSidebar({
   isSelectedWorkspaceAdmin,
   onInviteMember,
   onOpenChangePassword,
+  onOpenUserManagement,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
@@ -317,6 +318,9 @@ export default function WorkspaceSidebar({
           </button>
           <button type="button" style={styles.aiSettingsButton} onClick={onOpenAuditLog}>
             Audit Log
+          </button>
+          <button type="button" style={styles.aiSettingsButton} onClick={onOpenUserManagement}>
+            Manage Users
           </button>
         </div>
       )}

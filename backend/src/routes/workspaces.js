@@ -1,8 +1,13 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { db } from '../db.js';
+import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertName, assertUsername, assertEnum, CREATABLE_CHANNEL_TYPES, WORKSPACE_ROLES } from '../validation.js';
+import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, CREATABLE_CHANNEL_TYPES, WORKSPACE_ROLES } from '../validation.js';
+import { assertValidPassword } from '../auth/passwordPolicy.js';
+import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
+import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateLimit.js';
 import {
   requireWorkspaceMember,
   requireWorkspaceAdmin,
@@ -11,7 +16,7 @@ import {
   getChannel,
   isChannelMember,
 } from '../authz/membershipService.js';
-import { ValidationError, ConflictError } from '../errors.js';
+import { ValidationError, ConflictError, NotFoundError } from '../errors.js';
 
 export const workspacesRouter = Router();
 
@@ -101,6 +106,185 @@ workspacesRouter.post('/:workspaceId/members', async (req, res, next) => {
     });
 
     res.status(201).json({ userId: targetUser.id, username: targetUser.username, role });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin dashboard (FEATURE_REQUEST.md): the roster the "Manage Users" panel
+// needs to render — a gap the original design didn't spell out explicitly
+// (it specified role-assignment/create/reset-password but not how the
+// panel would learn who's already in the workspace), found while
+// implementing. Gated on requireWorkspaceAdmin, same as the three mutating
+// actions below, rather than requireWorkspaceMember — this stays a tightly
+// admin-dashboard-scoped roster, not a general "list my workspace's
+// members" endpoint any member could call.
+workspacesRouter.get('/:workspaceId/members', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+
+    const rows = await db('workspace_members as wm')
+      .join('users', 'users.id', 'wm.user_id')
+      .where('wm.workspace_id', workspaceId)
+      .select('users.id', 'users.username', 'wm.system_role')
+      .orderBy('users.username', 'asc');
+
+    res.json(rows.map((r) => ({ userId: r.id, username: r.username, role: r.system_role })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// The missing half of the invite flow above, which only sets a role at
+// insert time — this changes an *existing* member's role.
+workspacesRouter.patch('/:workspaceId/members/:userId', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const targetUserId = assertUuid(req.params.userId, 'userId');
+    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+
+    const role = assertEnum(req.body?.role, WORKSPACE_ROLES, 'role');
+
+    const targetRow = await db('workspace_members as wm')
+      .join('users', 'users.id', 'wm.user_id')
+      .where({ 'wm.workspace_id': workspaceId, 'wm.user_id': targetUserId })
+      .first('users.username', 'wm.system_role');
+    if (!targetRow) {
+      // Existence-hiding, same as every other membership-scoped route —
+      // the caller is already an admin of this workspace, but that doesn't
+      // establish the *target* exists as a member of it.
+      throw new NotFoundError('Workspace member not found');
+    }
+
+    if (targetRow.system_role === 'ADMIN' && role === 'MEMBER') {
+      const adminCount = await db('workspace_members')
+        .where({ workspace_id: workspaceId, system_role: 'ADMIN' })
+        .count('* as count')
+        .first();
+      if (Number(adminCount.count) <= 1) {
+        // Without this, a single careless self-demotion (or the only other
+        // admin demoting the last one) permanently locks the workspace out
+        // of every admin-gated action — including this dashboard itself —
+        // with no recovery path short of a raw DB write.
+        throw new ConflictError("Cannot remove the workspace's last admin");
+      }
+    }
+
+    await db('workspace_members')
+      .where({ workspace_id: workspaceId, user_id: targetUserId })
+      .update({ system_role: role });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'WORKSPACE_MEMBERSHIP_CHANGE',
+      targetResource: workspaceId,
+      payload: {
+        action: 'role_change',
+        targetUserId,
+        targetUsername: targetRow.username,
+        fromRole: targetRow.system_role,
+        toRole: role,
+      },
+    });
+
+    res.json({ userId: targetUserId, username: targetRow.username, role });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-provisioned account creation, distinct from the existing invite
+// route above (which only attaches an *existing* user by username) — the
+// new account always lands as a member of :workspaceId in the same call,
+// mirroring how a workspace admin can otherwise only ever invite people
+// into a workspace they administer, rather than opening a broader "any
+// admin creates any account" capability with no workspace tie.
+workspacesRouter.post('/:workspaceId/users', adminUserCreateLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+
+    const username = assertUsername(req.body?.username);
+    const email = assertEmail(req.body?.email);
+    const passwordError = assertValidPassword(req.body?.password);
+    if (passwordError) throw new ValidationError(passwordError);
+    const role = req.body?.role !== undefined ? assertEnum(req.body.role, WORKSPACE_ROLES, 'role') : 'MEMBER';
+
+    const existing = await db('users').where({ username }).orWhere({ email }).first();
+    if (existing) {
+      // Same generic, non-enumerating message as signup's duplicate check.
+      throw new ConflictError('Username or email already in use');
+    }
+
+    const passwordHash = await bcrypt.hash(req.body.password, config.auth.bcryptSaltRounds);
+    const newUser = await db.transaction(async (trx) => {
+      const [user] = await trx('users')
+        .insert({ username, email, password_hash: passwordHash })
+        .returning(['id', 'username', 'email']);
+      await trx('workspace_members').insert({ workspace_id: workspaceId, user_id: user.id, system_role: role });
+      return user;
+    });
+
+    // No tokens issued — the admin is acting on someone else's behalf, not
+    // logging them in. The initial password must be communicated
+    // out-of-band; this app has no email-delivery infrastructure.
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'USER_ACCOUNT_CREATED',
+      targetResource: newUser.id,
+      payload: { newUserId: newUser.id, username: newUser.username, email: newUser.email, workspaceId, role },
+    });
+
+    res.status(201).json({ userId: newUser.id, username: newUser.username, email: newUser.email, role });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-initiated password reset for another member of a workspace this
+// admin administers — distinct from POST /api/auth/change-password (the
+// self-service flow), which requires knowing the current password and
+// preserves the caller's own session. This has neither property: it's a
+// different person's credential, so the target is fully logged out
+// everywhere instead.
+workspacesRouter.post('/:workspaceId/members/:userId/reset-password', adminPasswordResetLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const targetUserId = assertUuid(req.params.userId, 'userId');
+    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+
+    const targetRow = await db('workspace_members as wm')
+      .join('users', 'users.id', 'wm.user_id')
+      .where({ 'wm.workspace_id': workspaceId, 'wm.user_id': targetUserId })
+      .first('users.username');
+    if (!targetRow) {
+      throw new NotFoundError('Workspace member not found');
+    }
+
+    if (targetUserId === req.user.id) {
+      // Never two divergent code paths for changing one's own password.
+      throw new ValidationError('Use POST /api/auth/change-password to change your own password');
+    }
+
+    const passwordError = assertValidPassword(req.body?.newPassword);
+    if (passwordError) throw new ValidationError(passwordError);
+
+    const passwordHash = await bcrypt.hash(req.body.newPassword, config.auth.bcryptSaltRounds);
+    await db('users').where({ id: targetUserId }).update({ password_hash: passwordHash });
+    await revokeAllRefreshTokensForUser(db, targetUserId);
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ADMIN_PASSWORD_RESET',
+      targetResource: targetUserId,
+      payload: { targetUserId, targetUsername: targetRow.username, workspaceId },
+    });
+
+    res.status(204).end();
   } catch (err) {
     next(err);
   }
