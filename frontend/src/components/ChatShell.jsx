@@ -5,6 +5,7 @@ import * as workspacesApi from '../api/workspaces.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
+import AiSettingsPanel from './AiSettingsPanel.jsx';
 
 const styles = {
   shell: { display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' },
@@ -26,6 +27,7 @@ export default function ChatShell() {
   const [presence, setPresence] = useState({});
   const [threadRoot, setThreadRoot] = useState(null);
   const [threadReplies, setThreadReplies] = useState([]);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -200,6 +202,12 @@ export default function ChatShell() {
   }
 
   const selectedChannel = channels.find((c) => c.id === selectedChannelId) ?? null;
+  // The AI settings surface is admin-only (PROJECT_PLAN.md Section 6); the
+  // backend gates it on "ADMIN in at least one workspace" (Section 8, Phase
+  // 4 — see requireAnyWorkspaceAdmin's doc comment), so the entry point
+  // mirrors that same rule rather than the currently-selected workspace's
+  // role.
+  const canManageAi = workspaces.some((ws) => ws.role === 'ADMIN');
 
   return (
     <div style={styles.shell}>
@@ -216,6 +224,8 @@ export default function ChatShell() {
         onCreateChannel={handleCreateChannel}
         onJoinChannel={handleJoinChannel}
         onLogout={logout}
+        canManageAi={canManageAi}
+        onOpenAiSettings={() => setAiSettingsOpen(true)}
       />
       <ChannelView
         channel={selectedChannel}
@@ -233,6 +243,7 @@ export default function ChatShell() {
         onSendReply={handleSendReply}
         onClose={() => setThreadRoot(null)}
       />
+      {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
     </div>
   );
 }

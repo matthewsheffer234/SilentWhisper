@@ -43,6 +43,24 @@ export class ConflictError extends AppError {
   }
 }
 
+// Phase 4: the configured LLM provider is `disabled`, or busy at
+// LLM_MAX_CONCURRENT_REQUESTS capacity — the caller's request was well-formed,
+// the AI feature itself just isn't available right now.
+export class ServiceUnavailableError extends AppError {
+  constructor(message = 'Service unavailable') {
+    super(503, message);
+  }
+}
+
+// The configured LLM provider was reachable-but-erroring, timed out, or
+// returned something the adapter couldn't parse — distinct from a client
+// input error (4xx), since the request itself was valid.
+export class UpstreamError extends AppError {
+  constructor(message = 'Upstream provider error') {
+    super(502, message);
+  }
+}
+
 // Registered last in the middleware chain. Never leaks stack traces or raw
 // driver errors to clients — logs the real error server-side instead.
 export function errorHandler(err, _req, res, _next) {

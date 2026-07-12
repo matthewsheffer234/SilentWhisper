@@ -67,6 +67,59 @@ export function assertEnum(value, allowed, label = 'value') {
   return value;
 }
 
+// Generic bounded-scalar validators, added for Phase 4's admin-editable LLM
+// settings (PROJECT_PLAN.md Section 2, Configurable LLM Provider Settings)
+// but equally applicable to any future numeric/boolean config surface.
+export function assertBoundedInt(value, { min, max }, label = 'value') {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new ValidationError(`${label} must be an integer between ${min} and ${max}`);
+  }
+  return n;
+}
+
+export function assertBoundedNumber(value, { min, max }, label = 'value') {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < min || n > max) {
+    throw new ValidationError(`${label} must be a number between ${min} and ${max}`);
+  }
+  return n;
+}
+
+export function assertBoolean(value, label = 'value') {
+  if (typeof value !== 'boolean') {
+    throw new ValidationError(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+// LLM_BASE_URL is an admin-supplied local/intranet endpoint (Ollama or
+// vLLM), not user content — only sanity-checked as a well-formed http(s)
+// URL, not allow-listed, since the whole point is pointing it at whatever
+// local provider the deployment uses (Section 2).
+export function assertHttpUrl(value, label = 'value') {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 500) {
+    throw new ValidationError(`${label} must be a non-empty URL string`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new ValidationError(`${label} must be a valid URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new ValidationError(`${label} must use http or https`);
+  }
+  return value;
+}
+
+export function assertShortString(value, { maxLength }, label = 'value') {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > maxLength) {
+    throw new ValidationError(`${label} must be 1-${maxLength} characters`);
+  }
+  return value;
+}
+
 // Pagination for message history (PROJECT_PLAN.md Section 2, Scalability
 // Target: "Paginate all message history queries server-side; never return
 // unbounded result sets"). `before` is an ISO timestamp cursor, not an

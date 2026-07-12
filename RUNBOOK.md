@@ -2,7 +2,7 @@
 
 This runbook covers day-to-day operation of the local test environment: first-time setup, starting/stopping, migrations, health checks, logs, and troubleshooting. For the design rationale behind any of these choices (why ports are bound to 127.0.0.1, why there are two Postgres roles, why the audit log uses an advisory lock, etc.), see `PROJECT_PLAN.md` — this document assumes that reasoning and just tells you what to run.
 
-**Current implementation status**: Phases 1–3 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI). The app is a working real-time chat client: sign up, create workspaces/channels, join public channels, send and receive messages live over WebSocket, reply in threads, see presence. There is still no LLM integration and no admin audit dashboard. See `PROJECT_PLAN.md` Section 11 for exactly what exists, and Section 8 for what's still to come. Sections below marked *(Phase N+)* describe future behavior and don't work yet.
+**Current implementation status**: Phases 1–4 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI; Configurable Local LLM Integration). The app is a working real-time chat client with AI features: sign up, create workspaces/channels, join public channels, send and receive messages live over WebSocket, reply in threads, see presence, summarize a channel and extract action items from a thread via a local Ollama (or vLLM) instance. There is still no admin audit dashboard. See `PROJECT_PLAN.md` Section 11 for exactly what exists, and Section 8 for what's still to come. Sections below marked *(Phase N+)* describe future behavior and don't work yet.
 
 ## Start / Stop
 
@@ -10,8 +10,8 @@ This runbook covers day-to-day operation of the local test environment: first-ti
 # Start Postgres only
 docker compose up -d postgres
 
-# Start everything (postgres, backend, frontend)
-docker compose up -d postgres backend frontend
+# Start everything (postgres, ollama, backend, frontend)
+docker compose up -d postgres silent-whisper-ollama backend frontend
 
 # Stop everything (data volume preserved)
 docker compose stop
@@ -23,10 +23,15 @@ docker compose down
 docker compose down -v
 ```
 
-The `migrate` service is profile-gated (`profiles: ["tools"]`) specifically so it never starts as part of a normal `up` — it's a one-shot job you run explicitly:
+The `migrate` and `ollama-pull-model` services are both profile-gated (`profiles: ["tools"]`) specifically so they never start as part of a normal `up` — they're one-shot jobs you run explicitly:
 
 ```bash
 docker compose run --rm migrate
+
+# Pulls LLM_MODEL (default "mistral") into silent-whisper-ollama's volume.
+# Idempotent — no-ops if the model is already present. Run once after
+# silent-whisper-ollama is up and healthy, before using Summarize/Extract Tasks.
+docker compose run --rm ollama-pull-model
 ```
 
 ## Service URLs
@@ -38,6 +43,7 @@ docker compose run --rm migrate
 | Backend REST API | http://localhost:8101/api | see API Reference below |
 | Backend WebSocket | ws://localhost:8101/ws | authenticate-frame handshake — see WebSocket Protocol below |
 | Postgres | localhost:5433 | `psql -h localhost -p 5433 -U <PGUSER> -d silent_whisper` |
+| Silent Whisper's Ollama | not published to the host | only `backend` talks to it, by container name (`silent-whisper-ollama:11434`) over the Compose default network — see AI Features below |
 
 In production, these are reached via `https://whisper.silentlattice.dev` — live since 2026-07-12. See "Production Deployment" below for exactly how nginx reaches this stack (container-name routing over a shared Docker network, **not** `host.docker.internal` — that was the original plan but doesn't actually work given these ports are loopback-only; see below).
 
@@ -151,6 +157,17 @@ curl http://localhost:8101/health
 
 Open http://localhost:3101 — you should see a "Silent Whisper" placeholder card reporting the backend as reachable.
 
+### 3b. Bring up Ollama and pull the model (for AI features)
+
+```bash
+docker compose up -d silent-whisper-ollama
+docker compose ps    # wait for STATUS to show (healthy)
+docker compose run --rm ollama-pull-model
+docker exec silentwhisper-silent-whisper-ollama-1 ollama list   # confirm the model landed
+```
+
+Skip this if you don't need Summarize/Extract Tasks locally — the backend starts fine either way, and `GET /api/ai/settings` will just report the provider unreachable until this is done (or you set `LLM_PROVIDER=disabled`). See AI Features below for the full picture, including how to reuse an already-pulled model from another Ollama container instead of re-downloading it.
+
 ### 4. Create the first user
 
 ```bash
@@ -182,6 +199,10 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | POST | `/api/group-direct-messages` | `{memberIds: [...]}` → creates a `GROUP_DM` channel |
 | GET | `/api/channels/:channelId/messages` | `?limit=&before=&parentMessageId=` — newest-first, paginated by timestamp cursor |
 | POST | `/api/channels/:channelId/messages` | `{content, parentMessageId?}` — max 10,000 chars |
+| GET | `/api/ai/settings` | admin only (ADMIN in ≥1 workspace) — effective LLM settings (no secrets) + provider health |
+| PATCH | `/api/ai/settings` | admin only — partial update of non-secret settings; unknown fields or out-of-range values are rejected with 400 |
+| POST | `/api/channels/:channelId/ai/summarize` | `{limit?}` (default 50, max 200 recent messages) — streamed `text/plain` summary; requires channel membership |
+| POST | `/api/messages/:messageId/ai/extract-tasks` | streamed `text/plain` checklist for the thread rooted at `:messageId`; requires membership in that message's channel |
 
 ### Authorization status codes
 
@@ -215,6 +236,102 @@ Connect to `ws://localhost:8101/ws` (or `WS_PATH` if changed). The connection is
 | ← server | `{type: "error", error, context}` | never closes the connection except for auth failures / identity mismatch / connection-cap — a bad `join` or rate-limited `message` just gets an error frame |
 
 Close codes: `4001` invalid/missing auth or identity mismatch, `4002` token expired without renewal, `4003` too many concurrent connections for that user (`WS_MAX_CONNECTIONS_PER_USER`, default 5).
+
+## AI Features
+
+Channel summarization and thread task extraction (`POST /api/channels/:channelId/ai/summarize`, `POST /api/messages/:messageId/ai/extract-tasks`) go through a configurable local LLM provider — Ollama by default in this test environment, vLLM on the target GPU-backed network, or `disabled` to turn AI features off entirely. See `PROJECT_PLAN.md` Section 2 for the design rationale; this section is just the operational how-to.
+
+### Configuration: env vars vs. `app_settings`
+
+Every `LLM_*` env var (`backend/.env.example`) is a **default**, not the final word — `GET`/`PATCH /api/ai/settings` (admin only) reads and writes the same settings from the `app_settings` table, and a saved value there overrides the env default until changed again. The one exception is `LLM_API_KEY`: it's env-var-only, never stored in `app_settings`, and never returned by `GET /api/ai/settings`.
+
+| Env var | Default here | Meaning |
+|---|---|---|
+| `LLM_PROVIDER` | `ollama` | `ollama` \| `vllm` \| `disabled` |
+| `LLM_BASE_URL` | `http://silent-whisper-ollama:11434` | container-name address of this stack's own Ollama |
+| `LLM_MODEL` | `mistral` | model tag passed to the provider |
+| `LLM_API_KEY` | *(empty)* | optional bearer token for a protected gateway; not needed for this local Ollama |
+| `LLM_TIMEOUT_MS` | `30000` | per-request timeout before the adapter gives up |
+| `LLM_MAX_INPUT_CHARS` | `12000` | server-side truncation cap, applied before prompt construction |
+| `LLM_MAX_OUTPUT_TOKENS` | `512` | passed to the provider as `num_predict`/`max_tokens` |
+| `LLM_MAX_CONCURRENT_REQUESTS` | `1` | global in-flight cap — a request beyond this gets an immediate `503`, not a queue |
+| `LLM_TEMPERATURE` | `0.3` | |
+| `LLM_STREAMING_ENABLED` | `true` | if the provider can't actually stream, the backend still returns the full text in one write |
+| `LLM_SUMMARY_PROMPT_VERSION` / `LLM_TASK_PROMPT_VERSION` | `v1` | logged on every AI audit event; an unrecognized version falls back to the `v1` template rather than failing |
+| `LLM_HEALTH_CHECK_INTERVAL_MS` | `60000` | not an `app_settings` key — operational only |
+
+### Checking provider health
+
+```bash
+curl -s http://localhost:8101/api/ai/settings -H "Authorization: Bearer <accessToken>" | node -e \
+  "process.stdin.on('data',d=>console.log(JSON.parse(d).health))"
+# {"healthy":true,"message":"ok","provider":"ollama","lastCheckedAt":"..."}
+```
+
+The bearer token must belong to a user who is `ADMIN` of at least one workspace (`requireAnyWorkspaceAdmin` — `app_settings` has no per-workspace scoping of its own, so this is the closest fit; see `backend/src/authz/membershipService.js`). The same status is what the frontend's "AI Settings" panel shows as the green/red dot.
+
+### Streaming response format
+
+`summarize`/`extract-tasks` return `Content-Type: text/plain` with the completion streamed as it's generated (chunked transfer), plus these response headers set *before* the body starts:
+
+```text
+X-Ai-Provider: ollama
+X-Ai-Prompt-Version: v1
+X-Ai-Truncated-Input-Length: 180
+X-Ai-Was-Truncated: false
+```
+
+A quick manual check (see also the timed example in Common Problems below):
+
+```bash
+curl -sN -X POST http://localhost:8101/api/channels/<channelId>/ai/summarize \
+  -H "Authorization: Bearer <accessToken>" -H 'Content-Type: application/json' -d '{}'
+```
+
+### Ollama container operations
+
+```bash
+# List pulled models
+docker exec silentwhisper-silent-whisper-ollama-1 ollama list
+
+# Pull/update the configured model (idempotent)
+docker compose run --rm ollama-pull-model
+
+# Tail Ollama's own logs (useful when checkHealth reports unreachable)
+docker logs -f silentwhisper-silent-whisper-ollama-1
+```
+
+**Reusing an already-pulled model instead of re-downloading it**: if another Ollama container on the same host already has the model (e.g. Silent Lattice's own `wireservice-ollama-1`), copy its volume data directly rather than pulling over the network again — this is exactly how `mistral` (4.4GB) was provisioned for this stack the first time:
+
+```bash
+docker volume create silentwhisper_silent_whisper_ollama_models   # if it doesn't exist yet
+docker run --rm \
+  -v wireservice_ollama_data:/from \
+  -v silentwhisper_silent_whisper_ollama_models:/to \
+  alpine sh -c "cp -a /from/. /to/"
+docker compose up -d silent-whisper-ollama
+```
+
+Confirm the Compose-managed volume name first (`docker compose config --volumes` or `docker volume ls | grep silentwhisper`) — Compose prefixes volume names with the project name, so a volume created by hand under the bare name in `docker-compose.yml` (`silent_whisper_ollama_models`) is **not** the same volume the `silent-whisper-ollama` service actually mounts.
+
+### Switching providers
+
+Changing `LLM_PROVIDER`/`LLM_BASE_URL`/`LLM_MODEL` is a config change only — no code change, no rebuild:
+
+- **Via the admin UI**: "AI Settings" panel (visible to any workspace `ADMIN`) → change Provider/Base URL/Model → Save. Takes effect on the next AI request; the health dot updates on the next sweep (`LLM_HEALTH_CHECK_INTERVAL_MS`, default 60s) or immediately if you reopen the panel (it re-fetches on mount).
+- **Via `PATCH /api/ai/settings`**: `{"provider": "vllm", "baseUrl": "http://vllm:8000", "model": "your-model"}`.
+- **To turn AI features off entirely**: `{"provider": "disabled"}` — every summarize/extract-tasks call then returns `503` immediately (`ServiceUnavailableError`), without ever calling out to a provider.
+
+`vllm` is implemented and unit-tested against a mocked OpenAI-compatible endpoint (`/v1/completions`, `/v1/models`) but has not been exercised against a real vLLM instance — this test host has no GPU. Verify against a real instance before relying on it in production.
+
+### Common AI-specific responses
+
+| Status | Meaning |
+|---|---|
+| `503 "AI features are disabled on this deployment"` | `provider` is `disabled` |
+| `503 "AI service is at capacity, please try again shortly"` | `LLM_MAX_CONCURRENT_REQUESTS` slots are all in use — expected under load with the default of `1` on this CPU-only host, not a bug |
+| `429 "Too many AI requests..."` | per-user rate limit (10 requests / 5 min) |
+| `400 "No messages to summarize in this channel yet"` | empty channel |
 
 ## Rebuilding After Code Changes
 
@@ -284,6 +401,8 @@ The audit service suite specifically proves:
 - malformed events are rejected
 - connecting as `app_runtime_user` (the same role the app itself uses), `UPDATE`/`DELETE` against `audit_logs` fail with a permission error — the append-only guarantee is enforced by the database, not just by application code
 
+The AI tests (`llmAdapters`, `promptTemplates`, `llmSettingsService`, `llmConcurrencyGate`, `aiRoutes`) mock `global.fetch` rather than calling a real Ollama/vLLM — no provider is reachable in the test environment. **If you write a test that saves AI settings as a real user** (anything hitting `PATCH /api/ai/settings` or calling `updateSettings(db, patch, someUserId)` directly), clear `app_settings`'s `llm.*` keys in `beforeEach` *before* calling `resetDb()`, not after — `app_settings.updated_by` is a real FK to `users(id)` with no `ON DELETE` clause, so a leftover row from a previous test can make the next test's `resetDb()` fail deleting users. See `aiRoutes.test.js`'s `beforeEach` for the pattern, and `PROJECT_PLAN.md` Section 11's Phase 4 entry for the full story of how this was found.
+
 ## Logs
 
 ```bash
@@ -294,6 +413,7 @@ docker compose logs -f
 docker compose logs -f backend
 docker compose logs -f frontend
 docker compose logs -f postgres
+docker compose logs -f silent-whisper-ollama
 ```
 
 ## Restarting Individual Services
@@ -301,6 +421,7 @@ docker compose logs -f postgres
 ```bash
 docker compose restart backend
 docker compose restart frontend
+docker compose restart silent-whisper-ollama
 ```
 
 Since code is baked into the image (no volume mount), a plain `restart` only helps if the problem is process/connection state — for source changes, rebuild instead (see above).
@@ -335,6 +456,9 @@ Observed on this host (8 vCPU / 30GB RAM / no GPU) with all three Phase 1 servic
 | postgres | ~27MB | 1GB |
 | backend | ~17MB | 512MB |
 | frontend | ~68MB | 128MB |
+| silent-whisper-ollama | idle: well under limit; actively generating: several GB while `mistral` is loaded | 6GB |
+
+Actual generation timing observed on this CPU-only host: ~17s for a channel summary, ~11s for thread task extraction (both against `mistral`, default settings). This is the expected bottleneck the low default `LLM_MAX_CONCURRENT_REQUESTS=1` exists for — see `PROJECT_PLAN.md` Section 2.
 
 See `PROJECT_PLAN.md` Section 2 (Local Test Environment Resource Envelope) for the reasoning behind these limits and how they interact with the rest of the Silent Lattice stack sharing this host.
 
@@ -387,3 +511,19 @@ Check the browser console for the `authenticated` frame — if it never arrives,
 ### Port already in use (`5433`, `8101`, or `3101`)
 
 Something else on the host is using that port. Check what: `ss -tlnp | grep <port>`. These were chosen specifically to avoid the existing Silent Lattice stack's ports (`3000/3001/8000/8001/1521/1522/9201/9202/11434-11436`) — if you still collide, change the host-side port in `docker-compose.yml` (the container-side port can stay the same).
+
+### "AI Settings" button doesn't appear in the sidebar
+
+It's only shown to a user who is `ADMIN` of at least one workspace (`workspaces.some(ws => ws.role === 'ADMIN')` in `frontend/src/components/ChatShell.jsx`) — the same rule the backend enforces server-side (`requireAnyWorkspaceAdmin`). Creating a workspace automatically makes the creator its `ADMIN`; joining an existing one via invite does not. This is a client-side convenience only — hiding the button doesn't grant or deny anything by itself, `GET`/`PATCH /api/ai/settings` re-check on every request.
+
+### `GET /api/ai/settings` shows `"healthy": false`
+
+Confirm the provider container is actually up and has the model: `docker compose ps silent-whisper-ollama` and `docker exec silentwhisper-silent-whisper-ollama-1 ollama list`. If the model isn't listed, run `docker compose run --rm ollama-pull-model` (see AI Features above). If the provider is up and healthy but `GET /api/ai/settings` still shows stale/unreachable state, remember the sweep only runs every `LLM_HEALTH_CHECK_INTERVAL_MS` (default 60s) — it isn't checked fresh on every settings read.
+
+### Summarize/Extract Tasks returns `503 "AI service is at capacity"`
+
+Not a bug — `LLM_MAX_CONCURRENT_REQUESTS` (default `1` on this CPU-only host) is a hard, non-queued cap: a request that can't get a slot is refused immediately rather than waiting behind whatever's already generating. Retry after the in-flight request finishes (summaries/extractions typically take 10-20s against `mistral` on this host — see Resource Usage above), or raise the limit via the AI Settings panel if this host has headroom to actually sustain more concurrent CPU-bound generations (it usually doesn't, until this moves to GPU-backed vLLM).
+
+### Nginx caches DNS after recreating `backend`/`silent-whisper-ollama`
+
+Same underlying issue as the Production Deployment note above, but worth restating here since it also affects `LLM_BASE_URL` resolution if `silent-whisper-ollama` gets recreated (new container IP) without recreating `backend` alongside it: `backend`'s own DNS resolution of `silent-whisper-ollama` is fresh per-request (Node's `fetch`, not nginx), so this specific case usually self-heals — it's nginx's cached resolution of `backend`/`frontend` (the containers actually behind the public `whisper.silentlattice.dev` proxy) that needs the manual `nginx -s reload` documented above.

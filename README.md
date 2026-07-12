@@ -11,7 +11,7 @@ Deployed alongside the existing Silent Lattice stack, served under its own hostn
 
 ## Status
 
-Phases 1–3 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI) are complete and verified end-to-end, including driving the real UI in a headless browser against both the local environment and the live public URL: sign up, create a workspace, create/join channels, send and receive messages live over WebSocket with optimistic rendering, reply in threads, presence badges, and session restore across a page reload all work. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested — including several real bugs found and fixed along the way — and `RUNBOOK.md`'s API Reference / WebSocket Protocol / Production Deployment sections for the wire format and how the public URL is actually wired up. The LLM proxy and admin audit dashboard are not yet implemented (Phases 4–5). **Known issue**: certbot's renewal hooks are currently non-functional for all three domains on this server (not just Silent Whisper's) — see RUNBOOK.md.
+Phases 1–4 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI; Configurable Local LLM Integration) are complete and verified end-to-end, including driving the real UI in a headless browser against both the local environment and the live public URL: sign up, create a workspace, create/join channels, send and receive messages live over WebSocket with optimistic rendering, reply in threads, presence badges, session restore across a page reload, channel summarization and thread task extraction against a real local Ollama/mistral instance with streamed rendering, and an admin AI settings panel all work. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested — including several real bugs found and fixed along the way — and `RUNBOOK.md`'s API Reference / WebSocket Protocol / AI Features / Production Deployment sections for the wire format, LLM provider configuration, and how the public URL is actually wired up. The admin audit dashboard and audit verification script are not yet implemented (Phase 5). **Known issues**: certbot's renewal hooks are currently non-functional for all three domains on this server (not just Silent Whisper's), and `LLM_PROVIDER=vllm` is implemented and unit-tested but not exercised against a real vLLM instance (this test host has no GPU) — see RUNBOOK.md.
 
 ## Stack
 
@@ -20,7 +20,7 @@ Phases 1–3 (Local Foundation And Database Setup; Local Auth And API Base; Real
 | Frontend | Vite + React |
 | Backend | Node.js (Express + `ws`) |
 | Database | PostgreSQL via Knex.js (query building + migrations) |
-| AI | Ollama (this test environment, CPU-only) / vLLM (target GPU-backed network) — Phase 4 |
+| AI | Ollama (this test environment, CPU-only) / vLLM (target GPU-backed network), via a shared provider-adapter interface |
 | Container runtime | Docker Compose |
 
 ## Monorepo layout
@@ -48,13 +48,18 @@ docker compose up -d postgres
 # 3. Apply migrations (creates schema + the least-privilege app_runtime_user role)
 docker compose run --rm migrate
 
-# 4. Bring up the backend and frontend
+# 4. Bring up Ollama (dedicated to Silent Whisper) and pull the configured model
+docker compose up -d silent-whisper-ollama
+docker compose run --rm ollama-pull-model
+
+# 5. Bring up the backend and frontend
 docker compose up -d --build backend frontend
 ```
 
 Then:
 - Frontend: http://localhost:3101
 - Backend health: http://localhost:8101/health
+- AI provider health (as a workspace admin): `GET /api/ai/settings`
 
 Full setup detail, port topology, and troubleshooting: [`RUNBOOK.md`](./RUNBOOK.md).
 

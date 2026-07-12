@@ -72,8 +72,15 @@ const styles = {
     background: 'none',
     cursor: 'pointer',
   },
+  userRowActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 },
+  aiSettingsButton: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-3)',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+  },
   logout: {
-    marginLeft: 'auto',
     fontSize: 'var(--text-xs)',
     color: 'var(--text-3)',
     background: 'none',
@@ -118,6 +125,8 @@ export default function WorkspaceSidebar({
   onCreateChannel,
   onJoinChannel,
   onLogout,
+  canManageAi,
+  onOpenAiSettings,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
@@ -127,7 +136,14 @@ export default function WorkspaceSidebar({
       <div style={styles.userRow}>
         {user?.username}
         <PresenceBadge status={presence[user?.id] ?? 'online'} />
-        <button type="button" style={styles.logout} onClick={onLogout}>Sign out</button>
+        <div style={styles.userRowActions}>
+          {canManageAi && (
+            <button type="button" style={styles.aiSettingsButton} onClick={onOpenAiSettings}>
+              AI Settings
+            </button>
+          )}
+          <button type="button" style={styles.logout} onClick={onLogout}>Sign out</button>
+        </div>
       </div>
 
       <div style={styles.section}>

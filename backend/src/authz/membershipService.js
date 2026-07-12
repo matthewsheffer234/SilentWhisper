@@ -35,6 +35,20 @@ export async function requireWorkspaceAdmin(db, userId, workspaceId) {
   }
 }
 
+// `system_role` (ADMIN/MEMBER) is scoped per-workspace (Section 4) — there
+// is no separate global-admin table. The AI settings surface in Phase 4
+// ("admin-only settings surface" per Section 6) is a single, workspace-
+// agnostic set of app_settings rows, so it's gated on "is an ADMIN of at
+// least one workspace" rather than any particular workspace's admin, which
+// is the closest fit the existing schema supports without adding a new
+// global-role concept for one settings screen.
+export async function requireAnyWorkspaceAdmin(db, userId) {
+  const row = await db('workspace_members').where({ user_id: userId, system_role: 'ADMIN' }).first('workspace_id');
+  if (!row) {
+    throw new ForbiddenError('Workspace admin privileges required');
+  }
+}
+
 export async function getChannel(db, channelId) {
   return db('channels').where({ id: channelId }).first();
 }

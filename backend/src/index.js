@@ -9,8 +9,11 @@ import { authRouter } from './routes/auth.js';
 import { workspacesRouter } from './routes/workspaces.js';
 import { directMessagesRouter, groupDirectMessagesRouter } from './routes/directMessages.js';
 import { messagesRouter } from './routes/messages.js';
+import { aiRouter } from './routes/ai.js';
 import { attachWebSocketServer } from './ws/server.js';
 import { startPresenceSweep, stopPresenceSweep } from './ws/presence.js';
+import { ensureDefaultSettingsSeeded } from './llm/settingsService.js';
+import { startHealthSweep, stopHealthSweep } from './llm/healthCheck.js';
 
 const app = express();
 
@@ -42,6 +45,7 @@ app.use('/api/workspaces', workspacesRouter);
 app.use('/api/direct-messages', directMessagesRouter);
 app.use('/api/group-direct-messages', groupDirectMessagesRouter);
 app.use('/api', messagesRouter);
+app.use('/api', aiRouter);
 
 app.use(errorHandler);
 
@@ -53,6 +57,15 @@ function start(port = config.port) {
   const server = http.createServer(app);
   attachWebSocketServer(server);
   startPresenceSweep();
+  startHealthSweep(db);
+  // Fire-and-forget: seeds app_settings.llm.* rows from env defaults for
+  // admin-surface visibility. Not on the request path — getEffectiveSettings
+  // (llm/settingsService.js) falls back to the same env defaults directly,
+  // so accepting connections doesn't need to wait on this.
+  ensureDefaultSettingsSeeded(db).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Failed to seed default LLM settings:', err);
+  });
   server.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`Silent Whisper backend listening on :${port} (${config.nodeEnv}), ws path ${config.ws.path}`);
@@ -62,6 +75,7 @@ function start(port = config.port) {
 
 async function shutdown(server) {
   stopPresenceSweep();
+  stopHealthSweep();
   await new Promise((resolve) => server.close(resolve));
   await db.destroy();
 }
