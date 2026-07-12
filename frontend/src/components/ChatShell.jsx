@@ -9,6 +9,7 @@ import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
 import ChangePasswordPanel from './ChangePasswordPanel.jsx';
 import UserManagementPanel from './UserManagementPanel.jsx';
+import SemanticSearchPanel from './SemanticSearchPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -59,6 +60,7 @@ export default function ChatShell() {
   const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
 
   const socketRef = useRef(null);
@@ -278,6 +280,25 @@ export default function ChatShell() {
     });
   }
 
+  // FEATURE_REQUEST.md entry 1 (semantic search): the search route already
+  // includes the thread root (parentMessage) on a reply hit, so opening the
+  // thread here needs no extra fetch — openThread only ever reads
+  // rootMessage.id/username/content. workspaceId is left untouched when a
+  // hit has none (DM/group-DM channels, workspace_id nullable per schema) —
+  // selectChannel still works, it just isn't reflected in the sidebar's
+  // currently-selected-workspace highlight, a pre-existing gap (no DM-
+  // browsing UI exists yet) this inherits rather than introduces.
+  function handleNavigateToSearchResult(hit) {
+    setSearchOpen(false);
+    if (hit.workspaceId && hit.workspaceId !== selectedWorkspaceId) {
+      setSelectedWorkspaceId(hit.workspaceId);
+    }
+    selectChannel(hit.channelId);
+    if (hit.parentMessage) {
+      openThread(hit.parentMessage);
+    }
+  }
+
   const selectedChannel = channels.find((c) => c.id === selectedChannelId) ?? null;
   // The AI settings surface is admin-only (PROJECT_PLAN.md Section 6); the
   // backend gates it on "ADMIN in at least one workspace" (Section 8, Phase
@@ -310,6 +331,7 @@ export default function ChatShell() {
         canManageAi={canManageAi}
         onOpenAiSettings={() => setAiSettingsOpen(true)}
         onOpenAuditLog={() => setAuditLogOpen(true)}
+        onOpenSearch={() => setSearchOpen(true)}
         isSelectedWorkspaceAdmin={isSelectedWorkspaceAdmin}
         onInviteMember={handleInviteMember}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
@@ -351,6 +373,14 @@ export default function ChatShell() {
       />
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
+      {searchOpen && (
+        <SemanticSearchPanel
+          workspaces={workspaces}
+          currentWorkspaceId={selectedWorkspaceId}
+          onClose={() => setSearchOpen(false)}
+          onNavigate={handleNavigateToSearchResult}
+        />
+      )}
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
       {userManagementOpen && <UserManagementPanel workspaces={workspaces} onClose={() => setUserManagementOpen(false)} />}
       {mentionToasts.length > 0 && (

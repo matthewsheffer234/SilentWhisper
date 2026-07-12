@@ -13,4 +13,8 @@ async function checkHealth() {
   return { healthy: false, message: 'disabled' };
 }
 
-export const disabledAdapter = { generate, checkHealth };
+async function embed() {
+  throw new ServiceUnavailableError('AI features are disabled on this deployment (LLM_PROVIDER=disabled)');
+}
+
+export const disabledAdapter = { generate, checkHealth, embed };

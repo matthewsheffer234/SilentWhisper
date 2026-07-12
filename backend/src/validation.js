@@ -120,6 +120,16 @@ export function assertShortString(value, { maxLength }, label = 'value') {
   return value;
 }
 
+// Semantic search (FEATURE_REQUEST.md entry 1) — bounds the query text sent
+// into the embedding provider, same "reject malformed/oversized input with a
+// 400 before it reaches the database or an upstream call" instinct as
+// MAX_MESSAGE_LENGTH.
+export const MAX_SEARCH_QUERY_LENGTH = 2000;
+
+export function assertSearchQuery(value) {
+  return assertShortString(value, { maxLength: MAX_SEARCH_QUERY_LENGTH }, 'query');
+}
+
 // Pagination for message history (PROJECT_PLAN.md Section 2, Scalability
 // Target: "Paginate all message history queries server-side; never return
 // unbounded result sets"). `before` is an ISO timestamp cursor, not an

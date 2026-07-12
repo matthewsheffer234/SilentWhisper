@@ -181,11 +181,11 @@ Open http://localhost:3101 — you should see a "Silent Whisper" placeholder car
 ```bash
 docker compose up -d silent-whisper-ollama
 docker compose ps    # wait for STATUS to show (healthy)
-docker compose run --rm ollama-pull-model
-docker exec silentwhisper-silent-whisper-ollama-1 ollama list   # confirm the model landed
+docker compose run --rm ollama-pull-model   # pulls both LLM_MODEL and EMBEDDING_MODEL
+docker exec silentwhisper-silent-whisper-ollama-1 ollama list   # confirm both models landed
 ```
 
-Skip this if you don't need Summarize/Extract Tasks locally — the backend starts fine either way, and `GET /api/ai/settings` will just report the provider unreachable until this is done (or you set `LLM_PROVIDER=disabled`). See AI Features below for the full picture, including how to reuse an already-pulled model from another Ollama container instead of re-downloading it.
+Skip this if you don't need Summarize/Extract Tasks/Search locally — the backend starts fine either way, and `GET /api/ai/settings` will just report the provider unreachable until this is done (or you set `LLM_PROVIDER=disabled`). See AI Features below for the full picture, including how to reuse an already-pulled model from another Ollama container instead of re-downloading it.
 
 ### 4. Create the first user
 
@@ -224,6 +224,7 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | POST | `/api/messages/:messageId/ai/extract-tasks` | streamed `text/plain` checklist for the thread rooted at `:messageId`; requires membership in that message's channel |
 | GET | `/api/audit/logs` | admin only — `?limit=&beforeId=` paginated recent audit events, newest first; **each call is itself audited** (`AUDIT_DASHBOARD_ACCESSED`) |
 | POST | `/api/audit/verify` | admin only — recomputes the whole hash chain server-side, returns `{verified, rowsChecked, firstFailure?}`; audited as `AUDIT_VERIFICATION_ATTEMPTED` |
+| POST | `/api/search/semantic` | `{query, workspaceId?, channelId?, limit?}` (limit default 20, max 50) — conceptual search over the caller's own channels, ranked by cosine similarity; see Semantic Search below |
 
 `audit_logs.id` is `BIGSERIAL` — node-postgres returns it as a JSON **string**, not a number (Postgres `int8` avoids silent precision loss beyond 2^53 by round-tripping through the driver as text). Treat `beforeId` as an opaque cursor, never do arithmetic on it.
 
@@ -355,6 +356,28 @@ Changing `LLM_PROVIDER`/`LLM_BASE_URL`/`LLM_MODEL` is a config change only — n
 | `503 "AI service is at capacity, please try again shortly"` | `LLM_MAX_CONCURRENT_REQUESTS` slots are all in use — expected under load with the default of `1` on this CPU-only host, not a bug |
 | `429 "Too many AI requests..."` | per-user rate limit (10 requests / 5 min) |
 | `400 "No messages to summarize in this channel yet"` | empty channel |
+
+### Semantic Search
+
+`POST /api/search/semantic` (FEATURE_REQUEST.md entry, `PROJECT_PLAN.md` Section 11) embeds the query with the same configured `LLM_PROVIDER`/`LLM_BASE_URL` as summarize/extract-tasks, but a separate, smaller model — `EMBEDDING_MODEL` (default `all-minilm`), pulled by the same `docker compose run --rm ollama-pull-model` step above.
+
+| Env var | Default here | Meaning |
+|---|---|---|
+| `EMBEDDING_MODEL` | `all-minilm` | model tag passed to the provider's embeddings endpoint |
+| `EMBEDDING_DIMENSION` | `384` | must match `all-minilm`'s output size *and* `message_embeddings.embedding`'s `vector(N)` column — changing the model to one with a different output size needs a new migration, not just this env var |
+| `EMBEDDING_TIMEOUT_MS` | `15000` | |
+| `EMBEDDING_MAX_CONCURRENT_REQUESTS` | `1` | separate budget from `LLM_MAX_CONCURRENT_REQUESTS`, so a channel summary in flight doesn't starve the embedding worker or vice versa |
+| `EMBEDDING_WORKER_INTERVAL_MS` / `EMBEDDING_WORKER_BATCH_SIZE` | `2000` / `3` | how often, and how many pending messages per tick, the background ingestion worker (`backend/src/search/embeddingWorker.js`) polls |
+| `EMBEDDING_MAX_ATTEMPTS` | `5` | a job is dead-lettered (`embedding_jobs.status = 'failed'`) after this many failures — query `embedding_jobs` directly to see the backlog/failures, there's no admin UI for this queue yet |
+
+Every sent message (REST or WebSocket) gets a row in `embedding_jobs`; the worker embeds it asynchronously and writes `message_embeddings`, so **a message sent seconds ago may not be searchable yet** — this is expected async-ingestion lag (bounded by `EMBEDDING_WORKER_INTERVAL_MS`), not a bug. Check backlog directly:
+
+```bash
+docker exec silentwhisper-postgres-1 psql -U sw_admin -d silent_whisper \
+  -c "SELECT status, count(*) FROM embedding_jobs GROUP BY status;"
+```
+
+`LLM_PROVIDER=disabled` disables embedding too (search returns `503`), same as summarize/extract-tasks — there's no separate on/off switch for search.
 
 ## Rebuilding After Code Changes
 
@@ -502,11 +525,11 @@ npx playwright install chromium                  # first time only, downloads th
 npm run test:e2e
 ```
 
-Drives the real stack in headless Chromium (`frontend/e2e/workflows.spec.js`) — signup/workspace/channel/message/thread/session-restore, AI summarize + extract-tasks against a real Ollama instance, the admin AI Settings and Audit Log dashboards, keyboard/accessibility checks (skip link, keyboard-only workspace/channel selection, focus rings), and virtual scrolling under a seeded 50-message history. Not mocked anywhere — this is the same kind of verification every phase's manual Playwright scripts already did, just committed and re-runnable instead of thrown away.
+Drives the real stack in headless Chromium (`frontend/e2e/workflows.spec.js`) — signup/workspace/channel/message/thread/session-restore, AI summarize + extract-tasks and semantic search against a real Ollama instance, the admin AI Settings and Audit Log dashboards, keyboard/accessibility checks (skip link, keyboard-only workspace/channel selection, focus rings), and virtual scrolling under a seeded 50-message history. Not mocked anywhere — this is the same kind of verification every phase's manual Playwright scripts already did, just committed and re-runnable instead of thrown away.
 
 **Defaults to `https://whisper.silentlattice.dev`, not `localhost:3101`** (`playwright.config.js`). This isn't arbitrary: `VITE_API_URL`/`VITE_WS_URL` are baked into the frontend bundle at build time (see Frontend Development above), and in this environment that's normally the public domain. Running the tests against bare `localhost:3101` while the bundle talks to a different origin makes every API call cross-origin — and the refresh-token cookie is `SameSite=Strict` (Section 3), so a cross-site request never sends it, breaking session-restore-on-reload in a way that has nothing to do with the app being broken. Override both `E2E_BASE_URL` and `E2E_API_BASE` together if the frontend was instead built pointing at a same-origin local backend.
 
-**Mind the signup rate limiter while iterating.** A full run signs up 11 new users as of the workspace-invite tests (`signupIpLimiter`: 10/hour/IP — Section 3) — right at the ceiling from one clean backend start. Re-running the suite repeatedly while debugging can exhaust that budget from real test traffic, not an attack — you'll see every subsequent signup 429 with `"Too many attempts"`. `docker compose restart backend` clears the in-process limiter state (acceptable in this dev/test environment; never do this to route around the limiter against real traffic). Tests that only need an *existing* user (not a fresh signup) can log in instead, which has a much higher budget (`loginIpLimiter`: 20/15min). If the suite keeps growing, prefer adding new tests that reuse an already-seeded user over ones that call `seedUserWithChannel`/`seedPlainUser` again.
+**Mind the signup rate limiter while iterating.** A full run signs up 12 new users as of the semantic-search test (`signupIpLimiter`: 10/hour/IP — Section 3) — **over** the ceiling from one clean backend start, not just at it. A single `npx playwright test` run of the whole file will now 429 partway through unless the limiter is reset first (`docker compose restart backend` clears the in-process limiter state; acceptable in this dev/test environment, never do this to route around the limiter against real traffic) or the run is split into signup-budget-safe batches, e.g. `npx playwright test -g "core messaging|AI features|admin surfaces|workspace invite"` then a second `-g` run for the rest. Re-running the suite repeatedly while debugging burns the same budget from real test traffic, not an attack — every subsequent signup 429s with `"Too many attempts"`. Tests that only need an *existing* user (not a fresh signup) can log in instead, which has a much higher budget (`loginIpLimiter`: 20/15min). If the suite keeps growing, prefer adding new tests that reuse an already-seeded user over ones that call `seedUserWithChannel`/`seedPlainUser` again.
 
 A real, non-hypothetical example of what this suite catches that nothing else would: bulk-seeding many messages via a tight loop of REST `POST`s hit the very message-send rate limit Section 3 requires (correctly) — the fix was seeding test data directly in Postgres (same pattern as `scripts/load-test.mjs`), not weakening the limiter. See `workflows.spec.js`'s virtual-scrolling test for the pattern.
 
@@ -597,6 +620,10 @@ Confirm the provider container is actually up and has the model: `docker compose
 ### Summarize/Extract Tasks returns `503 "AI service is at capacity"`
 
 Not a bug — `LLM_MAX_CONCURRENT_REQUESTS` (default `1` on this CPU-only host) is a hard, non-queued cap: a request that can't get a slot is refused immediately rather than waiting behind whatever's already generating. Retry after the in-flight request finishes (summaries/extractions typically take 10-20s against `mistral` on this host — see Resource Usage above), or raise the limit via the AI Settings panel if this host has headroom to actually sustain more concurrent CPU-bound generations (it usually doesn't, until this moves to GPU-backed vLLM).
+
+### A just-sent message doesn't show up in Search results yet
+
+Expected async-ingestion lag, not a bug — see Semantic Search above. Check `embedding_jobs` directly (`SELECT status, count(*) FROM embedding_jobs GROUP BY status`) to see whether it's still `pending` (worker hasn't ticked yet, bounded by `EMBEDDING_WORKER_INTERVAL_MS`) or `failed` (check `last_error`; usually means `EMBEDDING_MODEL` was never pulled — `docker compose run --rm ollama-pull-model`).
 
 ### Nginx caches DNS after recreating `backend`/`silent-whisper-ollama`
 

@@ -73,6 +73,37 @@ export const config = {
     healthCheckIntervalMs: Number(process.env.LLM_HEALTH_CHECK_INTERVAL_MS || 60_000),
   },
 
+  embedding: {
+    // Semantic search (FEATURE_REQUEST.md entry 1). Deliberately reuses
+    // llm.baseUrl/apiKey and the *live* app_settings-overridable provider
+    // (read via llm/settingsService.getEffectiveSettings at call time, not
+    // from this static config block) rather than duplicating them — flipping
+    // LLM_PROVIDER via the AI Settings panel governs embeddings too. Only
+    // the embedding-specific knobs below are env-only, with no
+    // app_settings override: a deliberately narrower config surface than
+    // generation settings (Section 4 doesn't list embedding.* as a required
+    // app_settings key).
+    model: process.env.EMBEDDING_MODEL || 'all-minilm',
+    // Must match message_embeddings.embedding's vector(N) column
+    // (database/migrations/0009_pgvector_and_embeddings.js) — changing this
+    // to a model with a different output size requires a new migration, not
+    // just an env change.
+    dimension: Number(process.env.EMBEDDING_DIMENSION || 384),
+    timeoutMs: Number(process.env.EMBEDDING_TIMEOUT_MS || 15_000),
+    // Separate from llm.maxConcurrentRequests (Configurable LLM Provider
+    // Settings note in FEATURE_REQUEST.md entry 1: "so summarization latency
+    // and embedding backlog do not starve each other") — see
+    // search/embeddingConcurrencyGate.js.
+    maxConcurrentRequests: Number(process.env.EMBEDDING_MAX_CONCURRENT_REQUESTS || 1),
+    // How often the ingestion worker (search/embeddingWorker.js) polls
+    // embedding_jobs, and how many pending rows it claims per tick.
+    workerIntervalMs: Number(process.env.EMBEDDING_WORKER_INTERVAL_MS || 2_000),
+    workerBatchSize: Number(process.env.EMBEDDING_WORKER_BATCH_SIZE || 3),
+    // A job is dead-lettered (status='failed', left in place for
+    // observability rather than deleted) once it has failed this many times.
+    maxAttempts: Number(process.env.EMBEDDING_MAX_ATTEMPTS || 5),
+  },
+
   ws: {
     // Configurable for reverse-proxy deployment (PROJECT_PLAN.md Section 8,
     // Phase 3: "Make the WebSocket path configurable").

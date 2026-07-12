@@ -26,3 +26,18 @@ export const aiProxyRateLimiter = rateLimit({
   keyGenerator: (req) => `ai:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// Semantic search (FEATURE_REQUEST.md entry 1): same reasoning as
+// aiProxyRateLimiter above ("each query triggers embedding work and a vector
+// scan"), but a higher ceiling — a search is cheaper than a full generation
+// (one embedding call, not a whole completion), so the budget that protects
+// the shared provider from an unbounded loop doesn't need to be as tight.
+export const semanticSearchRateLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `search:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

@@ -76,6 +76,42 @@ async function generate({ settings, prompt, onChunk }) {
   }
 }
 
+// Semantic search (FEATURE_REQUEST.md entry 1). Ollama's native
+// /api/embeddings takes a single { model, prompt } and returns
+// { embedding: [...] } — not the newer batch /api/embed endpoint, since this
+// app only ever embeds one text (a message or a search query) per call.
+async function embed({ settings, text }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl(settings)}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(settings) },
+      body: JSON.stringify({ model: settings.model, prompt: text }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new UpstreamError(`Ollama returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const embedding = data.embedding;
+    if (!Array.isArray(embedding) || embedding.length !== settings.dimension) {
+      throw new UpstreamError(
+        `Ollama embedding model "${settings.model}" returned ${Array.isArray(embedding) ? embedding.length : 'no'} dimensions, expected ${settings.dimension}`,
+      );
+    }
+    return { embedding };
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new UpstreamError('Ollama embedding request timed out');
+    }
+    if (err instanceof UpstreamError) throw err;
+    throw new UpstreamError(`Ollama embedding request failed: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function checkHealth({ settings }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.min(settings.timeoutMs, 10_000));
@@ -95,4 +131,4 @@ async function checkHealth({ settings }) {
   }
 }
 
-export const ollamaAdapter = { generate, checkHealth };
+export const ollamaAdapter = { generate, checkHealth, embed };

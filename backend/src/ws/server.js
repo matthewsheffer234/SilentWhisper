@@ -5,6 +5,7 @@ import { verifyAccessToken } from '../auth/jwt.js';
 import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
+import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import {
   registerConnection,
   unregisterConnection,
@@ -225,6 +226,12 @@ async function handleMessage(ws, frame) {
     for (const mentionedUserId of mentionedUserIds) {
       sendToUser(mentionedUserId, { type: 'mention', message, channelId, mentionedBy: ws.username });
     }
+
+    // Same sibling-call pattern as mentions above and as
+    // routes/messages.js's identical REST-path call — semantic search
+    // (FEATURE_REQUEST.md entry 1) ingestion can't be a way the WS send path
+    // silently diverges from REST.
+    await enqueueEmbeddingJob(db, message.id);
   } catch (err) {
     sendError(ws, err.message || 'Failed to send message', 'message');
   }

@@ -85,6 +85,40 @@ async function generate({ settings, prompt, onChunk }) {
   }
 }
 
+// Semantic search (FEATURE_REQUEST.md entry 1). OpenAI-compatible
+// /v1/embeddings: { model, input } -> { data: [{ embedding: [...] }] }.
+async function embed({ settings, text }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl(settings)}/v1/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(settings) },
+      body: JSON.stringify({ model: settings.model, input: text }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new UpstreamError(`vLLM returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const embedding = data.data?.[0]?.embedding;
+    if (!Array.isArray(embedding) || embedding.length !== settings.dimension) {
+      throw new UpstreamError(
+        `vLLM embedding model "${settings.model}" returned ${Array.isArray(embedding) ? embedding.length : 'no'} dimensions, expected ${settings.dimension}`,
+      );
+    }
+    return { embedding };
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new UpstreamError('vLLM embedding request timed out');
+    }
+    if (err instanceof UpstreamError) throw err;
+    throw new UpstreamError(`vLLM embedding request failed: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function checkHealth({ settings }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.min(settings.timeoutMs, 10_000));
@@ -104,4 +138,4 @@ async function checkHealth({ settings }) {
   }
 }
 
-export const vllmAdapter = { generate, checkHealth };
+export const vllmAdapter = { generate, checkHealth, embed };

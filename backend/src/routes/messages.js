@@ -5,6 +5,7 @@ import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/memb
 import { assertUuid, parsePagination } from '../validation.js';
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
+import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import { broadcastToRoom, sendToUser } from '../ws/connectionRegistry.js';
 import { isMessageRateLimited } from '../ws/rateLimiter.js';
 import { RateLimitedError } from '../errors.js';
@@ -115,6 +116,12 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
     for (const mentionedUserId of mentionedUserIds) {
       sendToUser(mentionedUserId, { type: 'mention', message, channelId, mentionedBy: req.user.username });
     }
+
+    // Same "side effect, not part of message creation" pattern as mentions
+    // above — enqueues async embedding work for semantic search
+    // (FEATURE_REQUEST.md entry 1). Failure-tolerant by design: see
+    // enqueueEmbeddingJob's own doc comment.
+    await enqueueEmbeddingJob(db, message.id);
 
     res.status(201).json(message);
   } catch (err) {

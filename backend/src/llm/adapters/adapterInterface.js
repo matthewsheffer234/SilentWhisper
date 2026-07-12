@@ -24,3 +24,16 @@
 // checkHealth({ settings }) -> Promise<{ healthy: boolean, message: string }>
 //   Never throws — failures are reported in the return value so the health
 //   sweep (llm/healthCheck.js) can run unconditionally on a timer.
+//
+// embed({ settings, text }) -> Promise<{ embedding: number[] }>
+//   Added for semantic search (FEATURE_REQUEST.md entry 1) — same
+//   one-branch-point rule as generate/checkHealth applies. settings here
+//   carries baseUrl/apiKey from the effective LLM settings plus
+//   config.embedding's model/dimension/timeoutMs (search/embeddingService.js
+//   assembles this object; it is not the same settings shape generate()
+//   receives). Adapters validate the returned embedding's length against
+//   settings.dimension and throw UpstreamError on mismatch, so a
+//   misconfigured EMBEDDING_DIMENSION fails loudly here rather than as an
+//   opaque Postgres vector-dimension error at insert time.
+//   Throws UpstreamError on network failure, timeout, or an unparseable
+//   response, and ServiceUnavailableError when the provider is `disabled`.

@@ -21,6 +21,17 @@ const baseSettings = {
   streamingEnabled: false,
 };
 
+// FEATURE_REQUEST.md entry 1 (semantic search): the embed() settings shape
+// search/embeddingService.js actually assembles — distinct from
+// baseSettings above, which is what generate()/checkHealth() receive.
+const embedSettings = {
+  baseUrl: 'http://fake-provider:11434',
+  apiKey: null,
+  model: 'all-minilm',
+  dimension: 3,
+  timeoutMs: 5000,
+};
+
 function makeJsonResponse(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
@@ -91,6 +102,27 @@ describe('ollamaAdapter', () => {
     const result = await ollamaAdapter.checkHealth({ settings: baseSettings });
     expect(result.healthy).toBe(false);
   });
+
+  test('embed returns the embedding from /api/embeddings on a matching-dimension response', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ embedding: [0.1, 0.2, 0.3] }));
+    const { embedding } = await ollamaAdapter.embed({ settings: embedSettings, text: 'hello' });
+    expect(embedding).toEqual([0.1, 0.2, 0.3]);
+  });
+
+  test('embed throws UpstreamError when the returned dimension does not match settings.dimension', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ embedding: [0.1, 0.2] }));
+    await expect(ollamaAdapter.embed({ settings: embedSettings, text: 'hello' })).rejects.toThrow(UpstreamError);
+  });
+
+  test('embed throws UpstreamError on a non-2xx response', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({}, 500));
+    await expect(ollamaAdapter.embed({ settings: embedSettings, text: 'hello' })).rejects.toThrow(UpstreamError);
+  });
+
+  test('embed throws UpstreamError on a timeout/network failure', async () => {
+    jest.spyOn(global, 'fetch').mockRejectedValue(new Error('connect ECONNREFUSED'));
+    await expect(ollamaAdapter.embed({ settings: embedSettings, text: 'hello' })).rejects.toThrow(UpstreamError);
+  });
 });
 
 describe('vllmAdapter', () => {
@@ -127,6 +159,17 @@ describe('vllmAdapter', () => {
     const result = await vllmAdapter.checkHealth({ settings: baseSettings });
     expect(result).toEqual({ healthy: true, message: 'ok' });
   });
+
+  test('embed returns the embedding from an OpenAI-compatible /v1/embeddings response', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ data: [{ embedding: [0.4, 0.5, 0.6] }] }));
+    const { embedding } = await vllmAdapter.embed({ settings: embedSettings, text: 'hello' });
+    expect(embedding).toEqual([0.4, 0.5, 0.6]);
+  });
+
+  test('embed throws UpstreamError when the returned dimension does not match settings.dimension', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ data: [{ embedding: [0.4] }] }));
+    await expect(vllmAdapter.embed({ settings: embedSettings, text: 'hello' })).rejects.toThrow(UpstreamError);
+  });
 });
 
 describe('disabledAdapter', () => {
@@ -141,5 +184,13 @@ describe('disabledAdapter', () => {
   test('checkHealth reports unhealthy without throwing', async () => {
     const result = await disabledAdapter.checkHealth({ settings: baseSettings });
     expect(result).toEqual({ healthy: false, message: 'disabled' });
+  });
+
+  test('embed always throws ServiceUnavailableError, never calls out', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    await expect(disabledAdapter.embed({ settings: embedSettings, text: 'hello' })).rejects.toThrow(
+      ServiceUnavailableError,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -17,8 +17,17 @@
 # the binding constraint here.
 
 services:
+  # pgvector/pgvector:pg16, not postgres:16-alpine (FEATURE_REQUEST.md entry 1,
+  # semantic search): a drop-in image built FROM postgres:16 with the vector
+  # extension precompiled — same official entrypoint scripts, same
+  # pg_isready healthcheck behavior, just able to run
+  # `CREATE EXTENSION vector`, which plain postgres:16-alpine cannot. Pulling
+  # this image is a one-time network fetch (dependency acquisition, same
+  # carve-out CLAUDE.md's "What isn't offline-safe" already gives
+  # `docker compose build`/`npm install`) — the stack stays fully offline
+  # once it's present locally.
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -32,7 +41,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    mem_limit: 1g
+    # Bumped from 1g (Local Test Environment Resource Envelope, Section 2):
+    # the Debian-based pgvector image has a slightly heavier baseline than
+    # postgres:16-alpine, plus HNSW index build/maintenance headroom for
+    # message_embeddings. Still well inside the free RAM that section
+    # documents.
+    mem_limit: 1536m
 
   # One-shot migration runner. Not started by `docker compose up` (profile
   # gated) — run explicitly with `docker compose run --rm migrate` after
@@ -90,6 +104,13 @@ services:
       LLM_SUMMARY_PROMPT_VERSION: ${LLM_SUMMARY_PROMPT_VERSION:-v1}
       LLM_TASK_PROMPT_VERSION: ${LLM_TASK_PROMPT_VERSION:-v1}
       LLM_HEALTH_CHECK_INTERVAL_MS: ${LLM_HEALTH_CHECK_INTERVAL_MS:-60000}
+      # Semantic search (FEATURE_REQUEST.md entry 1): a separate, smaller
+      # embedding model on the same local provider/host as LLM_* above —
+      # config.embedding in backend/src/config.js reuses LLM_PROVIDER's live
+      # (admin-editable) value and LLM_BASE_URL/LLM_API_KEY rather than
+      # duplicating them here.
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-minilm}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
     ports:
       - "127.0.0.1:8101:8000"
     healthcheck:
@@ -120,11 +141,12 @@ services:
       retries: 10
       start_period: 20s
 
-  # One-shot: pulls the configured model into the volume above. Not started
-  # by `docker compose up` (profile gated, same pattern as `migrate`) — run
-  # explicitly once after silent-whisper-ollama is up: `docker compose run
-  # --rm ollama-pull-model`. Idempotent — `ollama pull` no-ops if the model
-  # (and digest) is already present.
+  # One-shot: pulls the configured generation model AND the embedding model
+  # (FEATURE_REQUEST.md entry 1, semantic search) into the volume above. Not
+  # started by `docker compose up` (profile gated, same pattern as
+  # `migrate`) — run explicitly once after silent-whisper-ollama is up:
+  # `docker compose run --rm ollama-pull-model`. Idempotent — `ollama pull`
+  # no-ops if a model (and digest) is already present.
   ollama-pull-model:
     image: ollama/ollama:latest
     profiles: ["tools"]
@@ -132,7 +154,7 @@ services:
       silent-whisper-ollama:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ollama pull ${LLM_MODEL:-mistral}"]
+    command: ["ollama pull ${LLM_MODEL:-mistral} && ollama pull ${EMBEDDING_MODEL:-all-minilm}"]
     environment:
       OLLAMA_HOST: silent-whisper-ollama:11434
 

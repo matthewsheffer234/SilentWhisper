@@ -302,6 +302,7 @@ export default function WorkspaceSidebar({
   canManageAi,
   onOpenAiSettings,
   onOpenAuditLog,
+  onOpenSearch,
   isSelectedWorkspaceAdmin,
   onInviteMember,
   onOpenChangePassword,
@@ -327,6 +328,7 @@ export default function WorkspaceSidebar({
         <span style={styles.username}>{user?.username}</span>
         <PresenceBadge status={presence[user?.id] ?? 'online'} />
         <NotificationPermissionButton />
+        <button type="button" style={styles.aiSettingsButton} onClick={onOpenSearch}>Search</button>
         <button type="button" style={styles.aiSettingsButton} onClick={onOpenChangePassword}>Change Password</button>
         <button type="button" style={styles.logout} onClick={onLogout}>Sign out</button>
       </div>
