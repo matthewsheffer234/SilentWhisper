@@ -2,7 +2,7 @@ import { WebSocketServer } from 'ws';
 import { config } from '../config.js';
 import { db } from '../db.js';
 import { verifyAccessToken } from '../auth/jwt.js';
-import { requireChannelMember } from '../authz/membershipService.js';
+import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
 import {
@@ -195,7 +195,10 @@ async function handleMessage(ws, frame) {
     // Defense in depth: the join above already proved membership, but
     // re-checks here too in case it was revoked mid-session (removed from a
     // private channel) without the socket being told to leave.
-    await requireChannelMember(db, ws.userId, channelId);
+    const channel = await requireChannelMember(db, ws.userId, channelId);
+    // Same anti-drift principle as routes/messages.js's identical check —
+    // the WS send path can't be a way to bypass what REST blocks.
+    await requireWorkspaceNotArchived(db, channel.workspace_id);
     const message = await createMessage(db, {
       channelId,
       userId: ws.userId,

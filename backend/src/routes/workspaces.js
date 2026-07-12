@@ -11,6 +11,8 @@ import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateL
 import {
   requireWorkspaceMember,
   requireWorkspaceAdmin,
+  requireWorkspaceOwnerOrAdmin,
+  requireWorkspaceNotArchived,
   requireChannelMember,
   getWorkspaceRole,
   getChannel,
@@ -57,10 +59,64 @@ workspacesRouter.get('/', async (req, res, next) => {
       .join('workspace_members as wm', function joinMembers() {
         this.on('wm.workspace_id', '=', 'w.id').andOn('wm.user_id', '=', db.raw('?', [req.user.id]));
       })
-      .select('w.id', 'w.name', 'w.owner_id', 'wm.system_role')
+      .select('w.id', 'w.name', 'w.owner_id', 'w.archived_at', 'wm.system_role')
       .orderBy('w.created_at', 'asc');
 
-    res.json(rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id, role: r.system_role })));
+    res.json(
+      rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id, role: r.system_role, archivedAt: r.archived_at })),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Owner-or-admin (per the request: "owners and admins" can archive) —
+// broader than requireWorkspaceAdmin alone. No-ops (200, not an error) if
+// already archived, matching the existing idempotent-join-style handling
+// elsewhere (channels/:id/join, the members invite route).
+workspacesRouter.post('/:workspaceId/archive', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const workspace = await requireWorkspaceOwnerOrAdmin(db, req.user.id, workspaceId);
+
+    if (!workspace.archived_at) {
+      await db('workspaces').where({ id: workspaceId }).update({ archived_at: new Date(), archived_by: req.user.id });
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'WORKSPACE_ARCHIVE_STATUS_CHANGE',
+        targetResource: workspaceId,
+        payload: { action: 'archive' },
+      });
+    }
+
+    res.status(200).json({ id: workspaceId, archivedAt: workspace.archived_at ?? new Date().toISOString() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin-only (deliberately narrower than archive's owner-or-admin gate, per
+// the request's explicit distinction: "admins should also be able to
+// un-archive").
+workspacesRouter.post('/:workspaceId/unarchive', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+
+    const workspace = await db('workspaces').where({ id: workspaceId }).first('archived_at');
+    if (workspace.archived_at) {
+      await db('workspaces').where({ id: workspaceId }).update({ archived_at: null, archived_by: null });
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'WORKSPACE_ARCHIVE_STATUS_CHANGE',
+        targetResource: workspaceId,
+        payload: { action: 'unarchive' },
+      });
+    }
+
+    res.status(200).json({ id: workspaceId, archivedAt: null });
   } catch (err) {
     next(err);
   }
@@ -78,6 +134,7 @@ workspacesRouter.post('/:workspaceId/members', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspaceNotArchived(db, workspaceId);
 
     const username = assertUsername(req.body?.username);
     const role = req.body?.role !== undefined ? assertEnum(req.body.role, WORKSPACE_ROLES, 'role') : 'MEMBER';
@@ -143,6 +200,12 @@ workspacesRouter.patch('/:workspaceId/members/:userId', async (req, res, next) =
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     const targetUserId = assertUuid(req.params.userId, 'userId');
     await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    // Role assignment mutates workspace_members, the same class of write
+    // the design's gate list already covers for the invite endpoint above —
+    // extended here to the admin dashboard's newer write endpoints too
+    // (added after this design was originally written), since "an archived
+    // workspace cannot be updated" applies equally to them.
+    await requireWorkspaceNotArchived(db, workspaceId);
 
     const role = assertEnum(req.body?.role, WORKSPACE_ROLES, 'role');
 
@@ -205,6 +268,7 @@ workspacesRouter.post('/:workspaceId/users', adminUserCreateLimiter, async (req,
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspaceNotArchived(db, workspaceId);
 
     const username = assertUsername(req.body?.username);
     const email = assertEmail(req.body?.email);
@@ -294,6 +358,7 @@ workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceNotArchived(db, workspaceId);
 
     const name = assertName(req.body?.name, 'channel name');
     const type = assertEnum(req.body?.type, CREATABLE_CHANNEL_TYPES, 'type');
@@ -350,6 +415,7 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/join', async (req, res,
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     const channelId = assertUuid(req.params.channelId, 'channelId');
     await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceNotArchived(db, workspaceId);
 
     const channel = await getChannel(db, channelId);
     if (!channel || channel.workspace_id !== workspaceId) {
@@ -385,6 +451,7 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/members', async (req, r
 
     // Caller must already belong to the channel to add someone else to it.
     await requireChannelMember(db, req.user.id, channelId);
+    await requireWorkspaceNotArchived(db, workspaceId);
     // Target must already belong to the workspace — this endpoint adds an
     // existing workspace member to a channel, not a stranger to the workspace.
     const targetRole = await db('workspace_members')

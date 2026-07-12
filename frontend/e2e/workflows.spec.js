@@ -499,6 +499,32 @@ test.describe('admin user management', () => {
   });
 });
 
+test.describe('workspace archive/unarchive', () => {
+  test('an admin can archive a workspace into read-only mode and unarchive it back', async ({ page }) => {
+    const seeded = await seedUserWithChannel('archive');
+    await loginViaUi(page, seeded.username, seeded.password);
+    await page.click(`text=${seeded.workspace.name}`);
+    await page.click('text=general');
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    const workspaceRow = page.locator('[role="button"]', { hasText: seeded.workspace.name });
+    await workspaceRow.locator('button:has-text("Archive")').click();
+
+    await expect(page.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=(archived — read only)')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('input[placeholder="This workspace is archived — read only"]')).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.locator('button:has-text("+ New channel")')).not.toBeVisible();
+    await expect(page.locator('button:has-text("+ Invite member")')).not.toBeVisible();
+
+    const archivedRow = page.locator('[role="button"]', { hasText: seeded.workspace.name });
+    await archivedRow.locator('button:has-text("Unarchive")').click();
+    await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('button:has-text("+ New channel")')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
 test.describe('virtual scrolling', () => {
   test('a long channel history renders only a window of message rows, not all of them', async ({ page }) => {
     const seeded = await seedUserWithChannel('scroll');

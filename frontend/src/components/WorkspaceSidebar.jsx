@@ -112,6 +112,15 @@ const styles = {
     background: 'none',
     cursor: 'pointer',
   },
+  archivePill: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-3)',
+    fontWeight: 600,
+    border: 'none',
+    background: 'none',
+    cursor: 'pointer',
+  },
+  archivedBadge: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginLeft: 4 },
   // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — visually
   // compact text links, but the invisible hit area is full-size.
   aiSettingsButton: {
@@ -297,10 +306,20 @@ export default function WorkspaceSidebar({
   onInviteMember,
   onOpenChangePassword,
   onOpenUserManagement,
+  onArchiveWorkspace,
+  onUnarchiveWorkspace,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
+
+  // FEATURE_REQUEST.md: workspace archive/unarchive. Split rather than
+  // filtered-with-a-toggle — the same pattern channels[].isMember already
+  // uses to drive conditional rendering in this file (Join pill vs. not).
+  const activeWorkspaces = workspaces.filter((ws) => !ws.archivedAt);
+  const archivedWorkspaces = workspaces.filter((ws) => ws.archivedAt);
+  const selectedWorkspace = workspaces.find((ws) => ws.id === selectedWorkspaceId) ?? null;
+  const isSelectedWorkspaceArchived = Boolean(selectedWorkspace?.archivedAt);
 
   return (
     <aside style={styles.sidebar}>
@@ -327,7 +346,7 @@ export default function WorkspaceSidebar({
 
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Workspaces</div>
-        {workspaces.map((ws) => (
+        {activeWorkspaces.map((ws) => (
           <div
             key={ws.id}
             className="sl-row"
@@ -337,9 +356,51 @@ export default function WorkspaceSidebar({
             onClick={() => onSelectWorkspace(ws.id)}
             onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
           >
-            {ws.name}
+            <span style={{ flex: 1 }}>{ws.name}</span>
+            {(ws.ownerId === user?.id || ws.role === 'ADMIN') && (
+              <button
+                type="button"
+                style={styles.archivePill}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onArchiveWorkspace(ws.id);
+                }}
+              >
+                Archive
+              </button>
+            )}
           </div>
         ))}
+        {archivedWorkspaces.length > 0 && (
+          <>
+            <div style={{ ...styles.sectionTitle, marginTop: 18 }}>Archived</div>
+            {archivedWorkspaces.map((ws) => (
+              <div
+                key={ws.id}
+                className="sl-row"
+                role="button"
+                tabIndex={0}
+                style={{ ...styles.row, ...(ws.id === selectedWorkspaceId ? styles.rowActive : {}) }}
+                onClick={() => onSelectWorkspace(ws.id)}
+                onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
+              >
+                <span style={{ flex: 1 }}>{ws.name}</span>
+                {ws.role === 'ADMIN' && (
+                  <button
+                    type="button"
+                    style={styles.archivePill}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUnarchiveWorkspace(ws.id);
+                    }}
+                  >
+                    Unarchive
+                  </button>
+                )}
+              </div>
+            ))}
+          </>
+        )}
         {showNewWorkspace ? (
           <InlineCreateForm
             placeholder="Workspace name"
@@ -354,7 +415,7 @@ export default function WorkspaceSidebar({
           </button>
         )}
 
-        {selectedWorkspaceId && isSelectedWorkspaceAdmin && (
+        {selectedWorkspaceId && isSelectedWorkspaceAdmin && !isSelectedWorkspaceArchived && (
           <div style={{ marginTop: 10 }}>
             {showInvite ? (
               <InviteMemberForm
@@ -370,7 +431,10 @@ export default function WorkspaceSidebar({
 
         {selectedWorkspaceId && (
           <>
-            <div style={{ ...styles.sectionTitle, marginTop: 18 }}>Channels</div>
+            <div style={{ ...styles.sectionTitle, marginTop: 18 }}>
+              Channels
+              {isSelectedWorkspaceArchived && <span style={styles.archivedBadge}>(archived — read only)</span>}
+            </div>
             {channels.map((ch) => (
               <div
                 key={ch.id}
@@ -382,7 +446,7 @@ export default function WorkspaceSidebar({
                 onKeyDown={activateOnKey(() => onSelectChannel(ch.id))}
               >
                 <span>{ch.type === 'PRIVATE' ? '🔒' : '#'} {ch.name}</span>
-                {!ch.isMember && (
+                {!ch.isMember && !isSelectedWorkspaceArchived && (
                   <button
                     type="button"
                     style={styles.joinPill}
@@ -396,19 +460,20 @@ export default function WorkspaceSidebar({
                 )}
               </div>
             ))}
-            {showNewChannel ? (
-              <InlineCreateForm
-                placeholder="Channel name"
-                onSubmit={(name) => {
-                  onCreateChannel(name, 'PUBLIC');
-                  setShowNewChannel(false);
-                }}
-              />
-            ) : (
-              <button type="button" style={styles.addButton} onClick={() => setShowNewChannel(true)}>
-                + New channel
-              </button>
-            )}
+            {!isSelectedWorkspaceArchived &&
+              (showNewChannel ? (
+                <InlineCreateForm
+                  placeholder="Channel name"
+                  onSubmit={(name) => {
+                    onCreateChannel(name, 'PUBLIC');
+                    setShowNewChannel(false);
+                  }}
+                />
+              ) : (
+                <button type="button" style={styles.addButton} onClick={() => setShowNewChannel(true)}>
+                  + New channel
+                </button>
+              ))}
           </>
         )}
       </div>

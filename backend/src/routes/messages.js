@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { requireChannelMember } from '../authz/membershipService.js';
+import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
 import { assertUuid, parsePagination } from '../validation.js';
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
@@ -76,7 +76,12 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
 messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
   try {
     const channelId = assertUuid(req.params.channelId, 'channelId');
-    await requireChannelMember(db, req.user.id, channelId);
+    const channel = await requireChannelMember(db, req.user.id, channelId);
+    // Sends into an archived workspace's channels are blocked — the same
+    // "cannot be updated" rule the workspace/channel write routes in
+    // workspaces.js already enforce, reached here via the channel's own
+    // workspace_id since this route is keyed by channel, not workspace.
+    await requireWorkspaceNotArchived(db, channel.workspace_id);
 
     // Section 3, Rate Limiting & Abuse Prevention: "Rate-limit message sends
     // per user/connection so a single client cannot flood a channel..." —

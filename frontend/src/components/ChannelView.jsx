@@ -132,7 +132,7 @@ function renderContentWithMentions(content) {
   return nodes;
 }
 
-export default function ChannelView({ channel, messages, presence, currentUser, joined, onSend, onOpenThread, mainContentId }) {
+export default function ChannelView({ channel, messages, presence, currentUser, joined, archived, onSend, onOpenThread, mainContentId }) {
   const [draft, setDraft] = useState('');
   const feedRef = useRef(null);
   const [summary, setSummary] = useState(null); // { loading, text, error }
@@ -286,11 +286,11 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
           style={styles.input}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={joined ? `Message #${channel.name}` : 'Joining channel…'}
-          disabled={!joined}
+          placeholder={archived ? 'This workspace is archived — read only' : joined ? `Message #${channel.name}` : 'Joining channel…'}
+          disabled={!joined || archived}
           maxLength={10000}
         />
-        <button type="submit" style={styles.sendButton} disabled={!joined || !draft.trim()}>
+        <button type="submit" style={styles.sendButton} disabled={!joined || archived || !draft.trim()}>
           Send
         </button>
       </form>

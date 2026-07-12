@@ -214,6 +214,16 @@ export default function ChatShell() {
     return workspacesApi.inviteWorkspaceMember(workspaceId, username, role);
   }
 
+  async function handleArchiveWorkspace(workspaceId) {
+    const { archivedAt } = await workspacesApi.archiveWorkspace(workspaceId);
+    setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, archivedAt } : ws)));
+  }
+
+  async function handleUnarchiveWorkspace(workspaceId) {
+    await workspacesApi.unarchiveWorkspace(workspaceId);
+    setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, archivedAt: null } : ws)));
+  }
+
   async function handleJoinChannel(channelId) {
     await workspacesApi.joinChannel(selectedWorkspaceId, channelId);
     setChannels((prev) => prev.map((c) => (c.id === channelId ? { ...c, isMember: true } : c)));
@@ -280,6 +290,7 @@ export default function ChatShell() {
   // backend's requireWorkspaceAdmin (routes/workspaces.js's new
   // POST /:workspaceId/members) checks the same thing.
   const isSelectedWorkspaceAdmin = workspaces.find((ws) => ws.id === selectedWorkspaceId)?.role === 'ADMIN';
+  const isSelectedWorkspaceArchived = Boolean(workspaces.find((ws) => ws.id === selectedWorkspaceId)?.archivedAt);
 
   return (
     <div style={styles.shell}>
@@ -303,6 +314,8 @@ export default function ChatShell() {
         onInviteMember={handleInviteMember}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
         onOpenUserManagement={() => setUserManagementOpen(true)}
+        onArchiveWorkspace={handleArchiveWorkspace}
+        onUnarchiveWorkspace={handleUnarchiveWorkspace}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -325,6 +338,7 @@ export default function ChatShell() {
         presence={presence}
         currentUser={user}
         joined={joinedChannels.has(selectedChannelId)}
+        archived={isSelectedWorkspaceArchived}
         onSend={handleSend}
         onOpenThread={openThread}
       />
