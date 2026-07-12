@@ -29,4 +29,17 @@ export const config = {
     poolMin: Number(process.env.PG_POOL_MIN || 2),
     poolMax: Number(process.env.PG_POOL_MAX || 20),
   },
+
+  auth: {
+    jwtSecret: required('JWT_SECRET', process.env.JWT_SECRET),
+    // Embedded in each access token's header (kid). Bump this alongside
+    // rotating JWT_SECRET so verification predictably rejects every token
+    // signed under the old secret, rather than requiring a hard cutover
+    // that logs everyone out at once with no way to distinguish why
+    // (Section 3, Secrets & Configuration).
+    jwtKeyId: process.env.JWT_KEY_ID || 'v1',
+    accessTokenTtl: process.env.ACCESS_TOKEN_TTL || '15m',
+    refreshTokenTtlMs: Number(process.env.REFRESH_TOKEN_TTL_MS || 30 * 24 * 60 * 60 * 1000), // 30 days
+    bcryptSaltRounds: Math.max(12, Number(process.env.BCRYPT_SALT_ROUNDS || 12)),
+  },
 };

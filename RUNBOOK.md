@@ -2,7 +2,7 @@
 
 This runbook covers day-to-day operation of the local test environment: first-time setup, starting/stopping, migrations, health checks, logs, and troubleshooting. For the design rationale behind any of these choices (why ports are bound to 127.0.0.1, why there are two Postgres roles, why the audit log uses an advisory lock, etc.), see `PROJECT_PLAN.md` — this document assumes that reasoning and just tells you what to run.
 
-**Current implementation status**: Phase 1 (Local Foundation And Database Setup) only. There is no auth, no WebSocket layer, no LLM integration, and no real chat UI yet — see `PROJECT_PLAN.md` Section 11 for exactly what exists, and Section 8 for what's still to come. Sections below marked *(Phase N+)* describe future behavior and don't work yet.
+**Current implementation status**: Phases 1–2 (Local Foundation And Database Setup; Local Auth And API Base). Auth, workspaces/channels/DMs, and paginated messaging all work over REST. There is still no WebSocket layer, no LLM integration, and no real chat UI — the frontend is still the Phase 1 placeholder screen. See `PROJECT_PLAN.md` Section 11 for exactly what exists, and Section 8 for what's still to come. Sections below marked *(Phase N+)* describe future behavior and don't work yet.
 
 ## Start / Stop
 
@@ -35,7 +35,7 @@ docker compose run --rm migrate
 |---|---|---|
 | Frontend (Vite dev server) | http://localhost:3101 | placeholder screen only until Phase 3 |
 | Backend health | http://localhost:8101/health | `{"status":"ok","db":"ok","uptimeSeconds":N}` |
-| Backend REST API | http://localhost:8101/api | *(Phase 2+ — no routes exist yet)* |
+| Backend REST API | http://localhost:8101/api | see API Reference below |
 | Backend WebSocket | ws://localhost:8101/ws | *(Phase 3+ — doesn't exist yet)* |
 | Postgres | localhost:5433 | `psql -h localhost -p 5433 -U <PGUSER> -d silent_whisper` |
 
@@ -105,9 +105,49 @@ curl http://localhost:8101/health
 
 Open http://localhost:3101 — you should see a "Silent Whisper" placeholder card reporting the backend as reachable.
 
-### 4. Create the first user *(Phase 2+ — doesn't exist yet)*
+### 4. Create the first user
 
-No signup/login endpoints exist yet. This section will cover `POST /api/auth/signup` once Phase 2 lands.
+```bash
+curl -s -c cookies.txt -X POST http://localhost:8101/api/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","email":"alice@example.com","password":"correct-horse-battery"}'
+```
+
+Returns `{"accessToken": "...", "user": {...}}` and sets a `refresh_token` cookie (saved to `cookies.txt` above by curl's `-c` flag). Password policy: 10+ characters, not on the common-password deny-list (`backend/src/auth/passwordPolicy.js`).
+
+## API Reference
+
+All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. See `PROJECT_PLAN.md` Section 3 for the authorization model (404 for "not a member", not 403 — see below).
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/auth/signup` | `{username, email, password}` → `{accessToken, user}` + refresh cookie |
+| POST | `/api/auth/login` | `{username, password}` → `{accessToken, user}` + refresh cookie |
+| POST | `/api/auth/refresh` | reads refresh cookie, rotates it → `{accessToken}` + new refresh cookie |
+| POST | `/api/auth/logout` | reads refresh cookie, revokes it → `204` |
+| POST | `/api/workspaces` | `{name}` → creates a workspace; creator becomes its `ADMIN` |
+| GET | `/api/workspaces` | list workspaces the caller belongs to |
+| POST | `/api/workspaces/:workspaceId/channels` | `{name, type: "PUBLIC"\|"PRIVATE"}` — creator auto-joined |
+| GET | `/api/workspaces/:workspaceId/channels` | all `PUBLIC` channels + `PRIVATE` ones the caller has joined |
+| POST | `/api/workspaces/:workspaceId/channels/:channelId/join` | self-service join — `PUBLIC` only, 400 for `PRIVATE` |
+| POST | `/api/workspaces/:workspaceId/channels/:channelId/members` | `{userId}` — caller must already be a channel member; target must already be a workspace member |
+| POST | `/api/direct-messages` | `{targetUserId}` → creates or reuses a 1:1 `DIRECT` channel (`workspace_id` is `NULL`) |
+| POST | `/api/group-direct-messages` | `{memberIds: [...]}` → creates a `GROUP_DM` channel |
+| GET | `/api/channels/:channelId/messages` | `?limit=&before=&parentMessageId=` — newest-first, paginated by timestamp cursor |
+| POST | `/api/channels/:channelId/messages` | `{content, parentMessageId?}` — max 10,000 chars |
+
+### Authorization status codes
+
+- **401** — no/invalid/expired access token.
+- **404** — authenticated, but not a member of the workspace/channel in question (or it doesn't exist — deliberately indistinguishable from the caller's point of view).
+- **403** — authenticated and a member, but lacking a specific privilege (e.g. a non-admin action).
+- **400** — malformed input, or a request that's structurally invalid regardless of who's asking (e.g. trying to self-join a `PRIVATE` channel, or attaching a thread reply to a message in a different channel).
+
+### Auth token lifecycle
+
+- Access tokens expire in 15 minutes (`ACCESS_TOKEN_TTL`). There is no frontend token-refresh wiring yet (Phase 3) — for manual testing, call `/api/auth/refresh` yourself once the token expires.
+- Refresh tokens rotate on every use: each `/api/auth/refresh` call revokes the presented token and returns a new one. **Reusing an old, already-rotated refresh token revokes every other active session for that user** — this is deliberate reuse detection (a replayed token is either a client bug or a stolen token), not a bug, and is audited as `AUTH_REFRESH_REUSE_DETECTED`. If you're testing manually with a saved cookie jar, remember each `curl -b cookies.txt -c cookies.txt` refresh invalidates the previous cookie value.
+- `JWT_KEY_ID` (default `v1`) is embedded in every token's header. Bump it alongside rotating `JWT_SECRET` to invalidate all outstanding tokens predictably — see `PROJECT_PLAN.md` Section 3, Secrets & Configuration.
 
 ## Rebuilding After Code Changes
 
@@ -167,7 +207,9 @@ npm install
 npm test
 ```
 
-Tests connect to Postgres using `backend/.env` — they run against a real database (currently `localhost:5433`, i.e. the `docker compose up -d postgres` instance), not a mock. The audit service suite specifically proves:
+Tests connect to Postgres using `backend/.env` — they run against a real database (currently `localhost:5433`, i.e. the `docker compose up -d postgres` instance), not a mock. `npm test` sets `NODE_ENV=test`, which disables the login/signup rate limiters (`backend/src/auth/rateLimit.js`) — a real test run legitimately signs up far more than 10-20 times from one address, which isn't the credential-stuffing pattern those limiters exist to catch. The limits themselves are unchanged in dev/production.
+
+The audit service suite specifically proves:
 
 - the genesis row chains correctly
 - a sequential run of inserts forms a linear, recomputable hash chain
@@ -256,6 +298,10 @@ docker compose run --rm --build migrate
 - Confirm the backend container is up and healthy (`docker compose ps`).
 - Confirm `CORS_ORIGIN` (root `.env`) matches the frontend's actual origin (`http://localhost:3101` by default) — a mismatch causes the browser to block the response even though the backend answered.
 - Confirm `VITE_API_URL` was correct **at the time the frontend image was built** — it's baked in at build time, so changing `.env` alone doesn't help; rebuild.
+
+### `429 Too many attempts` while manually testing signup/login
+
+Expected, not a bug — `backend/src/auth/rateLimit.js` caps signup at 10/hour per IP and login at 20/15min per IP + 10/15min per username. If you're exploring the API by hand and hit this, wait out the window or temporarily raise the limits in that file (never disable them outright, and never in a way that ships to production).
 
 ### Port already in use (`5433`, `8101`, or `3101`)
 

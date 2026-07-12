@@ -11,7 +11,7 @@ Designed to be deployable alongside the existing Silent Lattice stack, served un
 
 ## Status
 
-Phase 1 (Local Foundation And Database Setup) is complete and verified end-to-end. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested so far. Auth, WebSockets, the LLM proxy, and the real chat UI are not yet implemented (Phases 2–5).
+Phases 1–2 (Local Foundation And Database Setup; Local Auth And API Base) are complete and verified end-to-end: auth (signup/login/refresh rotation with reuse detection/logout), workspaces, channels (public/private), direct messages, group DMs, and paginated threaded messaging all work over REST. See `PROJECT_PLAN.md` Section 11 (Implementation Log) for exactly what's built and tested so far, and `RUNBOOK.md`'s API Reference for the endpoint list. WebSockets, the LLM proxy, and the real chat UI are not yet implemented (Phases 3–5) — the frontend is still the Phase 1 placeholder screen.
 
 ## Stack
 

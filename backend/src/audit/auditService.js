@@ -15,6 +15,14 @@ export const GENESIS_HASH = '0'.repeat(64);
 // other during a deploy that straddles the change.
 export const AUDIT_CHAIN_LOCK_KEY = 725_001_001;
 
+// audit_logs.actor_id is NOT NULL with no foreign key to users (Section 4),
+// so this sentinel is a valid, deliberate value for events with no
+// authenticated actor yet — e.g. a failed login against a username that
+// doesn't exist, where attributing the attempt to a real user would be
+// wrong. Distinct from GENESIS_HASH's all-zero convention only by field;
+// same "obviously not a real value" spirit.
+export const ANONYMOUS_ACTOR_ID = '00000000-0000-0000-0000-000000000000';
+
 // Recursively sort object keys so the same logical payload always serializes
 // to the same JSON string, regardless of property insertion order — required
 // for the hash chain to be reproducible by the verification script.
