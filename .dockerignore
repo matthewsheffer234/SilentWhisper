@@ -1,0 +1,12 @@
+.git
+.claude
+**/node_modules
+**/.env
+**/.env.local
+**/dist
+**/build
+**/coverage
+*.log
+PROJECT_PLAN.md
+README.md
+RUNBOOK.md

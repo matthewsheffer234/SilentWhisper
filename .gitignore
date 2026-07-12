@@ -3,3 +3,8 @@
 .aws/
 node_modules/
 .claude/settings.local.json
+dist/
+build/
+coverage/
+*.log
+.DS_Store

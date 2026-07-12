@@ -1,0 +1,249 @@
+/* Design tokens copied from ~/wireservice-dev/frontend/src/global.css per
+   PROJECT_PLAN.md Section 7 (Design System & UI/UX Guidelines) — Silent
+   Whisper reuses Silent Lattice's visual language rather than inventing a
+   new one, so the two apps read as one product family. Do not introduce a
+   second accent color or redefine these tokens under different names.
+
+   One deliberate deviation from the source file: Silent Lattice's dark mode
+   is manual-toggle-only (a [data-theme="dark"] attribute set by app JS, with
+   no automatic OS-level detection at all). PROJECT_PLAN.md Section 7 commits
+   Silent Whisper to genuine prefers-color-scheme support, so this file adds
+   an @media (prefers-color-scheme: dark) block carrying the same dark token
+   values as a default, with the explicit [data-theme] attribute still
+   winning in both directions (":not([data-theme=\"light\"])" so a user who
+   explicitly picks light isn't overridden by a dark system preference). */
+
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--surface);
+  color: var(--text-1);
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ── Design tokens — light mode (default / fallback) ─────────────────────── */
+:root, [data-theme="light"] {
+  /* Surfaces */
+  --surface:          #e9edea;
+  --surface-alt:      #e2e7e3;
+  --card-bg:          #e9edea;
+  --card-border:      transparent;
+  --card-shadow:      5px 5px 14px rgba(0,0,0,0.10), -3px -3px 8px rgba(255,255,255,0.82);
+  --card-shadow-hover:7px 7px 18px rgba(0,0,0,0.13), -4px -4px 10px rgba(255,255,255,0.85);
+  --reader-bg:        #e4e8e5;
+  --reader-shadow:    inset 3px 3px 10px rgba(0,0,0,0.08), inset -1px -1px 4px rgba(255,255,255,0.65);
+  --reader-border:    none;
+  --input-shadow:     inset 2px 2px 7px rgba(0,0,0,0.09), inset -1px -1px 3px rgba(255,255,255,0.72);
+  --overlay-bg:       rgba(255,255,255,0.97);
+  --overlay-shadow:   0 8px 40px rgba(0,0,0,0.14);
+
+  /* Borders */
+  --border:           #c4c9c5;
+  --border-strong:    #a8aead;
+  --border-subtle:    rgba(0,0,0,0.07);
+
+  /* Brand / accent — British Racing Green */
+  --brg:              #00563f;
+  --brg-deep:         #004c36;
+  --brg-dim:          rgba(0,86,63,0.11);
+  --brg-hover:        #00472f;
+
+  /* Typography */
+  --text-1:           #1d1f1e;
+  --text-2:           #3d4640;
+  --text-3:           #6e7c74;
+  --text-4:           #9eaaa2;
+
+  /* Interactive states — flat, no neumorphic blur */
+  --item-hover:       rgba(0,0,0,0.055);
+  --item-active-bg:   #00563f;
+  --item-active-fg:   #ffffff;
+
+  /* Skeleton shimmer */
+  --skel-a:           #dce0dd;
+  --skel-b:           #e5e9e6;
+
+  /* Row alternating */
+  --row-alt:          rgba(0,0,0,0.025);
+
+  /* Semantic */
+  --error-bg:         #fff0f0;
+  --error-border:     #ffd0d0;
+  --error-text:       #c00;
+  --success-bg:       rgba(0,86,63,0.09);
+  --success-text:     #00563f;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --reading-width: 68ch;
+  --reading-lh:    1.625;
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 15px;
+  --text-md:   17px;
+  --text-lg:   20px;
+  --text-xl:   24px;
+  --text-2xl:  28px;
+  --text-3xl:  34px;
+}
+
+/* ── Design tokens — dark mode ─────────────────────────────────────────────
+   Applied two ways: automatically when the OS prefers dark (unless the user
+   has explicitly picked light), and unconditionally via an explicit
+   [data-theme="dark"] toggle attribute. Same token values either way. ── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface:          #1a1e1c;
+    --surface-alt:      #1e2320;
+    --card-bg:          #232927;
+    --card-border:      rgba(255,255,255,0.09);
+    --card-shadow:      none;
+    --card-shadow-hover:none;
+    --reader-bg:        #1e2320;
+    --reader-shadow:    none;
+    --reader-border:    1px solid rgba(255,255,255,0.09);
+    --input-shadow:     none;
+    --overlay-bg:       #232927;
+    --overlay-shadow:   0 8px 40px rgba(0,0,0,0.45);
+
+    --border:           rgba(255,255,255,0.10);
+    --border-strong:    rgba(255,255,255,0.18);
+    --border-subtle:    rgba(255,255,255,0.05);
+
+    --brg:              #2da677;
+    --brg-deep:         #249065;
+    --brg-dim:          rgba(45,166,119,0.15);
+    --brg-hover:        #38c48e;
+
+    --text-1:           #e0e8e3;
+    --text-2:           #a8b8b0;
+    --text-3:           #637a6e;
+    --text-4:           #3e5048;
+
+    --item-hover:       rgba(255,255,255,0.055);
+    --item-active-bg:   #2da677;
+    --item-active-fg:   #ffffff;
+
+    --skel-a:           #252c29;
+    --skel-b:           #2e3632;
+
+    --row-alt:          rgba(255,255,255,0.03);
+
+    --error-bg:         rgba(200,0,0,0.12);
+    --error-border:     rgba(200,0,0,0.3);
+    --error-text:       #ff6b6b;
+    --success-bg:       rgba(45,166,119,0.12);
+    --success-text:     #2da677;
+  }
+}
+
+[data-theme="dark"] {
+  --surface:          #1a1e1c;
+  --surface-alt:      #1e2320;
+  --card-bg:          #232927;
+  --card-border:      rgba(255,255,255,0.09);
+  --card-shadow:      none;
+  --card-shadow-hover:none;
+  --reader-bg:        #1e2320;
+  --reader-shadow:    none;
+  --reader-border:    1px solid rgba(255,255,255,0.09);
+  --input-shadow:     none;
+  --overlay-bg:       #232927;
+  --overlay-shadow:   0 8px 40px rgba(0,0,0,0.45);
+
+  --border:           rgba(255,255,255,0.10);
+  --border-strong:    rgba(255,255,255,0.18);
+  --border-subtle:    rgba(255,255,255,0.05);
+
+  --brg:              #2da677;
+  --brg-deep:         #249065;
+  --brg-dim:          rgba(45,166,119,0.15);
+  --brg-hover:        #38c48e;
+
+  --text-1:           #e0e8e3;
+  --text-2:           #a8b8b0;
+  --text-3:           #637a6e;
+  --text-4:           #3e5048;
+
+  --item-hover:       rgba(255,255,255,0.055);
+  --item-active-bg:   #2da677;
+  --item-active-fg:   #ffffff;
+
+  --skel-a:           #252c29;
+  --skel-b:           #2e3632;
+
+  --row-alt:          rgba(255,255,255,0.03);
+
+  --error-bg:         rgba(200,0,0,0.12);
+  --error-border:     rgba(200,0,0,0.3);
+  --error-text:       #ff6b6b;
+  --success-bg:       rgba(45,166,119,0.12);
+  --success-text:     #2da677;
+}
+
+/* ── Typography scale ────────────────────────────────────────────────────── */
+:root {
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 15px;
+  --text-md:   17px;
+  --text-lg:   20px;
+  --text-xl:   24px;
+  --text-2xl:  28px;
+  --text-3xl:  34px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --reading-width: 68ch;
+  --reading-lh:    1.625;
+}
+
+/* ── Utility interaction classes ─────────────────────────────────────────── */
+.sl-row:hover         { background: var(--item-hover); }
+.sl-card:hover        { background: var(--item-hover); }
+.sl-drawer-item:hover { background: var(--item-hover); }
+.sl-row, .sl-card, .sl-drawer-item { transition: background 0.1s; }
+
+button:active:not(:disabled) { opacity: 0.78; }
+
+/* ── Skeleton shimmer ────────────────────────────────────────────────────── */
+@keyframes sl-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Skip link ───────────────────────────────────────────────────────────── */
+.sl-skip-link {
+  position: absolute;
+  top: -40px;
+  left: 6px;
+  z-index: 10000;
+  padding: 8px 16px;
+  background: var(--text-1);
+  color: var(--surface);
+  border-radius: 0 0 8px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.1s;
+}
+.sl-skip-link:focus { top: 0; }
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Input / select focus ring ───────────────────────────────────────────── */
+input:focus, select:focus, textarea:focus {
+  outline: 1.5px solid var(--brg);
+  outline-offset: 1px;
+}
+
+/* ── Reduced motion (PROJECT_PLAN.md Section 7, Apple HIG Alignment) ────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

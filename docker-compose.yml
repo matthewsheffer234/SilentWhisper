@@ -1,0 +1,92 @@
+# Local test environment for Silent Whisper. Follows the ~/wireservice-dev
+# pattern (PROJECT_PLAN.md Section 2, Serving Under Silent Lattice): this is
+# an independent Compose stack, not joined to wireservice_default. Silent
+# Lattice's nginx reaches these services via host.docker.internal on the
+# published ports below, all bound to 127.0.0.1 only — never 0.0.0.0 (see
+# Section 2's note on wireservice-dev-frontend-1/-api-1 currently doing that).
+#
+# Resource limits follow the Local Test Environment Resource Envelope
+# (Section 2): this host has 8 vCPU / 30GB RAM / no GPU, and memory is not
+# the binding constraint here.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - silent_whisper_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    mem_limit: 1g
+
+  # One-shot migration runner. Not started by `docker compose up` (profile
+  # gated) — run explicitly with `docker compose run --rm migrate` after
+  # postgres is healthy. Uses the same image as `backend`, which includes
+  # both /backend and /database (see backend/Dockerfile).
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      APP_DB_USER: ${APP_DB_USER}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    command: ["npm", "run", "migrate"]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      APP_DB_USER: ${APP_DB_USER}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3101}
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "127.0.0.1:8101:8000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 512m
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8101/api}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8101/ws}
+    ports:
+      - "127.0.0.1:3101:3000"
+    mem_limit: 128m
+
+volumes:
+  silent_whisper_pgdata:
