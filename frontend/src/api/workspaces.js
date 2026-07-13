@@ -1,9 +1,15 @@
 import { apiFetch } from './client.js';
 
 export const listWorkspaces = () => apiFetch('/workspaces');
-export const createWorkspace = (name) => apiFetch('/workspaces', { method: 'POST', body: { name } });
+export const createWorkspace = (name, visibility) =>
+  apiFetch('/workspaces', { method: 'POST', body: visibility ? { name, visibility } : { name } });
 export const inviteWorkspaceMember = (workspaceId, username, role) =>
   apiFetch(`/workspaces/${workspaceId}/members`, { method: 'POST', body: { username, role } });
+
+// Self-service workspace subscription (FEATURE_REQUEST.md).
+export const listDiscoverableWorkspaces = () => apiFetch('/workspaces/discoverable');
+export const subscribeToWorkspace = (workspaceId) =>
+  apiFetch(`/workspaces/${workspaceId}/subscribe`, { method: 'POST' });
 
 export const listWorkspaceMembers = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/members`);
 export const changeWorkspaceMemberRole = (workspaceId, userId, role) =>

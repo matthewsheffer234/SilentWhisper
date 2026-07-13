@@ -53,6 +53,18 @@ async function seedUserWithChannel(label) {
   return { username, password: 'correct-horse-battery', accessToken, userId: user.id, workspace, channel };
 }
 
+// Self-service workspace subscription (FEATURE_REQUEST.md): a workspace
+// created with visibility: 'PUBLIC', distinct from seedUserWithChannel's
+// default PRIVATE workspace.
+async function createWorkspaceApi(accessToken, name, visibility) {
+  const res = await fetch(`${API_BASE}/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(visibility ? { name, visibility } : { name }),
+  });
+  return res.json();
+}
+
 // A plain signup with no workspace of their own — used as the invite
 // target for the workspace-invite tests below.
 async function seedPlainUser(label) {
@@ -493,6 +505,39 @@ test.describe('workspace invite', () => {
     await page.fill('input[placeholder="Username to invite"]', 'no-such-user-anywhere');
     await page.click('button:has-text("Add")');
     await expect(page.locator('text=No user with that username exists')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+test.describe('workspace discovery / self-service subscribe', () => {
+  test('a public workspace is discoverable and joinable with no invite; a private one never appears', async ({ page }) => {
+    const owner = await seedPlainUser('discoowner');
+    const publicWs = await createWorkspaceApi(owner.accessToken, `${owner.username} public ws`, 'PUBLIC');
+    const privateWs = await createWorkspaceApi(owner.accessToken, `${owner.username} private ws`, 'PRIVATE');
+    const seeker = await seedPlainUser('discoseeker');
+
+    await loginViaUi(page, seeker.username, seeker.password);
+    await page.click('button:has-text("Browse workspaces")');
+
+    const subscribeButton = page.locator(`button[aria-label="Subscribe to ${publicWs.name}"]`);
+    await expect(page.locator(`text=${publicWs.name}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${privateWs.name}`)).not.toBeVisible();
+
+    await subscribeButton.click();
+    // Subscribed successfully -> this specific row drops out of the
+    // discoverable list, matching BrowseWorkspacesPanel's local filter on a
+    // successful subscribe. Scoped to this row's own aria-labeled button
+    // (not a bare "Subscribe" text/global-emptiness check) since this
+    // stack has no per-test data reset — other PUBLIC workspaces from
+    // earlier runs may still legitimately be listed, and subscribing here
+    // also immediately adds/selects publicWs in the sidebar behind the
+    // still-open modal (ChatShell's onSubscribed), so its name alone
+    // staying in the DOM doesn't mean this row didn't disappear.
+    await expect(subscribeButton).not.toBeVisible({ timeout: 10_000 });
+
+    await page.click('button[aria-label="Close browse workspaces"]');
+    // Now shows up in the sidebar's own Workspaces list, with zero
+    // involvement from the owner/admin.
+    await expect(page.locator(`[role="button"]:has-text("${publicWs.name}")`)).toBeVisible({ timeout: 10_000 });
   });
 });
 

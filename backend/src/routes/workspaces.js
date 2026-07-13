@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, CREATABLE_CHANNEL_TYPES, WORKSPACE_ROLES } from '../validation.js';
+import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, CREATABLE_CHANNEL_TYPES, WORKSPACE_ROLES, WORKSPACE_VISIBILITY } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
 import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateLimit.js';
@@ -27,11 +27,13 @@ workspacesRouter.use(requireAuth);
 workspacesRouter.post('/', async (req, res, next) => {
   try {
     const name = assertName(req.body?.name, 'workspace name');
+    const visibility =
+      req.body?.visibility !== undefined ? assertEnum(req.body.visibility, WORKSPACE_VISIBILITY, 'visibility') : 'PRIVATE';
 
     const workspace = await db.transaction(async (trx) => {
       const [ws] = await trx('workspaces')
-        .insert({ name, owner_id: req.user.id })
-        .returning(['id', 'name', 'owner_id', 'created_at']);
+        .insert({ name, owner_id: req.user.id, visibility })
+        .returning(['id', 'name', 'owner_id', 'visibility', 'created_at']);
       await trx('workspace_members').insert({
         workspace_id: ws.id,
         user_id: req.user.id,
@@ -47,7 +49,13 @@ workspacesRouter.post('/', async (req, res, next) => {
       targetResource: workspace.id,
     });
 
-    res.status(201).json({ id: workspace.id, name: workspace.name, ownerId: workspace.owner_id, role: 'ADMIN' });
+    res.status(201).json({
+      id: workspace.id,
+      name: workspace.name,
+      ownerId: workspace.owner_id,
+      visibility: workspace.visibility,
+      role: 'ADMIN',
+    });
   } catch (err) {
     next(err);
   }
@@ -65,6 +73,79 @@ workspacesRouter.get('/', async (req, res, next) => {
     res.json(
       rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id, role: r.system_role, archivedAt: r.archived_at })),
     );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Self-service workspace subscription (FEATURE_REQUEST.md): PUBLIC,
+// non-archived workspaces the caller isn't already a member of. Excludes
+// archived PUBLIC workspaces too, not just at subscribe-time — otherwise
+// this list could show a workspace whose own "Subscribe" button 409s
+// immediately, a dead-end result "discoverable" shouldn't produce. No
+// `role` in the response shape (unlike GET / above) since the caller has
+// none yet.
+workspacesRouter.get('/discoverable', async (req, res, next) => {
+  try {
+    const rows = await db('workspaces as w')
+      .where('w.visibility', 'PUBLIC')
+      .whereNull('w.archived_at')
+      .whereNotExists(function excludeExistingMembers() {
+        this.select(1)
+          .from('workspace_members as wm')
+          .whereRaw('wm.workspace_id = w.id')
+          .andWhere('wm.user_id', req.user.id);
+      })
+      .select('w.id', 'w.name', 'w.owner_id')
+      .orderBy('w.created_at', 'asc');
+
+    res.json(rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Self-service join, authorized only by visibility = 'PUBLIC' — mirrors
+// channels/:id/join's "only public channels can be self-joined" pattern,
+// one level up. Unlike that endpoint, the caller isn't a workspace member
+// yet at all, so full existence-hiding applies: a PRIVATE workspace and a
+// made-up UUID must be indistinguishable (404, not 400/403) per Section 3's
+// Authorization Model. Idempotent-safe like the archive endpoint: calling
+// this again after already subscribed is a no-op, not a duplicate row or a
+// second audit event.
+workspacesRouter.post('/:workspaceId/subscribe', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+
+    const workspace = await db('workspaces').where({ id: workspaceId }).first();
+    if (!workspace || workspace.visibility !== 'PUBLIC') {
+      throw new NotFoundError('Workspace not found');
+    }
+    // Existence is already established at this point (a real PUBLIC
+    // workspace), so an archived one is a 409 here, not a 404 — the same
+    // "resource exists but is unavailable in its current state" convention
+    // requireWorkspaceNotArchived already applies elsewhere.
+    await requireWorkspaceNotArchived(db, workspaceId);
+
+    const existingRole = await getWorkspaceRole(db, req.user.id, workspaceId);
+    if (!existingRole) {
+      await db('workspace_members').insert({ workspace_id: workspaceId, user_id: req.user.id, system_role: 'MEMBER' });
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'WORKSPACE_MEMBERSHIP_CHANGE',
+        targetResource: workspaceId,
+        payload: { action: 'subscribe' },
+      });
+    }
+
+    res.status(200).json({
+      id: workspace.id,
+      name: workspace.name,
+      ownerId: workspace.owner_id,
+      role: existingRole ?? 'MEMBER',
+      archivedAt: workspace.archived_at,
+    });
   } catch (err) {
     next(err);
   }

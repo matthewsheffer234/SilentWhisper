@@ -12,6 +12,10 @@ export const CHANNEL_TYPES = ['PUBLIC', 'PRIVATE', 'DIRECT', 'GROUP_DM'];
 export const CREATABLE_CHANNEL_TYPES = ['PUBLIC', 'PRIVATE'];
 export const WORKSPACE_ROLES = ['ADMIN', 'MEMBER'];
 
+// Self-service workspace subscription (FEATURE_REQUEST.md) — same values
+// and spirit as CHANNEL_TYPES' PUBLIC/PRIVATE distinction, one level up.
+export const WORKSPACE_VISIBILITY = ['PUBLIC', 'PRIVATE'];
+
 // Matches messages.content being TEXT (unbounded in Postgres) but bounded
 // at the application layer per Section 3 — also bounds audit payload size
 // and LLM prompt size once Phase 4 lands.

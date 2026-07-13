@@ -9,6 +9,7 @@ import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
 import ChangePasswordPanel from './ChangePasswordPanel.jsx';
 import UserManagementPanel from './UserManagementPanel.jsx';
+import BrowseWorkspacesPanel from './BrowseWorkspacesPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -59,6 +60,7 @@ export default function ChatShell() {
   const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
+  const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
 
   const socketRef = useRef(null);
@@ -198,8 +200,13 @@ export default function ChatShell() {
     [messagesByChannel, joinedChannels],
   );
 
-  async function handleCreateWorkspace(name) {
-    const ws = await workspacesApi.createWorkspace(name);
+  async function handleCreateWorkspace(name, visibility) {
+    const ws = await workspacesApi.createWorkspace(name, visibility);
+    setWorkspaces((prev) => [...prev, ws]);
+    setSelectedWorkspaceId(ws.id);
+  }
+
+  function handleSubscribed(ws) {
     setWorkspaces((prev) => [...prev, ws]);
     setSelectedWorkspaceId(ws.id);
   }
@@ -332,6 +339,7 @@ export default function ChatShell() {
         onOpenUserManagement={() => setUserManagementOpen(true)}
         onArchiveWorkspace={handleArchiveWorkspace}
         onUnarchiveWorkspace={handleUnarchiveWorkspace}
+        onOpenBrowseWorkspaces={() => setBrowseWorkspacesOpen(true)}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -370,6 +378,9 @@ export default function ChatShell() {
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
       {userManagementOpen && <UserManagementPanel workspaces={workspaces} onClose={() => setUserManagementOpen(false)} />}
+      {browseWorkspacesOpen && (
+        <BrowseWorkspacesPanel onClose={() => setBrowseWorkspacesOpen(false)} onSubscribed={handleSubscribed} />
+      )}
       {mentionToasts.length > 0 && (
         <div style={styles.mentionToastContainer} role="status" aria-live="polite">
           {mentionToasts.map((t) => (

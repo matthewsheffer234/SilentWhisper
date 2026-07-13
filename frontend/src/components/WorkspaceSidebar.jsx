@@ -155,6 +155,16 @@ const styles = {
     flexShrink: 0,
   },
   archivedBadge: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginLeft: 4 },
+  addButtonRow: { display: 'flex', gap: 6, marginTop: 6 },
+  visibilityToggleLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-3)',
+    whiteSpace: 'nowrap',
+    cursor: 'pointer',
+  },
   // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — visually
   // compact text links, but the invisible hit area is full-size.
   aiSettingsButton: {
@@ -205,16 +215,22 @@ function activateOnKey(handler) {
   };
 }
 
-function InlineCreateForm({ placeholder, onSubmit, extra }) {
+// `showVisibilityToggle` (self-service workspace subscription,
+// FEATURE_REQUEST.md) is opt-in so the channel-creation instance of this
+// same form is unaffected — it calls `onSubmit(name)` with no second
+// argument either way, same as before this feature existed.
+function InlineCreateForm({ placeholder, onSubmit, extra, showVisibilityToggle }) {
   const [value, setValue] = useState('');
+  const [isPublic, setIsPublic] = useState(false);
   return (
     <form
       style={styles.inlineForm}
       onSubmit={(e) => {
         e.preventDefault();
         if (!value.trim()) return;
-        onSubmit(value.trim());
+        onSubmit(value.trim(), showVisibilityToggle ? (isPublic ? 'PUBLIC' : 'PRIVATE') : undefined);
         setValue('');
+        setIsPublic(false);
       }}
     >
       <input
@@ -223,6 +239,12 @@ function InlineCreateForm({ placeholder, onSubmit, extra }) {
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />
+      {showVisibilityToggle && (
+        <label style={styles.visibilityToggleLabel}>
+          <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
+          Public
+        </label>
+      )}
       {extra}
     </form>
   );
@@ -299,6 +321,7 @@ export default function WorkspaceSidebar({
   onOpenUserManagement,
   onArchiveWorkspace,
   onUnarchiveWorkspace,
+  onOpenBrowseWorkspaces,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
@@ -451,15 +474,29 @@ export default function WorkspaceSidebar({
         {showNewWorkspace ? (
           <InlineCreateForm
             placeholder="Workspace name"
-            onSubmit={(name) => {
-              onCreateWorkspace(name);
+            showVisibilityToggle
+            onSubmit={(name, visibility) => {
+              onCreateWorkspace(name, visibility);
               setShowNewWorkspace(false);
             }}
           />
         ) : (
-          <button type="button" style={styles.addButton} onClick={() => setShowNewWorkspace(true)}>
-            + New workspace
-          </button>
+          <div style={styles.addButtonRow}>
+            <button
+              type="button"
+              style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
+              onClick={() => setShowNewWorkspace(true)}
+            >
+              + New workspace
+            </button>
+            <button
+              type="button"
+              style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
+              onClick={onOpenBrowseWorkspaces}
+            >
+              Browse workspaces
+            </button>
+          </div>
         )}
 
         {selectedWorkspaceId && (
