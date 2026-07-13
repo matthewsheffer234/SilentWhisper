@@ -362,6 +362,7 @@ export default function ChatShell() {
         rootMessage={threadRoot}
         replies={threadReplies}
         presence={presence}
+        currentUser={user}
         onSendReply={handleSendReply}
         onClose={() => setThreadRoot(null)}
       />

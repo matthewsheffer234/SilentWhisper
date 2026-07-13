@@ -2,13 +2,14 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
-import { assertUuid, parsePagination } from '../validation.js';
+import { assertUuid, assertBoundedInt, parsePagination, MAX_USERNAME_LENGTH } from '../validation.js';
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import { broadcastToRoom, sendToUser } from '../ws/connectionRegistry.js';
 import { isMessageRateLimited } from '../ws/rateLimiter.js';
-import { RateLimitedError } from '../errors.js';
+import { memberSearchLimiter } from '../auth/rateLimit.js';
+import { RateLimitedError, ValidationError } from '../errors.js';
 
 export const messagesRouter = Router();
 
@@ -64,6 +65,59 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
         createdAt: r.created_at,
       })),
     );
+  } catch (err) {
+    next(err);
+  }
+});
+
+const MEMBER_SEARCH_DEFAULT_LIMIT = 8;
+const MEMBER_SEARCH_MAX_LIMIT = 8;
+
+// FEATURE_REQUEST.md's @mention autocomplete entry. No "who is in this
+// channel" read endpoint existed anywhere before this — every prior
+// channel_members/workspace_members touch point was a POST (invite, join,
+// add-to-channel) or an internal-only membership check. Same existence-
+// hiding gate as message history: a non-member or nonexistent channel 404s,
+// per Section 3's "must never be joinable, listable, or readable by
+// non-members, including via search."
+messagesRouter.get('/channels/:channelId/members', memberSearchLimiter, async (req, res, next) => {
+  try {
+    const channelId = assertUuid(req.params.channelId, 'channelId');
+    await requireChannelMember(db, req.user.id, channelId);
+
+    const limit =
+      req.query.limit !== undefined
+        ? assertBoundedInt(req.query.limit, { min: 1, max: MEMBER_SEARCH_MAX_LIMIT }, 'limit')
+        : MEMBER_SEARCH_DEFAULT_LIMIT;
+
+    // `q` is optional — empty/omitted returns the first page of members
+    // alphabetically, the expected combobox behavior right after typing a
+    // bare `@`. Bounded to MAX_USERNAME_LENGTH if present, but not required
+    // to match the full USERNAME_RE pattern — a partial prefix mid-word
+    // (e.g. "ma") is a valid, expected query, not a malformed username.
+    let q = '';
+    if (req.query.q !== undefined) {
+      q = String(req.query.q);
+      if (q.length > MAX_USERNAME_LENGTH) {
+        throw new ValidationError(`q must be at most ${MAX_USERNAME_LENGTH} characters`);
+      }
+    }
+
+    let query = db('channel_members')
+      .join('users', 'users.id', 'channel_members.user_id')
+      .where('channel_members.channel_id', channelId)
+      // Self-mentions never notify (mentionService.js's excludeUserId does
+      // the same at send time) — suggesting yourself would just waste a
+      // dropdown row; typing your own username by hand still works
+      // identically, it's just never suggested.
+      .whereNot('users.id', req.user.id);
+    if (q) {
+      query = query.andWhere('users.username', 'ilike', `${q}%`);
+    }
+
+    const rows = await query.orderBy('users.username', 'asc').limit(limit).select('users.id', 'users.username');
+
+    res.json(rows);
   } catch (err) {
     next(err);
   }

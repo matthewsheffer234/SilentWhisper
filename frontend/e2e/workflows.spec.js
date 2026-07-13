@@ -62,8 +62,8 @@ async function seedPlainUser(label) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, email: `${username}@example.com`, password: 'correct-horse-battery' }),
   });
-  const { user } = await res.json();
-  return { username, password: 'correct-horse-battery', userId: user.id };
+  const { accessToken, user } = await res.json();
+  return { username, password: 'correct-horse-battery', userId: user.id, accessToken };
 }
 
 async function sendMessage(accessToken, channelId, content) {
@@ -82,6 +82,22 @@ async function inviteToWorkspace(accessToken, workspaceId, username) {
     body: JSON.stringify({ username }),
   });
   return res.json();
+}
+
+// Self-service join for a PUBLIC channel, over the API — used so a second
+// user can appear in the same channel as the page's own logged-in session
+// without needing a second browser context just to click "Join".
+async function joinChannelApi(accessToken, workspaceId, channelId) {
+  const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/channels/${channelId}/join`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const contentType = res.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await res.json() : null;
+  if (!res.ok) {
+    throw new Error(`joinChannelApi failed: ${res.status} ${JSON.stringify(body)}`);
+  }
+  return body;
 }
 
 // Replaces window.Notification entirely rather than relying on the real OS
@@ -223,6 +239,136 @@ test.describe('markdown formatting', () => {
     const strong = page.locator('strong', { hasText: `@${seeded.username}` });
     await expect(strong).toBeVisible({ timeout: 10_000 });
     await expect(strong.locator('span', { hasText: `@${seeded.username}` })).toBeVisible();
+  });
+});
+
+test.describe('iMessage-style message bubble layout', () => {
+  test('own messages render right-aligned filled with no author name; others render left-aligned with their username; a mention inside a "mine" bubble stays legible; consecutive same-sender messages group tighter', async ({
+    page,
+  }) => {
+    const me = await seedUserWithChannel('bubbleme');
+    const other = await seedPlainUser('bubbleother');
+    await inviteToWorkspace(me.accessToken, me.workspace.id, other.username);
+    await joinChannelApi(other.accessToken, me.workspace.id, me.channel.id);
+
+    await loginViaUi(page, me.username, me.password);
+    await page.click(`text=${me.workspace.name}`);
+    await page.click('text=general');
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    // Two consecutive messages from "me" (for the grouping check below),
+    // the second containing a mention (for the contrast check below).
+    await page.fill('input[placeholder^="Message #"]', 'first mine message');
+    await page.click('button:has-text("Send")');
+    await expect(page.locator('text=first mine message')).toBeVisible({ timeout: 10_000 });
+    await page.fill('input[placeholder^="Message #"]', `hey @${other.username} second mine message`);
+    await page.click('button:has-text("Send")');
+    await expect(page.locator('text=second mine message')).toBeVisible({ timeout: 10_000 });
+
+    // A message from someone else, sent over the API — avoids needing a
+    // second browser context just to prove the "theirs" rendering path.
+    await sendMessage(other.accessToken, me.channel.id, 'a message from someone else');
+    await expect(page.locator('text=a message from someone else')).toBeVisible({ timeout: 10_000 });
+
+    const mineBubbles = page.locator('.sl-bubble-mine');
+    const theirsBubble = page.locator('.sl-bubble-theirs', { hasText: 'a message from someone else' });
+
+    // Right-aligned: the outer row's justify-content is flex-end for mine,
+    // flex-start for theirs.
+    await expect(mineBubbles.first().locator('..')).toHaveCSS('justify-content', 'flex-end');
+    await expect(theirsBubble.locator('..')).toHaveCSS('justify-content', 'flex-start');
+
+    // No author name inside a "mine" bubble; the sender's username *is*
+    // shown inside "theirs".
+    await expect(mineBubbles.first().getByText(me.username, { exact: true })).toHaveCount(0);
+    await expect(theirsBubble.getByText(other.username, { exact: true })).toBeVisible();
+
+    // Filled vs. plain: the two bubble variants must not share a background
+    // color — a structural check rather than hardcoding either theme's
+    // exact resolved --brg/--surface-alt RGB value.
+    const mineBg = await mineBubbles.first().evaluate((el) => getComputedStyle(el).backgroundColor);
+    const theirsBg = await theirsBubble.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(mineBg).not.toBe(theirsBg);
+
+    // A rendered contrast check, not just "the mention text exists": the
+    // mention span's own color must differ from the filled bubble's
+    // background it sits on top of — this is exactly the green-on-green bug
+    // the design called out, caught here rather than only by eye.
+    const secondMineBubble = page.locator('.sl-bubble-mine', { hasText: 'second mine message' });
+    const mentionSpan = secondMineBubble.locator('span', { hasText: `@${other.username}` });
+    await expect(mentionSpan).toBeVisible();
+    const mentionColor = await mentionSpan.evaluate((el) => getComputedStyle(el).color);
+    const bubbleBg = await secondMineBubble.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(mentionColor).not.toBe(bubbleBg);
+
+    // Consecutive same-sender grouping: the gap between the two "mine"
+    // messages (grouped) must be smaller than the gap before the
+    // different-sender message that follows them (not grouped).
+    const firstMineRow = page.locator('text=first mine message').locator('../..');
+    const secondMineRow = page.locator('text=second mine message').locator('../..');
+    const groupedPaddingBottom = await firstMineRow.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
+    const ungroupedPaddingBottom = await secondMineRow.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
+    expect(groupedPaddingBottom).toBeLessThan(ungroupedPaddingBottom);
+  });
+});
+
+test.describe('@mention autocomplete', () => {
+  test('typing "@" plus a partial username shows matching suggestions; Enter and a mouse click both insert the full mention and close the dropdown; Escape dismisses without altering the draft or submitting; a non-matching partial shows no suggestions', async ({
+    page,
+  }) => {
+    const me = await seedUserWithChannel('mentionacme');
+    const other = await seedPlainUser('mentionacother');
+    await inviteToWorkspace(me.accessToken, me.workspace.id, other.username);
+    await joinChannelApi(other.accessToken, me.workspace.id, me.channel.id);
+
+    await loginViaUi(page, me.username, me.password);
+    await page.click(`text=${me.workspace.name}`);
+    await page.click('text=general');
+    const input = page.locator('input[placeholder^="Message #"]');
+    await input.waitFor({ timeout: 10_000 });
+    const partial = other.username.slice(0, 6);
+    const option = page.locator('[role="option"]', { hasText: other.username });
+    const listbox = page.locator('#mention-suggestions');
+
+    // React's controlled-input value tracker treats setting a field to its
+    // *current* value as a no-op and never fires onChange, so a bare
+    // Locator.fill() of the same string as what's already in the box
+    // (re-triggering the dropdown after Escape, for instance) silently does
+    // nothing. Clearing first avoids that footgun.
+    async function typeInComposer(value) {
+      await input.fill('');
+      await input.fill(value);
+    }
+
+    // A non-matching partial shows no suggestions and never errors — the
+    // dropdown simply stays absent, and the draft keeps whatever was typed.
+    await typeInComposer('@zzzznomatchzzzz');
+    await page.waitForTimeout(500); // let the 200ms debounce + request settle
+    await expect(listbox).toHaveCount(0);
+
+    // Escape dismisses the dropdown without altering the draft or submitting.
+    await typeInComposer(`@${partial}`);
+    await expect(option).toBeVisible({ timeout: 5_000 });
+    await input.press('Escape');
+    await expect(listbox).toHaveCount(0);
+    await expect(input).toHaveValue(`@${partial}`);
+
+    // A mouse click on a suggestion inserts the full "@username " and closes
+    // the dropdown.
+    await typeInComposer(`@${partial}`);
+    await expect(option).toBeVisible({ timeout: 5_000 });
+    await option.click();
+    await expect(input).toHaveValue(`@${other.username} `);
+    await expect(listbox).toHaveCount(0);
+
+    // Enter inserts the full mention, closes the dropdown, and — critically —
+    // must not also submit the message (Enter is also the form's submit key).
+    await typeInComposer(`hey @${partial}`);
+    await expect(option).toBeVisible({ timeout: 5_000 });
+    await input.press('Enter');
+    await expect(input).toHaveValue(`hey @${other.username} `);
+    await expect(listbox).toHaveCount(0);
+    await expect(page.locator(`text=hey @${other.username}`)).toHaveCount(0);
   });
 });
 

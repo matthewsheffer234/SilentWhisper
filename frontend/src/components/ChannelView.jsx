@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import PresenceBadge from './PresenceBadge.jsx';
 import { summarizeChannel } from '../api/ai.js';
+import { searchChannelMembers } from '../api/workspaces.js';
 import { renderMessageContent } from '../markdown.jsx';
+
+// FEATURE_REQUEST.md's @mention autocomplete entry.
+const MENTION_DEBOUNCE_MS = 200;
 
 const styles = {
   wrapper: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--surface)' },
@@ -69,10 +73,36 @@ const styles = {
   summaryError: { color: '#c0392b' },
   feed: { flex: 1, overflowY: 'auto', padding: '16px 20px', position: 'relative' },
   feedInner: { position: 'relative', width: '100%' },
-  messageRow: { display: 'flex', flexDirection: 'column', maxWidth: '70ch', paddingBottom: 10 },
+  // FEATURE_REQUEST.md's iMessage-style bubble layout entry: an outer
+  // alignment container (the virtualizer's own position/measurement target
+  // — unchanged) wrapping an inner bubble, not a single flat div. The outer
+  // row is mostly empty alignment space once split, so `className="sl-row"`
+  // (global.css's `.sl-row:hover{background:var(--item-hover)}`) moves onto
+  // the bubble itself — hovering the empty alignment space shouldn't
+  // highlight anything.
+  messageRowOuter: { display: 'flex', width: '100%' },
+  messageBubble: {
+    display: 'flex',
+    flexDirection: 'column',
+    maxWidth: '60%',
+    borderRadius: 16,
+    padding: '8px 12px',
+    boxSizing: 'border-box',
+  },
+  // Reuses the exact token pair `--item-active-bg`/`--item-active-fg`
+  // already established for the active sidebar row (PROJECT_PLAN.md
+  // Section 7: "do not introduce a second accent color... under different
+  // names") — not a new "filled colored surface" convention invented here.
+  messageBubbleMine: { background: 'var(--brg)', color: 'var(--item-active-fg)' },
+  messageBubbleTheirs: { background: 'var(--surface-alt)', color: 'var(--text-1)' },
   messageMeta: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
+  // Overrides messageMeta's fixed gray — without this, the timestamp/
+  // presence-badge row would stay gray-on-green inside a "mine" bubble,
+  // the same contrast problem markdown.jsx's mention/link fix addresses,
+  // just for this metadata row instead of message content.
+  messageMetaMine: { color: 'var(--item-active-fg)' },
   messageAuthor: { fontWeight: 700, color: 'var(--text-1)' },
-  messageContent: { fontSize: 'var(--text-base)', color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  messageContent: { fontSize: 'var(--text-base)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   pending: { opacity: 0.55 },
   replyButton: {
     alignSelf: 'flex-start',
@@ -84,9 +114,13 @@ const styles = {
     padding: 0,
     marginTop: 2,
   },
+  // Same green-on-green problem as mentions/links/the meta row — "Reply in
+  // thread"'s text color is the bubble's own fill color inside "mine".
+  replyButtonMine: { color: 'var(--item-active-fg)', textDecoration: 'underline' },
   composer: { display: 'flex', gap: 8, padding: '14px 20px', borderTop: '1px solid var(--border)' },
+  composerInputWrap: { position: 'relative', flex: 1 },
   input: {
-    flex: 1,
+    width: '100%',
     minHeight: 44,
     padding: '10px 14px',
     borderRadius: 8,
@@ -95,7 +129,35 @@ const styles = {
     color: 'var(--text-1)',
     boxShadow: 'var(--input-shadow)',
     fontSize: 'var(--text-base)',
+    boxSizing: 'border-box',
   },
+  // Anchored *above* the input (bottom: 100%) rather than below it, same as
+  // every other composer-adjacent popover in a bottom-docked chat input —
+  // opening downward would push it off the viewport.
+  mentionDropdown: {
+    position: 'absolute',
+    bottom: '100%',
+    left: 0,
+    right: 0,
+    marginBottom: 6,
+    maxHeight: 220,
+    overflowY: 'auto',
+    background: 'var(--overlay-bg)',
+    boxShadow: 'var(--overlay-shadow)',
+    border: '1px solid var(--border)',
+    borderRadius: 11,
+    zIndex: 40,
+  },
+  mentionOption: (highlighted) => ({
+    minHeight: 36,
+    display: 'flex',
+    alignItems: 'center',
+    padding: '0 12px',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-1)',
+    cursor: 'pointer',
+    background: highlighted ? 'var(--item-hover)' : 'transparent',
+  }),
   sendButton: {
     minHeight: 44,
     padding: '0 20px',
@@ -113,6 +175,42 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
   const [draft, setDraft] = useState('');
   const feedRef = useRef(null);
   const [summary, setSummary] = useState(null); // { loading, text, error }
+
+  // @mention autocomplete (FEATURE_REQUEST.md). One object rather than
+  // several separate useState calls — start/query/suggestions/highlightIndex
+  // all change together on every keystroke, and splitting them invites a
+  // stale-read race between a debounced fetch's callback and a newer
+  // keystroke.
+  const [mention, setMention] = useState(null); // { start, query, suggestions, highlightIndex } | null
+  const composerInputRef = useRef(null);
+  const mentionDropdownRef = useRef(null);
+  const mentionDebounceRef = useRef(null);
+  const pendingCaretRef = useRef(null);
+
+  // Repositions the caret after a programmatic draft replacement (accepting
+  // a suggestion) — must run in the paint-blocking layout phase, same
+  // pattern this session already used for other caret-after-replace cases,
+  // otherwise the browser's own post-render caret placement wins the race.
+  useLayoutEffect(() => {
+    if (pendingCaretRef.current !== null && composerInputRef.current) {
+      composerInputRef.current.setSelectionRange(pendingCaretRef.current, pendingCaretRef.current);
+      pendingCaretRef.current = null;
+    }
+  });
+
+  useEffect(() => () => clearTimeout(mentionDebounceRef.current), []);
+
+  // Outside-click dismiss, same pattern as SearchBar.jsx/Menu.jsx — a bare
+  // onBlur would fire before a mousedown-driven suggestion click lands.
+  useEffect(() => {
+    if (!mention) return undefined;
+    function handlePointerDown(e) {
+      if (composerInputRef.current?.contains(e.target) || mentionDropdownRef.current?.contains(e.target)) return;
+      setMention(null);
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [mention]);
 
   // Windowed rendering (PROJECT_PLAN.md Section 8, Phase 5: "Add virtual
   // scrolling for long chat histories") — only the rows actually within (or
@@ -171,6 +269,7 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
   // under a different channel's header.
   useEffect(() => {
     setSummary(null);
+    setMention(null);
   }, [channel?.id]);
 
   if (!channel) {
@@ -186,6 +285,86 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
     if (!draft.trim()) return;
     onSend(draft.trim());
     setDraft('');
+  }
+
+  // Scans backward from the caret for an in-progress "@token". Distinct from
+  // markdown.jsx's rendering-side mention regex (which matches a *completed*
+  // mention for display) — this matches a partial word still being typed,
+  // and is anchored to the caret rather than scanning the whole string.
+  function detectMentionTrigger(text, caretPos) {
+    let i = caretPos - 1;
+    while (i >= 0 && /[a-zA-Z0-9_.-]/.test(text[i])) i -= 1;
+    if (i < 0 || text[i] !== '@') return null;
+    if (i > 0 && /\S/.test(text[i - 1])) return null; // must start a word, e.g. not "email@x"
+    return { start: i, query: text.slice(i + 1, caretPos) };
+  }
+
+  function handleComposerChange(e) {
+    const value = e.target.value;
+    const caretPos = e.target.selectionStart;
+    setDraft(value);
+
+    const trigger = detectMentionTrigger(value, caretPos);
+    clearTimeout(mentionDebounceRef.current);
+    if (!trigger) {
+      setMention(null);
+      return;
+    }
+    setMention((prev) => ({
+      start: trigger.start,
+      query: trigger.query,
+      suggestions: prev && prev.start === trigger.start ? prev.suggestions : [],
+      highlightIndex: -1,
+    }));
+    mentionDebounceRef.current = setTimeout(async () => {
+      try {
+        const results = await searchChannelMembers(channel.id, trigger.query);
+        setMention((prev) =>
+          prev && prev.start === trigger.start && prev.query === trigger.query
+            ? { ...prev, suggestions: results, highlightIndex: results.length > 0 ? 0 : -1 }
+            : prev,
+        );
+      } catch {
+        // A failed lookup just means no suggestions right now — must never
+        // block typing or surface an error in the composer.
+        setMention((prev) => (prev && prev.start === trigger.start ? { ...prev, suggestions: [], highlightIndex: -1 } : prev));
+      }
+    }, MENTION_DEBOUNCE_MS);
+  }
+
+  function acceptMentionSuggestion(username) {
+    if (!mention) return;
+    const before = draft.slice(0, mention.start);
+    const after = draft.slice(mention.start + 1 + mention.query.length);
+    const insertion = `@${username} `;
+    pendingCaretRef.current = before.length + insertion.length;
+    setDraft(`${before}${insertion}${after}`);
+    setMention(null);
+  }
+
+  function handleComposerKeyDown(e) {
+    if (mention && mention.suggestions.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMention((prev) => {
+          const delta = e.key === 'ArrowDown' ? 1 : -1;
+          const next = (prev.highlightIndex + delta + prev.suggestions.length) % prev.suggestions.length;
+          return { ...prev, highlightIndex: next };
+        });
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        // preventDefault is what stops Enter from also submitting the form.
+        e.preventDefault();
+        const chosen = mention.suggestions[mention.highlightIndex] ?? mention.suggestions[0];
+        if (chosen) acceptMentionSuggestion(chosen.username);
+        return;
+      }
+    }
+    if (e.key === 'Escape' && mention) {
+      e.preventDefault();
+      setMention(null);
+    }
   }
 
   async function handleSummarize() {
@@ -226,47 +405,106 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
         <div style={{ ...styles.feedInner, height: rowVirtualizer.getTotalSize() }}>
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const m = messages[virtualRow.index];
+            const isMine = m.userId === currentUser.id;
+            // Consecutive-message grouping: tighten the gap *after* this row
+            // when the next message in the (already chronologically ordered)
+            // array shares the same sender, rather than repeating full row
+            // spacing for every message in a run. Metadata (author/
+            // timestamp) still renders on every row regardless — only the
+            // spacing changes, per the design's explicit accessibility note
+            // (hover/first-of-run-only metadata is excluded here on purpose).
+            const nextMessage = messages[virtualRow.index + 1];
+            const isGroupedWithNext = Boolean(nextMessage && nextMessage.userId === m.userId);
             return (
               <div
                 key={m.id}
                 data-index={virtualRow.index}
                 ref={rowVirtualizer.measureElement}
-                className="sl-row"
                 style={{
                   position: 'absolute',
                   top: 0,
                   left: 0,
                   width: '100%',
                   transform: `translateY(${virtualRow.start}px)`,
-                  ...styles.messageRow,
+                  ...styles.messageRowOuter,
+                  justifyContent: isMine ? 'flex-end' : 'flex-start',
+                  paddingBottom: isGroupedWithNext ? 2 : 10,
                   ...(m.pending ? styles.pending : {}),
                 }}
               >
-                <div style={styles.messageMeta}>
-                  <span style={styles.messageAuthor}>{m.username}</span>
-                  <PresenceBadge status={presence[m.userId] ?? 'offline'} />
-                  <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <div
+                  className={`sl-row sl-bubble-${isMine ? 'mine' : 'theirs'}`}
+                  style={{
+                    ...styles.messageBubble,
+                    ...(isMine ? styles.messageBubbleMine : styles.messageBubbleTheirs),
+                  }}
+                >
+                  <div style={{ ...styles.messageMeta, ...(isMine ? styles.messageMetaMine : {}) }}>
+                    {!isMine && <span style={styles.messageAuthor}>{m.username}</span>}
+                    <PresenceBadge status={presence[m.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
+                    <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                  <div style={styles.messageContent}>
+                    {renderMessageContent(m.content, { variant: isMine ? 'mine' : undefined })}
+                  </div>
+                  {!m.parentMessageId && !m.pending && (
+                    <button
+                      type="button"
+                      style={{ ...styles.replyButton, ...(isMine ? styles.replyButtonMine : {}) }}
+                      onClick={() => onOpenThread(m)}
+                    >
+                      Reply in thread
+                    </button>
+                  )}
                 </div>
-                <div style={styles.messageContent}>{renderMessageContent(m.content)}</div>
-                {!m.parentMessageId && !m.pending && (
-                  <button type="button" style={styles.replyButton} onClick={() => onOpenThread(m)}>
-                    Reply in thread
-                  </button>
-                )}
               </div>
             );
           })}
         </div>
       </div>
       <form style={styles.composer} onSubmit={handleSubmit}>
-        <input
-          style={styles.input}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={archived ? 'This workspace is archived — read only' : joined ? `Message #${channel.name}` : 'Joining channel…'}
-          disabled={!joined || archived}
-          maxLength={10000}
-        />
+        <div style={styles.composerInputWrap}>
+          <input
+            ref={composerInputRef}
+            style={styles.input}
+            value={draft}
+            onChange={handleComposerChange}
+            onKeyDown={handleComposerKeyDown}
+            placeholder={archived ? 'This workspace is archived — read only' : joined ? `Message #${channel.name}` : 'Joining channel…'}
+            disabled={!joined || archived}
+            maxLength={10000}
+            role="combobox"
+            aria-expanded={Boolean(mention && mention.suggestions.length > 0)}
+            aria-controls="mention-suggestions"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              mention && mention.highlightIndex >= 0 ? `mention-option-${mention.suggestions[mention.highlightIndex].id}` : undefined
+            }
+          />
+          {mention && mention.suggestions.length > 0 && (
+            <div
+              ref={mentionDropdownRef}
+              id="mention-suggestions"
+              role="listbox"
+              aria-label="Mention suggestions"
+              style={styles.mentionDropdown}
+            >
+              {mention.suggestions.map((s, index) => (
+                <div
+                  key={s.id}
+                  id={`mention-option-${s.id}`}
+                  role="option"
+                  aria-selected={index === mention.highlightIndex}
+                  style={styles.mentionOption(index === mention.highlightIndex)}
+                  onMouseEnter={() => setMention((prev) => (prev ? { ...prev, highlightIndex: index } : prev))}
+                  onClick={() => acceptMentionSuggestion(s.username)}
+                >
+                  @{s.username}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <button type="submit" style={styles.sendButton} disabled={!joined || archived || !draft.trim()}>
           Send
         </button>

@@ -53,9 +53,19 @@ const ITALIC_UNDERSCORE_RE = /(?<!\w)_([^\n_]+?)_(?!\w)/g;
 // know which mentions resolved).
 const MENTION_RE = /@[a-zA-Z0-9_.-]{3,50}/g;
 
+// FEATURE_REQUEST.md's iMessage-style bubble layout entry: a "mine" bubble
+// fills its background with `var(--brg)` — the same color `mention`/`link`
+// use for their *text*, which would be unreadable green-on-green inside
+// one. `--item-active-fg` (`#fff` in both themes) is the same token pair
+// the bubble entry's own "mine" fill already reuses for the active sidebar
+// row, not a new one invented here; a fontWeight/underline treatment
+// substitutes for the color-only differentiation that isn't available
+// against a same-colored background.
 const styles = {
   mention: { color: 'var(--brg)', fontWeight: 700 },
+  mentionOnMine: { color: 'var(--item-active-fg)', fontWeight: 700, textDecoration: 'underline' },
   link: { color: 'var(--brg)', textDecoration: 'underline' },
+  linkOnMine: { color: 'var(--item-active-fg)', textDecoration: 'underline', fontWeight: 700 },
 };
 
 // Not `dangerouslySetInnerHTML`, but a rendered `<a href>` is still a live
@@ -111,7 +121,7 @@ function applyPass(nodes, regex, toNode, nextKey) {
   return result;
 }
 
-function mdLinkToNode([, label, url], nextKey) {
+function mdLinkToNode([, label, url], nextKey, linkStyle) {
   // A well-formed `[label](url)` pointing at an unsafe scheme still renders
   // as its label text (consuming the token so raw `[…](…)` source never
   // leaks through), just not as a clickable anchor — same "silently resolve
@@ -122,22 +132,30 @@ function mdLinkToNode([, label, url], nextKey) {
   // re-parsed."
   if (!isSafeHttpUrl(url)) return label;
   return (
-    <a key={nextKey()} href={url} target="_blank" rel="noopener noreferrer" style={styles.link}>
+    <a key={nextKey()} href={url} target="_blank" rel="noopener noreferrer" style={linkStyle}>
       {label}
     </a>
   );
 }
 
-function autolinkToNode([url], nextKey) {
+function autolinkToNode([url], nextKey, linkStyle) {
   // The regex only ever matches an explicit http(s):// prefix, so this
   // should always be safe — checked anyway for defense in depth rather than
   // trusting the regex alone, same instinct as everywhere else untrusted
   // content meets a rendered href.
   if (!isSafeHttpUrl(url)) return null;
   return (
-    <a key={nextKey()} href={url} target="_blank" rel="noopener noreferrer" style={styles.link}>
+    <a key={nextKey()} href={url} target="_blank" rel="noopener noreferrer" style={linkStyle}>
       {url}
     </a>
+  );
+}
+
+function mentionToNode([text], nextKey, mentionStyle) {
+  return (
+    <span key={nextKey()} style={mentionStyle}>
+      {text}
+    </span>
   );
 }
 
@@ -149,17 +167,17 @@ function autolinkToNode([url], nextKey) {
 // single-item result back to a bare string/node — keeps the common
 // no-mention-inside case (the vast majority of bold/italic text) a plain
 // string child instead of a length-1 array for no reason.
-function processMentionsWithin(text, nextKey) {
-  const result = applyPass([text], MENTION_RE, mentionToNode, nextKey);
+function processMentionsWithin(text, nextKey, mentionStyle) {
+  const result = applyPass([text], MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
   return result.length === 1 ? result[0] : result;
 }
 
-function boldToNode([, content], nextKey) {
-  return <strong key={nextKey()}>{processMentionsWithin(content, nextKey)}</strong>;
+function boldToNode([, content], nextKey, mentionStyle) {
+  return <strong key={nextKey()}>{processMentionsWithin(content, nextKey, mentionStyle)}</strong>;
 }
 
-function italicToNode([, content], nextKey) {
-  return <em key={nextKey()}>{processMentionsWithin(content, nextKey)}</em>;
+function italicToNode([, content], nextKey, mentionStyle) {
+  return <em key={nextKey()}>{processMentionsWithin(content, nextKey, mentionStyle)}</em>;
 }
 
 // The outer (?<!\w)/(?!\w) guard on BOLD_UNDERSCORE_RE/ITALIC_UNDERSCORE_RE
@@ -181,35 +199,34 @@ function italicToNode([, content], nextKey) {
 // to the delimiter that doesn't collide with code-identifier syntax.
 const BARE_IDENTIFIER_RE = /^\w+$/;
 
-function boldUnderscoreToNode(match, nextKey) {
+function boldUnderscoreToNode(match, nextKey, mentionStyle) {
   if (BARE_IDENTIFIER_RE.test(match[1])) return null;
-  return boldToNode(match, nextKey);
+  return boldToNode(match, nextKey, mentionStyle);
 }
 
-function italicUnderscoreToNode(match, nextKey) {
+function italicUnderscoreToNode(match, nextKey, mentionStyle) {
   if (BARE_IDENTIFIER_RE.test(match[1])) return null;
-  return italicToNode(match, nextKey);
+  return italicToNode(match, nextKey, mentionStyle);
 }
 
-function mentionToNode([text], nextKey) {
-  return (
-    <span key={nextKey()} style={styles.mention}>
-      {text}
-    </span>
-  );
-}
-
-export function renderMessageContent(content) {
+// `variant: 'mine'` is the one caller-facing option (FEATURE_REQUEST.md's
+// bubble-layout entry) — content rendered inside a "mine" filled bubble
+// needs mention/link styling that stays legible against that same-colored
+// background, everything else (bold/italic wrapping, tokenization order)
+// is identical regardless of variant.
+export function renderMessageContent(content, { variant } = {}) {
   let keyCounter = 0;
   const nextKey = () => keyCounter++;
+  const mentionStyle = variant === 'mine' ? styles.mentionOnMine : styles.mention;
+  const linkStyle = variant === 'mine' ? styles.linkOnMine : styles.link;
 
   let nodes = [content];
-  nodes = applyPass(nodes, MD_LINK_RE, mdLinkToNode, nextKey);
-  nodes = applyPass(nodes, AUTOLINK_RE, autolinkToNode, nextKey);
-  nodes = applyPass(nodes, BOLD_STAR_RE, boldToNode, nextKey);
-  nodes = applyPass(nodes, BOLD_UNDERSCORE_RE, boldUnderscoreToNode, nextKey);
-  nodes = applyPass(nodes, ITALIC_STAR_RE, italicToNode, nextKey);
-  nodes = applyPass(nodes, ITALIC_UNDERSCORE_RE, italicUnderscoreToNode, nextKey);
-  nodes = applyPass(nodes, MENTION_RE, mentionToNode, nextKey);
+  nodes = applyPass(nodes, MD_LINK_RE, (m, nk) => mdLinkToNode(m, nk, linkStyle), nextKey);
+  nodes = applyPass(nodes, AUTOLINK_RE, (m, nk) => autolinkToNode(m, nk, linkStyle), nextKey);
+  nodes = applyPass(nodes, BOLD_STAR_RE, (m, nk) => boldToNode(m, nk, mentionStyle), nextKey);
+  nodes = applyPass(nodes, BOLD_UNDERSCORE_RE, (m, nk) => boldUnderscoreToNode(m, nk, mentionStyle), nextKey);
+  nodes = applyPass(nodes, ITALIC_STAR_RE, (m, nk) => italicToNode(m, nk, mentionStyle), nextKey);
+  nodes = applyPass(nodes, ITALIC_UNDERSCORE_RE, (m, nk) => italicUnderscoreToNode(m, nk, mentionStyle), nextKey);
+  nodes = applyPass(nodes, MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
   return nodes;
 }

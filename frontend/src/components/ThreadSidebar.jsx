@@ -74,12 +74,20 @@ const styles = {
     fontSize: 'var(--text-md)',
   },
   root: { padding: '12px 16px', borderBottom: '1px solid var(--border)' },
-  rootAuthor: { fontWeight: 700, fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
-  rootContent: { fontSize: 'var(--text-sm)', color: 'var(--text-2)', marginTop: 4, whiteSpace: 'pre-wrap' },
+  // FEATURE_REQUEST.md's iMessage-style bubble layout entry: "extending the
+  // same bubble treatment [to ThreadSidebar] is a natural, in-scope part of
+  // 'the messaging window'" — same alignment/color/contrast rules as
+  // ChannelView.jsx's message rows, not a separate visual language for
+  // thread replies.
+  rowOuter: { display: 'flex', width: '100%' },
+  bubble: { display: 'flex', flexDirection: 'column', maxWidth: '80%', borderRadius: 14, padding: '7px 10px', boxSizing: 'border-box' },
+  bubbleMine: { background: 'var(--brg)', color: 'var(--item-active-fg)' },
+  bubbleTheirs: { background: 'var(--surface)', color: 'var(--text-1)' },
+  bubbleMeta: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
+  bubbleMetaMine: { color: 'var(--item-active-fg)' },
+  bubbleAuthor: { fontWeight: 700, fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
+  bubbleContent: { fontSize: 'var(--text-sm)', marginTop: 2, whiteSpace: 'pre-wrap' },
   replies: { flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 },
-  reply: { fontSize: 'var(--text-sm)' },
-  replyMeta: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
-  replyAuthor: { fontWeight: 700, color: 'var(--text-1)' },
   composer: { display: 'flex', gap: 6, padding: '12px 16px', borderTop: '1px solid var(--border)' },
   input: {
     flex: 1,
@@ -103,7 +111,7 @@ const styles = {
   },
 };
 
-export default function ThreadSidebar({ rootMessage, replies, presence, onSendReply, onClose }) {
+export default function ThreadSidebar({ rootMessage, replies, presence, currentUser, onSendReply, onClose }) {
   const [draft, setDraft] = useState('');
   const [tasks, setTasks] = useState(null); // { loading, text, error }
 
@@ -157,20 +165,39 @@ export default function ThreadSidebar({ rootMessage, replies, presence, onSendRe
         </div>
       )}
       <div style={styles.root}>
-        <div style={styles.rootAuthor}>{rootMessage.username}</div>
-        <div style={styles.rootContent}>{renderMessageContent(rootMessage.content)}</div>
+        {(() => {
+          const isMine = rootMessage.userId === currentUser.id;
+          return (
+            <div style={{ ...styles.rowOuter, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
+              <div className="sl-row" style={{ ...styles.bubble, ...(isMine ? styles.bubbleMine : styles.bubbleTheirs) }}>
+                <div style={{ ...styles.bubbleMeta, ...(isMine ? styles.bubbleMetaMine : {}) }}>
+                  {!isMine && <span style={styles.bubbleAuthor}>{rootMessage.username}</span>}
+                  <PresenceBadge status={presence[rootMessage.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
+                </div>
+                <div style={styles.bubbleContent}>
+                  {renderMessageContent(rootMessage.content, { variant: isMine ? 'mine' : undefined })}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
       <div style={styles.replies}>
         {replies.length === 0 && <div style={{ color: 'var(--text-3)', fontSize: 'var(--text-sm)' }}>No replies yet.</div>}
-        {replies.map((r) => (
-          <div key={r.id} style={styles.reply}>
-            <div style={styles.replyMeta}>
-              <span style={styles.replyAuthor}>{r.username}</span>
-              <PresenceBadge status={presence[r.userId] ?? 'offline'} />
+        {replies.map((r) => {
+          const isMine = r.userId === currentUser.id;
+          return (
+            <div key={r.id} style={{ ...styles.rowOuter, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
+              <div className="sl-row" style={{ ...styles.bubble, ...(isMine ? styles.bubbleMine : styles.bubbleTheirs) }}>
+                <div style={{ ...styles.bubbleMeta, ...(isMine ? styles.bubbleMetaMine : {}) }}>
+                  {!isMine && <span style={styles.bubbleAuthor}>{r.username}</span>}
+                  <PresenceBadge status={presence[r.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
+                </div>
+                <div style={styles.bubbleContent}>{renderMessageContent(r.content, { variant: isMine ? 'mine' : undefined })}</div>
+              </div>
             </div>
-            <div>{renderMessageContent(r.content)}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <form style={styles.composer} onSubmit={handleSubmit}>
         <input

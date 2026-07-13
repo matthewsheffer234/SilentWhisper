@@ -7,7 +7,7 @@ export async function signup(app, username) {
   if (res.status !== 201) {
     throw new Error(`signup failed for ${username}: ${res.status} ${JSON.stringify(res.body)}`);
   }
-  return { userId: res.body.user.id, accessToken: res.body.accessToken };
+  return { userId: res.body.user.id, username, accessToken: res.body.accessToken };
 }
 
 export function authHeader(accessToken) {

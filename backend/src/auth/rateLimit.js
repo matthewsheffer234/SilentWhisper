@@ -90,3 +90,23 @@ export const adminPasswordResetLimiter = rateLimit({
   keyGenerator: (req) => `admin-password-reset:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// FEATURE_REQUEST.md's @mention autocomplete entry: the first endpoint in
+// this app designed to be hit on every keystroke rather than once per user
+// action — per-user (not per-IP, like llm/aiRateLimit.js's
+// aiProxyRateLimiter), since a channel-membership prefix search is cheap
+// but the request volume is qualitatively different from every other
+// limiter in this file. A much higher ceiling than aiProxyRateLimiter's
+// 10-per-5-minutes reflects that cost difference — paired with client-side
+// debouncing (ChannelView.jsx) so this ceiling is a backstop against a
+// buggy/malicious client, not something normal typing speed would ever
+// brush against.
+export const memberSearchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `member-search:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

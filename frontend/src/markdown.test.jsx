@@ -131,3 +131,28 @@ describe('composes with mentions', () => {
     expect(spans[0].props.children).toBe('@alice');
   });
 });
+
+describe('variant: "mine" (iMessage-style bubble layout entry)', () => {
+  test('a mention inside a "mine" bubble uses the on-mine contrast style, not the default one', () => {
+    const defaultNodes = renderMessageContent('hey @alice');
+    const [defaultSpan] = elementsOfType(defaultNodes, 'span');
+    const mineNodes = renderMessageContent('hey @alice', { variant: 'mine' });
+    const [mineSpan] = elementsOfType(mineNodes, 'span');
+
+    expect(defaultSpan.props.style.color).toBe('var(--brg)');
+    expect(mineSpan.props.style.color).toBe('var(--item-active-fg)');
+    // Color-only differentiation isn't available against a same-colored
+    // bubble background — the on-mine variant needs a second visual cue.
+    expect(mineSpan.props.style.textDecoration).toBe('underline');
+  });
+
+  test('a link inside a "mine" bubble uses the on-mine contrast style, not the default one', () => {
+    const defaultNodes = renderMessageContent('see [docs](https://example.com)');
+    const [defaultLink] = elementsOfType(defaultNodes, 'a');
+    const mineNodes = renderMessageContent('see [docs](https://example.com)', { variant: 'mine' });
+    const [mineLink] = elementsOfType(mineNodes, 'a');
+
+    expect(defaultLink.props.style.color).toBe('var(--brg)');
+    expect(mineLink.props.style.color).toBe('var(--item-active-fg)');
+  });
+});

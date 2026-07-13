@@ -33,3 +33,11 @@ export const listMessages = (channelId, { limit, before, parentMessageId } = {})
   const qs = params.toString();
   return apiFetch(`/channels/${channelId}/messages${qs ? `?${qs}` : ''}`);
 };
+
+// FEATURE_REQUEST.md's @mention autocomplete entry.
+export const searchChannelMembers = (channelId, query) => {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  const qs = params.toString();
+  return apiFetch(`/channels/${channelId}/members${qs ? `?${qs}` : ''}`);
+};
