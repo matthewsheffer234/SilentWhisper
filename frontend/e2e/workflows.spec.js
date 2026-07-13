@@ -991,3 +991,32 @@ test.describe('virtual scrolling', () => {
     expect(renderedRowCount).toBeLessThan(TOTAL_MESSAGES);
   });
 });
+
+test.describe('theme toggle (System / Light / Dark)', () => {
+  test('selecting Dark applies data-theme and persists across reload; System removes it again', async ({ page }) => {
+    const seeded = await seedUserWithChannel('theme');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    // No data-theme attribute at all on first load for a brand-new
+    // account — 'system' is the default, driven entirely by global.css's
+    // prefers-color-scheme media query, not an explicit override.
+    expect(await page.evaluate(() => document.documentElement.getAttribute('data-theme'))).toBeNull();
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitemcheckbox"]:has-text("Dark")');
+    expect(await page.evaluate(() => document.documentElement.getAttribute('data-theme'))).toBe('dark');
+    // The menu closes on selection (Menu.jsx's existing activate()
+    // behavior) — reopen it to check the checkmark landed on the right item.
+    await page.click('button[aria-label="User menu"]');
+    await expect(page.locator('[role="menuitemcheckbox"]:has-text("Dark")')).toHaveAttribute('aria-checked', 'true');
+    await page.keyboard.press('Escape');
+
+    await page.reload();
+    await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
+    expect(await page.evaluate(() => document.documentElement.getAttribute('data-theme'))).toBe('dark');
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitemcheckbox"]:has-text("System")');
+    expect(await page.evaluate(() => document.documentElement.getAttribute('data-theme'))).toBeNull();
+  });
+});

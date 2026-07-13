@@ -2,6 +2,7 @@ import { useState } from 'react';
 import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
 
 const styles = {
   sidebar: {
@@ -327,6 +328,7 @@ export default function WorkspaceSidebar({
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [inviteFormWorkspaceId, setInviteFormWorkspaceId] = useState(null);
   const notif = useNotificationPermission();
+  const { theme, setTheme } = useTheme();
 
   // FEATURE_REQUEST.md: workspace archive/unarchive. Split rather than
   // filtered-with-a-toggle — the same pattern channels[].isMember already
@@ -352,6 +354,14 @@ export default function WorkspaceSidebar({
           },
         ]
       : []),
+    // Light/Dark appearance toggle (FEATURE_REQUEST.md). Three explicit
+    // states rather than a two-way cycling toggle (Silent Lattice's own
+    // control), matching how Apple's own Appearance setting is presented —
+    // global.css's prefers-color-scheme layer already makes "System" a
+    // real, meaningfully different option from picking Light/Dark outright.
+    { key: 'theme-light', label: '☀ Light', checked: theme === 'light', separatorBefore: true, onSelect: () => setTheme('light') },
+    { key: 'theme-dark', label: '☾ Dark', checked: theme === 'dark', onSelect: () => setTheme('dark') },
+    { key: 'theme-system', label: '◐ System', checked: theme === 'system', onSelect: () => setTheme('system') },
     { key: 'change-password', label: 'Change Password', onSelect: onOpenChangePassword },
     { key: 'sign-out', label: 'Sign out', separatorBefore: true, onSelect: onLogout },
   ];
