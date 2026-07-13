@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import PresenceBadge from './PresenceBadge.jsx';
+import Menu from './Menu.jsx';
+import SearchBar from './SearchBar.jsx';
 
 const styles = {
   sidebar: {
@@ -11,9 +13,13 @@ const styles = {
     borderRight: '1px solid var(--border)',
     fontFamily: 'var(--font-sans)',
   },
-  // flexWrap so a fourth item (the notification toggle) added alongside
-  // username/presence/sign-out never repeats the fixed-260px overflow bug
-  // adminToolsRow's own comment below already documents finding once.
+  // FEATURE_REQUEST.md's Apple HIG UI/UX overhaul entry: this row used to
+  // hold up to six controls (username, presence, notifications, Search,
+  // Change Password, Sign out) and already needed flexWrap once to paper
+  // over an overflow-clipping bug rather than fix the density that caused
+  // it. Down to three now: username, presence, and a single user-menu
+  // trigger — flexWrap kept as cheap insurance, not because it's expected
+  // to be needed again.
   userRow: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -26,17 +32,23 @@ const styles = {
     fontWeight: 600,
   },
   username: { flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  // A separate row from userRow, not more items crammed into it — a fixed
-  // 260px sidebar has no room for a long username plus three text buttons
-  // on one line without clipping (a real overflow bug an e2e test caught:
-  // "AI Settings" was rendering visually cut off to a single "S"). Wraps
-  // naturally if both admin links are present and space is tight.
+  userMenuTrigger: {
+    minWidth: 44,
+    minHeight: 44,
+    marginLeft: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-3)',
+    cursor: 'pointer',
+    fontSize: 'var(--text-md)',
+  },
   adminToolsRow: {
     display: 'flex',
-    flexWrap: 'wrap',
     padding: '8px 10px',
     borderBottom: '1px solid var(--border)',
-    gap: 4,
   },
   section: { padding: '12px 10px', overflowY: 'auto', flex: 1 },
   sectionTitle: {
@@ -50,7 +62,7 @@ const styles = {
   row: {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
+    gap: 4,
     padding: '8px 8px',
     borderRadius: 8,
     fontSize: 'var(--text-sm)',
@@ -120,6 +132,28 @@ const styles = {
     background: 'none',
     cursor: 'pointer',
   },
+  // FEATURE_REQUEST.md's HIG overhaul entry: replaces the "Archive" pill
+  // that used to sit permanently next to every eligible workspace's name —
+  // Invite and Archive (previously scattered in two unrelated parts of the
+  // sidebar for the same object) now live together behind this one trigger.
+  // Sized like archivePill/joinPill, not a full 44px control — the row
+  // itself is already a 44px-tall tap target, the same precedent those two
+  // pills already established.
+  overflowTrigger: {
+    minWidth: 28,
+    minHeight: 28,
+    padding: '0 4px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: 'none',
+    background: 'none',
+    color: 'var(--text-3)',
+    cursor: 'pointer',
+    fontSize: 'var(--text-md)',
+    borderRadius: 6,
+    flexShrink: 0,
+  },
   archivedBadge: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginLeft: 4 },
   // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — visually
   // compact text links, but the invisible hit area is full-size.
@@ -135,69 +169,26 @@ const styles = {
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
-  logout: {
-    minHeight: 44,
-    marginLeft: 'auto',
-    padding: '0 8px',
-    display: 'flex',
-    alignItems: 'center',
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-3)',
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  },
-  notificationButton: {
-    minHeight: 44,
-    padding: '0 8px',
-    display: 'flex',
-    alignItems: 'center',
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-3)',
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  },
-  notificationButtonDisabled: { cursor: 'default', opacity: 0.6 },
 };
 
-// A small, explicit, click-to-opt-in control — browsers increasingly
-// suppress or penalize Notification.requestPermission() calls that aren't
-// triggered by a direct user gesture, so this is never called automatically
-// on mount. Once the browser has answered ('granted'/'denied'), the
-// permission can't be re-prompted from script — the button just reflects
-// that status rather than pretending to still be actionable.
-function NotificationPermissionButton() {
+// A small, explicit, click-to-opt-in permission source — browsers
+// increasingly suppress or penalize Notification.requestPermission() calls
+// that aren't triggered by a direct user gesture, so this is never called
+// automatically on mount. Once the browser has answered
+// ('granted'/'denied'), the permission can't be re-prompted from script.
+// Previously its own standalone button in userRow; now feeds a single item
+// into the user Menu instead (FEATURE_REQUEST.md's HIG overhaul entry).
+function useNotificationPermission() {
   const supported = typeof window !== 'undefined' && 'Notification' in window;
   const [permission, setPermission] = useState(supported ? window.Notification.permission : 'unsupported');
 
-  if (!supported) return null;
-
-  async function handleClick() {
+  async function requestPermission() {
     if (permission !== 'default') return;
     const result = await window.Notification.requestPermission();
     setPermission(result);
   }
 
-  const label =
-    permission === 'granted'
-      ? '🔔 Notifications on'
-      : permission === 'denied'
-        ? '🔕 Notifications blocked'
-        : '🔔 Enable notifications';
-
-  return (
-    <button
-      type="button"
-      style={{ ...styles.notificationButton, ...(permission !== 'default' ? styles.notificationButtonDisabled : {}) }}
-      onClick={handleClick}
-      disabled={permission !== 'default'}
-    >
-      {label}
-    </button>
-  );
+  return { supported, permission, requestPermission };
 }
 
 // PROJECT_PLAN.md Section 8, Phase 5 accessibility pass: workspace/channel
@@ -302,8 +293,7 @@ export default function WorkspaceSidebar({
   canManageAi,
   onOpenAiSettings,
   onOpenAuditLog,
-  onOpenSearch,
-  isSelectedWorkspaceAdmin,
+  onNavigateToSearchResult,
   onInviteMember,
   onOpenChangePassword,
   onOpenUserManagement,
@@ -312,7 +302,8 @@ export default function WorkspaceSidebar({
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
-  const [showInvite, setShowInvite] = useState(false);
+  const [inviteFormWorkspaceId, setInviteFormWorkspaceId] = useState(null);
+  const notif = useNotificationPermission();
 
   // FEATURE_REQUEST.md: workspace archive/unarchive. Split rather than
   // filtered-with-a-toggle — the same pattern channels[].isMember already
@@ -322,57 +313,111 @@ export default function WorkspaceSidebar({
   const selectedWorkspace = workspaces.find((ws) => ws.id === selectedWorkspaceId) ?? null;
   const isSelectedWorkspaceArchived = Boolean(selectedWorkspace?.archivedAt);
 
+  const userMenuItems = [
+    ...(notif.supported
+      ? [
+          {
+            key: 'notifications',
+            label:
+              notif.permission === 'granted'
+                ? '🔔 Notifications on'
+                : notif.permission === 'denied'
+                  ? '🔕 Notifications blocked'
+                  : '🔔 Enable notifications',
+            disabled: notif.permission !== 'default',
+            onSelect: notif.requestPermission,
+          },
+        ]
+      : []),
+    { key: 'change-password', label: 'Change Password', onSelect: onOpenChangePassword },
+    { key: 'sign-out', label: 'Sign out', separatorBefore: true, onSelect: onLogout },
+  ];
+
   return (
     <aside style={styles.sidebar}>
       <div style={styles.userRow}>
         <span style={styles.username}>{user?.username}</span>
         <PresenceBadge status={presence[user?.id] ?? 'online'} />
-        <NotificationPermissionButton />
-        <button type="button" style={styles.aiSettingsButton} onClick={onOpenSearch}>Search</button>
-        <button type="button" style={styles.aiSettingsButton} onClick={onOpenChangePassword}>Change Password</button>
-        <button type="button" style={styles.logout} onClick={onLogout}>Sign out</button>
+        <Menu
+          ariaLabel="User menu"
+          items={userMenuItems}
+          renderTrigger={(triggerProps) => (
+            <button type="button" {...triggerProps} style={styles.userMenuTrigger} aria-label="User menu">
+              ⌄
+            </button>
+          )}
+        />
       </div>
+
+      <SearchBar onNavigate={onNavigateToSearchResult} />
+
       {canManageAi && (
         <div style={styles.adminToolsRow}>
-          <button type="button" style={styles.aiSettingsButton} onClick={onOpenAiSettings}>
-            AI Settings
-          </button>
-          <button type="button" style={styles.aiSettingsButton} onClick={onOpenAuditLog}>
-            Audit Log
-          </button>
-          <button type="button" style={styles.aiSettingsButton} onClick={onOpenUserManagement}>
-            Manage Users
-          </button>
+          <Menu
+            ariaLabel="Admin tools"
+            items={[
+              { key: 'ai-settings', label: 'AI Settings', onSelect: onOpenAiSettings },
+              { key: 'audit-log', label: 'Audit Log', onSelect: onOpenAuditLog },
+              { key: 'manage-users', label: 'Manage Users', onSelect: onOpenUserManagement },
+            ]}
+            renderTrigger={(triggerProps) => (
+              <button type="button" {...triggerProps} style={styles.aiSettingsButton}>
+                ⚙ Admin Tools
+              </button>
+            )}
+          />
         </div>
       )}
 
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Workspaces</div>
-        {activeWorkspaces.map((ws) => (
-          <div
-            key={ws.id}
-            className="sl-row"
-            role="button"
-            tabIndex={0}
-            style={{ ...styles.row, ...(ws.id === selectedWorkspaceId ? styles.rowActive : {}) }}
-            onClick={() => onSelectWorkspace(ws.id)}
-            onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
-          >
-            <span style={{ flex: 1 }}>{ws.name}</span>
-            {(ws.ownerId === user?.id || ws.role === 'ADMIN') && (
-              <button
-                type="button"
-                style={styles.archivePill}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onArchiveWorkspace(ws.id);
-                }}
+        {activeWorkspaces.map((ws) => {
+          const canInvite = ws.role === 'ADMIN';
+          const canArchive = ws.ownerId === user?.id || ws.role === 'ADMIN';
+          const workspaceMenuItems = [
+            ...(canInvite ? [{ key: 'invite', label: 'Invite member…', onSelect: () => setInviteFormWorkspaceId(ws.id) }] : []),
+            ...(canArchive
+              ? [{ key: 'archive', label: 'Archive workspace', separatorBefore: canInvite, onSelect: () => onArchiveWorkspace(ws.id) }]
+              : []),
+          ];
+          return (
+            <div key={ws.id}>
+              <div
+                className="sl-row"
+                role="button"
+                tabIndex={0}
+                style={{ ...styles.row, ...(ws.id === selectedWorkspaceId ? styles.rowActive : {}) }}
+                onClick={() => onSelectWorkspace(ws.id)}
+                onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
               >
-                Archive
-              </button>
-            )}
-          </div>
-        ))}
+                <span style={{ flex: 1 }}>{ws.name}</span>
+                {workspaceMenuItems.length > 0 && (
+                  <Menu
+                    ariaLabel={`${ws.name} options`}
+                    items={workspaceMenuItems}
+                    renderTrigger={({ onClick, ...triggerProps }) => (
+                      <button
+                        type="button"
+                        {...triggerProps}
+                        style={styles.overflowTrigger}
+                        aria-label={`${ws.name} options`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClick();
+                        }}
+                      >
+                        ⋯
+                      </button>
+                    )}
+                  />
+                )}
+              </div>
+              {inviteFormWorkspaceId === ws.id && (
+                <InviteMemberForm onSubmit={(username, role) => onInviteMember(ws.id, username, role)} />
+              )}
+            </div>
+          );
+        })}
         {archivedWorkspaces.length > 0 && (
           <>
             <div style={{ ...styles.sectionTitle, marginTop: 18 }}>Archived</div>
@@ -415,20 +460,6 @@ export default function WorkspaceSidebar({
           <button type="button" style={styles.addButton} onClick={() => setShowNewWorkspace(true)}>
             + New workspace
           </button>
-        )}
-
-        {selectedWorkspaceId && isSelectedWorkspaceAdmin && !isSelectedWorkspaceArchived && (
-          <div style={{ marginTop: 10 }}>
-            {showInvite ? (
-              <InviteMemberForm
-                onSubmit={(username, role) => onInviteMember(selectedWorkspaceId, username, role)}
-              />
-            ) : (
-              <button type="button" style={styles.addButton} onClick={() => setShowInvite(true)}>
-                + Invite member
-              </button>
-            )}
-          </div>
         )}
 
         {selectedWorkspaceId && (

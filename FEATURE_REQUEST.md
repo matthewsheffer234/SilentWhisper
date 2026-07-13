@@ -48,7 +48,7 @@ Design:
 ### 2. Self-service workspace subscription (discover + join)
 
 **Status**: Proposed
-**Utility**: Medium. The just-built invite endpoint (`POST /workspaces/:workspaceId/members`) covers "an admin adds a specific known person," but there's still no way for a user to find and join a workspace on their own — every workspace is effectively invite-only forever, with no equivalent of a `PUBLIC` channel's self-join. Matters more as the number of workspaces/users grows past a handful of admin-curated invites; less urgent than the two entries above at the app's current scale.
+**Utility**: Medium. The just-built invite endpoint (`POST /workspaces/:workspaceId/members`) covers "an admin adds a specific known person," but there's still no way for a user to find and join a workspace on their own — every workspace is effectively invite-only forever, with no equivalent of a `PUBLIC` channel's self-join. Matters more as the number of workspaces/users grows past a handful of admin-curated invites; less urgent than the entries above it at the app's current scale (a wording fixed here from a stale "the two entries above" left over from an earlier reordering — this phrase should describe relative priority, not a literal count that drifts every time the backlog is re-ranked).
 **Origin**: Requested directly. Interpreted as **self-service join for openly-discoverable workspaces**, mirroring how `PUBLIC` channels already work — flagging this interpretation explicitly in case "subscribe" was meant as a notification/digest feature (e.g. "notify me of activity in this workspace without being a full member") instead, which would be a materially different, smaller design (no new membership row, just a `workspace_subscriptions` notification-preferences table) and isn't what's designed below.
 
 Design:
@@ -126,6 +126,12 @@ Design:
   - Frontend/e2e: typing `@` followed by a partial username shows a dropdown of matching channel members; Enter and a mouse click both insert the full `@username ` and close the dropdown; Escape dismisses without altering the draft or submitting the message; a non-matching partial shows no suggestions without erroring.
 
 ## Done
+
+### Apple HIG UI/UX overhaul: progressive-disclosure menus + a dedicated search bar
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Apple HIG UI/UX overhaul: progressive-disclosure menus + a dedicated search bar" (2026-07-13).
+
+New reusable `Menu.jsx` (portal-rendered, `role="menu"`, keyboard-navigable, HIG grouping/ordering rules) collapsed `WorkspaceSidebar`'s flat button clutter into three pull-down-button-style menus: a user menu (notifications/Change Password/Sign out, replacing six always-visible `userRow` controls with one trigger), an "Admin Tools" menu (AI Settings/Audit Log/Manage Users), and a per-workspace "•••" overflow menu consolidating Invite and Archive — previously scattered in two unrelated parts of the sidebar for the same object, now both gated per-row on that workspace's own role/ownership. New `SearchBar.jsx` replaces the "Search" button + full-modal `SemanticSearchPanel.jsx` (deleted) from the entry below with a persistent field docked at the top of the sidebar and an anchored results popover — same backend, debounced (450ms/2-char minimum) with Enter forcing an immediate search, scope narrowing de-emphasized to match Apple's actual documented preference ("favor improving search results over including a scope bar") rather than a permanent segmented control. Two real bugs found by testing: `Menu.jsx` was closing itself on any window scroll (including one an interaction could trigger incidentally), detaching the very item being clicked mid-selection; `SearchBar.jsx`'s Escape handling checked a proxy condition that was false during the debounce-pending window, clearing the query on the first Escape instead of just dismissing the popover. All existing e2e tests whose target UI moved were updated in place (workspace invite, archive/unarchive, change password, admin surfaces, admin user management), plus three new tests for the menus themselves. No backend/authorization/audit changes anywhere. 22 e2e tests passing, backend suite unaffected (196/197, pre-existing unrelated flake).
 
 ### Semantic message & channel search via pgvector
 

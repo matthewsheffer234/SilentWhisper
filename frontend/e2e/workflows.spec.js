@@ -214,7 +214,11 @@ test.describe('admin surfaces', () => {
     const seeded = await seedUserWithChannel('aiadmin');
     await loginViaUi(page, seeded.username, seeded.password);
 
-    await page.click('button:has-text("AI Settings")');
+    // FEATURE_REQUEST.md's Apple HIG overhaul entry: AI Settings/Audit
+    // Log/Manage Users now live behind a single "Admin Tools" pull-down
+    // button rather than three standalone always-visible buttons.
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("AI Settings")');
     await page.waitForSelector('text=AI Settings', { timeout: 10_000 });
     await page.waitForSelector('text=/Provider (reachable|unreachable)/', { timeout: 15_000 });
 
@@ -223,9 +227,9 @@ test.describe('admin surfaces', () => {
     await expect(page.locator('text=Saved')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="Close AI settings"]');
-    // Not `text=AI Settings` — that also matches the sidebar's own "AI
-    // Settings" button, which is always present regardless of modal state.
-    // The modal's subtitle text is unique to it.
+    // The modal's subtitle text is unique to it — unlike before, "AI
+    // Settings" is no longer a permanently-present sidebar button that a
+    // bare `text=AI Settings` locator could ambiguously match.
     await expect(page.locator('text=Configure the local LLM provider')).not.toBeVisible();
   });
 
@@ -233,7 +237,8 @@ test.describe('admin surfaces', () => {
     const seeded = await seedUserWithChannel('auditadmin');
     await loginViaUi(page, seeded.username, seeded.password);
 
-    await page.click('button:has-text("Audit Log")');
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("Audit Log")');
     await page.waitForSelector('text=Audit Log', { timeout: 10_000 });
     // The signup + workspace + channel creation above already produced
     // AUTH_SIGNUP/WORKSPACE_CREATED/CHANNEL_CREATED rows.
@@ -256,19 +261,25 @@ test.describe('workspace invite', () => {
     await loginViaUi(page, admin.username, admin.password);
     await page.click(`text=${admin.workspace.name}`);
 
-    await page.click('button:has-text("+ Invite member")');
+    // FEATURE_REQUEST.md's Apple HIG overhaul entry: Invite now lives behind
+    // the workspace row's own "•••" overflow menu (a pull-down button, in
+    // Apple's terms) rather than a standalone always-visible button.
+    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
+    await page.click('text=Invite member…');
     await page.fill('input[placeholder="Username to invite"]', invitee.username);
     await page.click('button:has-text("Add")');
     await expect(page.locator(`text=Added ${invitee.username} to the workspace`)).toBeVisible({ timeout: 10_000 });
 
     // The sidebar's own admin-only invite control must not be visible to a
     // plain member — verified by actually logging in as the invitee, not
-    // just asserting on the admin's own screen.
-    await page.click('button:has-text("Sign out")');
+    // just asserting on the admin's own screen. A plain member gets no
+    // overflow trigger at all on a workspace they can't administer (the
+    // component never renders the Menu when workspaceMenuItems is empty).
+    await page.click('button[aria-label="User menu"]');
+    await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
     await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
-    await page.click(`text=${admin.workspace.name}`);
-    await expect(page.locator('button:has-text("+ Invite member")')).not.toBeVisible();
+    await expect(page.locator(`button[aria-label="${admin.workspace.name} options"]`)).not.toBeVisible();
   });
 
   test('inviting an unknown username shows an inline error, not a silent failure', async ({ page }) => {
@@ -276,7 +287,8 @@ test.describe('workspace invite', () => {
     await loginViaUi(page, admin.username, admin.password);
     await page.click(`text=${admin.workspace.name}`);
 
-    await page.click('button:has-text("+ Invite member")');
+    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
+    await page.click('text=Invite member…');
     await page.fill('input[placeholder="Username to invite"]', 'no-such-user-anywhere');
     await page.click('button:has-text("Add")');
     await expect(page.locator('text=No user with that username exists')).toBeVisible({ timeout: 10_000 });
@@ -344,17 +356,21 @@ test.describe('accessibility', () => {
     // Real Tab navigation, not a programmatic .focus() call — Chromium's
     // :focus-visible heuristic (which the app's own focus ring CSS relies
     // on) doesn't reliably match a purely scripted focus() the way it
-    // matches actual keyboard-driven focus.
-    const signOutButton = page.locator('button:has-text("Sign out")');
+    // matches actual keyboard-driven focus. Targets the user-menu trigger
+    // rather than "Sign out" (FEATURE_REQUEST.md's Apple HIG overhaul entry
+    // moved Sign out behind that menu, so it's no longer a permanently
+    // tabbable element) — the trigger is itself one of this entry's new
+    // always-visible, always-tabbable controls.
+    const userMenuTrigger = page.locator('button[aria-label="User menu"]');
     await page.locator('body').click({ position: { x: 5, y: 5 } });
     let guard = 0;
-    while (!(await signOutButton.evaluate((el) => el === document.activeElement)) && guard < 15) {
+    while (!(await userMenuTrigger.evaluate((el) => el === document.activeElement)) && guard < 15) {
       // eslint-disable-next-line no-await-in-loop
       await page.keyboard.press('Tab');
       guard += 1;
     }
-    await expect(signOutButton).toBeFocused();
-    const outlineStyle = await signOutButton.evaluate((el) => getComputedStyle(el).outlineStyle);
+    await expect(userMenuTrigger).toBeFocused();
+    const outlineStyle = await userMenuTrigger.evaluate((el) => getComputedStyle(el).outlineStyle);
     expect(outlineStyle).not.toBe('none');
   });
 });
@@ -421,13 +437,14 @@ test.describe('change password', () => {
     const seeded = await seedUserWithChannel('changepw');
     await loginViaUi(page, seeded.username, seeded.password);
 
-    await page.click('button:has-text("Change Password")');
+    // FEATURE_REQUEST.md's Apple HIG overhaul entry: Change Password now
+    // lives behind the user menu rather than a standalone sidebar button.
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Change Password")');
     await page.waitForSelector('text=Change Password', { timeout: 10_000 });
 
-    // button[type="submit"] specifically — the sidebar's own "Change
-    // Password" control (type="button") also matches a bare
-    // :has-text("Change password") selector case-insensitively, and it
-    // sits behind the modal backdrop once the panel is open.
+    // button[type="submit"] specifically — the modal's own submit button,
+    // distinct from the menu item that opened it.
     const submitButton = page.locator('button[type="submit"]:has-text("Change password")');
 
     await page.fill('#current-password', 'totally-wrong-password');
@@ -441,7 +458,8 @@ test.describe('change password', () => {
     await expect(page.locator('text=Saved')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="Close change password"]');
-    await page.click('button:has-text("Sign out")');
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Sign out")');
 
     // Old password no longer works.
     await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
@@ -462,7 +480,8 @@ test.describe('admin user management', () => {
     const admin = await seedUserWithChannel('usermgmt');
     await loginViaUi(page, admin.username, admin.password);
 
-    await page.click('button:has-text("Manage Users")');
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("Manage Users")');
     await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
 
     const newUsername = `mgmt_created_${Date.now()}`;
@@ -486,7 +505,8 @@ test.describe('admin user management', () => {
     await expect(page.locator('text=Password reset')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="Close manage users"]');
-    await page.click('button:has-text("Sign out")');
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Sign out")');
 
     await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
     await page.fill('#username', newUsername);
@@ -494,8 +514,10 @@ test.describe('admin user management', () => {
     await page.click('button:has-text("Sign In")');
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
     // The role promotion took effect: this account is now an ADMIN and
-    // sees the same admin-only controls the original admin does.
-    await expect(page.locator('button:has-text("Manage Users")')).toBeVisible({ timeout: 10_000 });
+    // sees the same admin-only controls the original admin does — the
+    // "Admin Tools" trigger itself (canManageAi-gated), not a bare button
+    // for each individual tool.
+    await expect(page.locator('button:has-text("Admin Tools")')).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -507,8 +529,11 @@ test.describe('workspace archive/unarchive', () => {
     await page.click('text=general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
-    const workspaceRow = page.locator('[role="button"]', { hasText: seeded.workspace.name });
-    await workspaceRow.locator('button:has-text("Archive")').click();
+    // FEATURE_REQUEST.md's Apple HIG overhaul entry: Archive now lives
+    // behind the workspace row's own "•••" overflow menu, consolidated with
+    // Invite rather than sitting as a permanent inline pill.
+    await page.click(`button[aria-label="${seeded.workspace.name} options"]`);
+    await page.click('text=Archive workspace');
 
     await expect(page.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('text=(archived — read only)')).toBeVisible({ timeout: 10_000 });
@@ -516,7 +541,10 @@ test.describe('workspace archive/unarchive', () => {
       timeout: 10_000,
     });
     await expect(page.locator('button:has-text("+ New channel")')).not.toBeVisible();
-    await expect(page.locator('button:has-text("+ Invite member")')).not.toBeVisible();
+    // Archived rows render through a separate branch that never mounts the
+    // overflow Menu at all (no Invite/Archive applies to a read-only
+    // workspace) — a structural guarantee, not just a hidden button.
+    await expect(page.locator(`button[aria-label="${seeded.workspace.name} options"]`)).not.toBeVisible();
 
     const archivedRow = page.locator('[role="button"]', { hasText: seeded.workspace.name });
     await archivedRow.locator('button:has-text("Unarchive")').click();
@@ -528,12 +556,15 @@ test.describe('workspace archive/unarchive', () => {
 test.describe('semantic search (real Ollama inference — allow extra time)', () => {
   test.slow();
 
-  // FEATURE_REQUEST.md entry 1. The embedding worker ingests asynchronously
-  // (embeddingWorker.js polls embedding_jobs on a timer, default 2s), so a
-  // message sent just before the search isn't guaranteed to be indexed yet
-  // — retries the search itself, bounded, rather than asserting on a single
-  // immediate attempt (same "real async pipeline, poll for it" instinct as
-  // the mentions test's waitForFunction above, applied here across repeated
+  // FEATURE_REQUEST.md's Apple HIG overhaul entry replaced the "Search"
+  // button + full-modal SemanticSearchPanel with a persistent field docked
+  // at the top of the sidebar (SearchBar.jsx) — always visible, no click to
+  // open. The embedding worker ingests asynchronously (embeddingWorker.js
+  // polls embedding_jobs on a timer, default 2s), so a message sent just
+  // before the search isn't guaranteed to be indexed yet — retries the
+  // search itself, bounded, rather than asserting on a single immediate
+  // attempt (same "real async pipeline, poll for it" instinct as the
+  // mentions test's waitForFunction above, applied here across repeated
   // requests instead of a single DOM mutation).
   test('finds a conceptually related message and clicking it navigates into the channel', async ({ page }) => {
     const seeded = await seedUserWithChannel('search');
@@ -549,25 +580,23 @@ test.describe('semantic search (real Ollama inference — allow extra time)', ()
     await page.click('text=general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
-    await page.click('button:has-text("Search")');
-    await page.waitForSelector('text=Ask a conceptual question', { timeout: 10_000 });
-
-    // Scoped to the results panel specifically, not a bare page-wide
+    // Scoped to the results listbox specifically, not a bare page-wide
     // text= locator — the same message content is already visible in the
-    // live channel feed *behind* the modal backdrop (sent via the API
-    // before the page even loaded), so an unscoped locator ambiguously
-    // resolves to that hidden-behind-the-backdrop copy instead of the
-    // actual search result row, and clicking it then hangs forever with
-    // "element intercepts pointer events" (the backdrop covering it).
-    const resultsPanel = page.locator('[aria-label="Search results"]');
-    const resultLocator = resultsPanel.locator('text=The production database had a locking issue');
+    // live channel feed behind the popover (sent via the API before the
+    // page even loaded), so an unscoped locator would ambiguously resolve
+    // to that copy instead of the actual search result row.
+    const resultsBox = page.locator('[role="listbox"][aria-label="Search results"]');
+    const resultLocator = resultsBox.locator('text=The production database had a locking issue');
+    const searchInput = page.locator('input[aria-label="Search messages"]');
     const deadline = Date.now() + 40_000;
     let found = false;
     while (Date.now() < deadline && !found) {
       // eslint-disable-next-line no-await-in-loop
-      await page.fill('input[aria-label="Search query"]', 'database outage and downtime problems');
+      await searchInput.fill('');
       // eslint-disable-next-line no-await-in-loop
-      await page.click('button[type="submit"]:has-text("Search")');
+      await searchInput.fill('database outage and downtime problems');
+      // eslint-disable-next-line no-await-in-loop
+      await searchInput.press('Enter'); // forces an immediate search, bypassing the debounce
       try {
         // eslint-disable-next-line no-await-in-loop
         await resultLocator.waitFor({ timeout: 3_000 });
@@ -581,19 +610,91 @@ test.describe('semantic search (real Ollama inference — allow extra time)', ()
 
     // The unrelated pizza message must rank below/not appear as the
     // top-of-results conceptual match — the whole point of "semantic," not
-    // "substring," search. Scoped to the results panel for the same reason
-    // as resultLocator above (the live feed behind the modal also contains
-    // this exact text).
-    const pizzaResult = resultsPanel.locator('text=I ordered pizza for the team lunch');
+    // "substring," search.
+    const pizzaResult = resultsBox.locator('text=I ordered pizza for the team lunch');
     expect(await pizzaResult.count()).toBeLessThanOrEqual(1);
 
     await resultLocator.click();
-    // Navigating a result closes the search panel and lands back in the
-    // channel it came from — the composer being visible again is the
-    // simplest reliable signal the panel closed and the right channel is
-    // still selected (only one channel exists for this seeded user).
-    await expect(page.locator('text=Ask a conceptual question')).not.toBeVisible();
+    // Navigating a result clears/closes the search popover and lands back
+    // in the channel it came from — the composer being visible again is the
+    // simplest reliable signal the right channel is still selected (only
+    // one channel exists for this seeded user).
+    await expect(resultsBox).not.toBeVisible();
+    await expect(searchInput).toHaveValue('');
     await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('typing fewer than 2 characters shows no results popover, and Escape then clears the field', async ({ page }) => {
+    const seeded = await seedUserWithChannel('searchmin');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    const searchInput = page.locator('input[aria-label="Search messages"]');
+    await searchInput.fill('a');
+    await page.waitForTimeout(600);
+    await expect(page.locator('[role="listbox"][aria-label="Search results"]')).not.toBeVisible();
+
+    await searchInput.fill('database');
+    await searchInput.press('Escape');
+    // First Escape dismisses the popover without clearing the query.
+    await expect(searchInput).toHaveValue('database');
+    await searchInput.press('Escape');
+    await expect(searchInput).toHaveValue('');
+  });
+});
+
+test.describe('menus (Apple HIG overhaul: pull-down buttons + progressive disclosure)', () => {
+  test('the user menu opens via keyboard, lists account actions, and returns focus to its trigger on Escape', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('menukbd');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    const trigger = page.locator('button[aria-label="User menu"]');
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('[role="menu"][aria-label="User menu"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[role="menuitem"]:has-text("Change Password")')).toBeVisible();
+    await expect(page.locator('[role="menuitem"]:has-text("Sign out")')).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[role="menu"][aria-label="User menu"]')).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+  });
+
+  test('selecting "Change Password" from the user menu opens the panel, and clicking outside a menu closes it', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('menuselect');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Change Password")');
+    await expect(page.locator('text=Change Password').first()).toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close change password"]');
+
+    await page.click('button:has-text("Admin Tools")');
+    await expect(page.locator('[role="menu"][aria-label="Admin tools"]')).toBeVisible({ timeout: 5_000 });
+    await page.click('body', { position: { x: 5, y: 5 } });
+    await expect(page.locator('[role="menu"][aria-label="Admin tools"]')).not.toBeVisible();
+  });
+
+  test('the Admin Tools menu opens the same three existing panels', async ({ page }) => {
+    const seeded = await seedUserWithChannel('menuadmin');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("AI Settings")');
+    await expect(page.locator('text=Configure the local LLM provider')).toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close AI settings"]');
+
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("Audit Log")');
+    await expect(page.locator('text=AUTH_SIGNUP').first()).toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close audit log"]');
+
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("Manage Users")');
+    await expect(page.locator('text=Manage Users').first()).toBeVisible({ timeout: 10_000 });
   });
 });
 

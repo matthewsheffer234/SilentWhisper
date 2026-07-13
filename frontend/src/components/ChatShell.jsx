@@ -9,7 +9,6 @@ import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
 import ChangePasswordPanel from './ChangePasswordPanel.jsx';
 import UserManagementPanel from './UserManagementPanel.jsx';
-import SemanticSearchPanel from './SemanticSearchPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -60,7 +59,6 @@ export default function ChatShell() {
   const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
 
   const socketRef = useRef(null);
@@ -287,9 +285,11 @@ export default function ChatShell() {
   // hit has none (DM/group-DM channels, workspace_id nullable per schema) —
   // selectChannel still works, it just isn't reflected in the sidebar's
   // currently-selected-workspace highlight, a pre-existing gap (no DM-
-  // browsing UI exists yet) this inherits rather than introduces.
+  // browsing UI exists yet) this inherits rather than introduces. Called
+  // from SearchBar (the HIG overhaul entry's persistent search field), which
+  // closes/resets its own popover state itself on navigate — this function
+  // only owns cross-component navigation, not that component's local UI state.
   function handleNavigateToSearchResult(hit) {
-    setSearchOpen(false);
     if (hit.workspaceId && hit.workspaceId !== selectedWorkspaceId) {
       setSelectedWorkspaceId(hit.workspaceId);
     }
@@ -306,11 +306,6 @@ export default function ChatShell() {
   // mirrors that same rule rather than the currently-selected workspace's
   // role.
   const canManageAi = workspaces.some((ws) => ws.role === 'ADMIN');
-  // Inviting to a *specific* workspace, unlike AI Settings/Audit Log above,
-  // is gated on being ADMIN of *that* workspace, not any workspace — the
-  // backend's requireWorkspaceAdmin (routes/workspaces.js's new
-  // POST /:workspaceId/members) checks the same thing.
-  const isSelectedWorkspaceAdmin = workspaces.find((ws) => ws.id === selectedWorkspaceId)?.role === 'ADMIN';
   const isSelectedWorkspaceArchived = Boolean(workspaces.find((ws) => ws.id === selectedWorkspaceId)?.archivedAt);
 
   return (
@@ -331,8 +326,7 @@ export default function ChatShell() {
         canManageAi={canManageAi}
         onOpenAiSettings={() => setAiSettingsOpen(true)}
         onOpenAuditLog={() => setAuditLogOpen(true)}
-        onOpenSearch={() => setSearchOpen(true)}
-        isSelectedWorkspaceAdmin={isSelectedWorkspaceAdmin}
+        onNavigateToSearchResult={handleNavigateToSearchResult}
         onInviteMember={handleInviteMember}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
         onOpenUserManagement={() => setUserManagementOpen(true)}
@@ -373,14 +367,6 @@ export default function ChatShell() {
       />
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
-      {searchOpen && (
-        <SemanticSearchPanel
-          workspaces={workspaces}
-          currentWorkspaceId={selectedWorkspaceId}
-          onClose={() => setSearchOpen(false)}
-          onNavigate={handleNavigateToSearchResult}
-        />
-      )}
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
       {userManagementOpen && <UserManagementPanel workspaces={workspaces} onClose={() => setUserManagementOpen(false)} />}
       {mentionToasts.length > 0 && (
