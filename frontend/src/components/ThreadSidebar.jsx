@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import PresenceBadge from './PresenceBadge.jsx';
 import { extractTasks } from '../api/ai.js';
+import { renderMessageContent } from '../markdown.jsx';
 
 const styles = {
   sidebar: {
@@ -157,7 +158,7 @@ export default function ThreadSidebar({ rootMessage, replies, presence, onSendRe
       )}
       <div style={styles.root}>
         <div style={styles.rootAuthor}>{rootMessage.username}</div>
-        <div style={styles.rootContent}>{rootMessage.content}</div>
+        <div style={styles.rootContent}>{renderMessageContent(rootMessage.content)}</div>
       </div>
       <div style={styles.replies}>
         {replies.length === 0 && <div style={{ color: 'var(--text-3)', fontSize: 'var(--text-sm)' }}>No replies yet.</div>}
@@ -167,7 +168,7 @@ export default function ThreadSidebar({ rootMessage, replies, presence, onSendRe
               <span style={styles.replyAuthor}>{r.username}</span>
               <PresenceBadge status={presence[r.userId] ?? 'offline'} />
             </div>
-            <div>{r.content}</div>
+            <div>{renderMessageContent(r.content)}</div>
           </div>
         ))}
       </div>

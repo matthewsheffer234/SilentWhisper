@@ -483,6 +483,15 @@ The audit service suite specifically proves:
 
 The AI tests (`llmAdapters`, `promptTemplates`, `llmSettingsService`, `llmConcurrencyGate`, `aiRoutes`) mock `global.fetch` rather than calling a real Ollama/vLLM — no provider is reachable in the test environment. **If you write a test that saves AI settings as a real user** (anything hitting `PATCH /api/ai/settings` or calling `updateSettings(db, patch, someUserId)` directly), clear `app_settings`'s `llm.*` keys in `beforeEach` *before* calling `resetDb()`, not after — `app_settings.updated_by` is a real FK to `users(id)` with no `ON DELETE` clause, so a leftover row from a previous test can make the next test's `resetDb()` fail deleting users. See `aiRoutes.test.js`'s `beforeEach` for the pattern, and `PROJECT_PLAN.md` Section 11's Phase 4 entry for the full story of how this was found.
 
+### Frontend unit tests
+
+```bash
+cd frontend
+npm run test:unit
+```
+
+Vitest (`frontend/vitest.config.js`), added for the Basic Markdown formatting entry — before that, this app had no frontend unit-test runner at all, only Playwright e2e. Scoped to `src/**/*.test.{js,jsx}` specifically: Vitest's default include glob also matches `e2e/workflows.spec.js`, which is a Playwright spec, not a Vitest one, and errors out if Vitest tries to import it. Uses the same `@vitejs/plugin-react` as the real app build (`vite.config.js`) so JSX compiles with the automatic runtime — without it, any test that actually invokes a tokenizer function returning JSX throws `ReferenceError: React is not defined`. Currently covers `frontend/src/markdown.jsx` (the message-content tokenizer) — tests inspect the returned React element objects directly (`.type`/`.props`), not a rendered DOM, since this is testing tokenizer logic in isolation; the e2e suite's `markdown formatting` describe block covers the real end-to-end path (a message typed through the actual composer, rendered by the real feed).
+
 ## Logs
 
 ```bash
@@ -529,10 +538,10 @@ Drives the real stack in headless Chromium (`frontend/e2e/workflows.spec.js`) �
 
 **Defaults to `https://whisper.silentlattice.dev`, not `localhost:3101`** (`playwright.config.js`). This isn't arbitrary: `VITE_API_URL`/`VITE_WS_URL` are baked into the frontend bundle at build time (see Frontend Development above), and in this environment that's normally the public domain. Running the tests against bare `localhost:3101` while the bundle talks to a different origin makes every API call cross-origin — and the refresh-token cookie is `SameSite=Strict` (Section 3), so a cross-site request never sends it, breaking session-restore-on-reload in a way that has nothing to do with the app being broken. Override both `E2E_BASE_URL` and `E2E_API_BASE` together if the frontend was instead built pointing at a same-origin local backend.
 
-**Mind the signup rate limiter while iterating.** A full run signs up 22 new users as of the Apple HIG UI/UX overhaul entry (`signupIpLimiter`: 10/hour/IP — Section 3) — well over the ceiling from one clean backend start, not just at it. A single `npx playwright test` run of the whole file will 429 partway through unless the limiter is reset between batches (`docker compose restart backend` clears the in-process limiter state; acceptable in this dev/test environment, never do this to route around the limiter against real traffic) or the run is split into three signup-budget-safe batches (~7 signups each), restarting the backend between each:
+**Mind the signup rate limiter while iterating.** A full run signs up 24 new users as of the Basic Markdown formatting entry (`signupIpLimiter`: 10/hour/IP — Section 3) — well over the ceiling from one clean backend start, not just at it. A single `npx playwright test` run of the whole file will 429 partway through unless the limiter is reset between batches (`docker compose restart backend` clears the in-process limiter state; acceptable in this dev/test environment, never do this to route around the limiter against real traffic) or the run is split into three signup-budget-safe batches (~8 signups each), restarting the backend between each:
 
 ```bash
-npx playwright test -g "core messaging workflow|AI features|admin surfaces|workspace invite"
+npx playwright test -g "core messaging workflow|AI features|admin surfaces|workspace invite|markdown formatting"
 docker compose restart backend
 npx playwright test -g "accessibility|mentions|change password|admin user management"
 docker compose restart backend

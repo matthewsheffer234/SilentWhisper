@@ -171,6 +171,61 @@ test.describe('core messaging workflow', () => {
   });
 });
 
+test.describe('markdown formatting', () => {
+  // FEATURE_REQUEST.md's Basic Markdown formatting entry. The tokenizer's
+  // own logic is covered by frontend/src/markdown.test.jsx's unit tests
+  // (Vitest) — this checks the real end-to-end path: a message typed
+  // through the actual composer, sent through the real WebSocket path, and
+  // rendered by the real feed, not the tokenizer function called directly.
+  test('bold, italic, and a link all render as real elements, and an unsafe link scheme renders as plain text', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('markdown');
+    await loginViaUi(page, seeded.username, seeded.password);
+    await page.click(`text=${seeded.workspace.name}`);
+    await page.click('text=general');
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    await page.fill(
+      'input[placeholder^="Message #"]',
+      'This is **bold**, this is *italic*, and here is [a link](https://example.com).',
+    );
+    await page.click('button:has-text("Send")');
+
+    await expect(page.locator('strong:has-text("bold")')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('em:has-text("italic")')).toBeVisible({ timeout: 10_000 });
+    const link = page.locator('a:has-text("a link")');
+    await expect(link).toBeVisible({ timeout: 10_000 });
+    await expect(link).toHaveAttribute('href', 'https://example.com');
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+
+    // A javascript: URL must never become a clickable anchor — the label
+    // renders as plain text instead (Section 3, LLM-Specific/user-content
+    // XSS rules: a rendered `<a href>` is a live vector regardless of
+    // dangerouslySetInnerHTML never being used).
+    await page.fill('input[placeholder^="Message #"]', 'click [here](javascript:alert(1)) if you dare');
+    await page.click('button:has-text("Send")');
+    await expect(page.locator('text=click here if you dare')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('a:has-text("here")')).toHaveCount(0);
+  });
+
+  test('a mention still highlights inside bold text, in the real rendered feed', async ({ page }) => {
+    const seeded = await seedUserWithChannel('markdownmention');
+    await loginViaUi(page, seeded.username, seeded.password);
+    await page.click(`text=${seeded.workspace.name}`);
+    await page.click('text=general');
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    await page.fill('input[placeholder^="Message #"]', `**hey @${seeded.username} check this out**`);
+    await page.click('button:has-text("Send")');
+
+    const strong = page.locator('strong', { hasText: `@${seeded.username}` });
+    await expect(strong).toBeVisible({ timeout: 10_000 });
+    await expect(strong.locator('span', { hasText: `@${seeded.username}` })).toBeVisible();
+  });
+});
+
 test.describe('AI features (real Ollama inference — allow extra time)', () => {
   test.slow();
 
