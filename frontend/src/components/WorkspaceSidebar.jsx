@@ -3,6 +3,7 @@ import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
+import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 
 const styles = {
   sidebar: {
@@ -300,6 +301,68 @@ function InviteMemberForm({ onSubmit }) {
   );
 }
 
+// Token-based invitation (FEATURE_REQUEST.md entry 1, slice 3) — for people
+// who don't have an account yet, coexists with InviteMemberForm above
+// (direct-add of an existing user), doesn't replace it. No email infra
+// exists in this project (backend/src/routes/workspaces.js's own comment),
+// so the raw link is shown once for the admin to copy/share out-of-band.
+function InviteLinkForm({ onSubmit }) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('MEMBER');
+  const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const trimmed = email.trim();
+    if (!trimmed) return;
+    setStatus(null);
+    try {
+      const invitation = await onSubmit(trimmed, role);
+      const link = `${window.location.origin}/invite/${invitation.token}`;
+      setStatus({ type: 'success', message: link });
+      setEmail('');
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to create invitation' });
+    }
+  }
+
+  return (
+    <div>
+      <form style={styles.inlineForm} onSubmit={handleSubmit}>
+        <input
+          style={styles.inlineInput}
+          placeholder="Email to invite"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <select style={styles.roleSelect} value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
+          <option value="MEMBER">Member</option>
+          <option value="MANAGER">Manager</option>
+        </select>
+        <button type="submit" style={styles.inviteSubmit}>Create link</button>
+      </form>
+      {status && (
+        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
+          {status.type === 'success' ? (
+            <>
+              <span>{status.message}</span>{' '}
+              <button
+                type="button"
+                style={styles.inviteSubmit}
+                onClick={() => navigator.clipboard?.writeText(status.message)}
+              >
+                Copy
+              </button>
+            </>
+          ) : (
+            status.message
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkspaceSidebar({
   user,
   presence,
@@ -318,25 +381,59 @@ export default function WorkspaceSidebar({
   onOpenAuditLog,
   onNavigateToSearchResult,
   onInviteMember,
+  onCreateInviteLink,
   onOpenChangePassword,
   onOpenUserManagement,
   onArchiveWorkspace,
   onUnarchiveWorkspace,
   onOpenBrowseWorkspaces,
+  organizations,
+  selectedOrganizationId,
+  onSelectOrganization,
+  isSystemAdmin,
+  onOpenCreateOrganization,
+  onOpenOrgManagement,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [inviteFormWorkspaceId, setInviteFormWorkspaceId] = useState(null);
+  const [inviteLinkFormWorkspaceId, setInviteLinkFormWorkspaceId] = useState(null);
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
+
+  // Org-scoped (FEATURE_REQUEST.md entry 1, slice 3): filters/groups
+  // client-side rather than refetching from the server on every switch, for
+  // instant switching with no network round-trip or loading flicker — a
+  // structural no-op for every account with exactly one org (the
+  // overwhelming majority today), same "no-op until a second org exists"
+  // continuity property slice 2 established server-side.
+  const orgFilteredWorkspaces = selectedOrganizationId
+    ? workspaces.filter((ws) => ws.organizationId === selectedOrganizationId)
+    : workspaces; // no orgs loaded yet — show everything rather than flash empty
 
   // FEATURE_REQUEST.md: workspace archive/unarchive. Split rather than
   // filtered-with-a-toggle — the same pattern channels[].isMember already
   // uses to drive conditional rendering in this file (Join pill vs. not).
-  const activeWorkspaces = workspaces.filter((ws) => !ws.archivedAt);
-  const archivedWorkspaces = workspaces.filter((ws) => ws.archivedAt);
+  const activeWorkspaces = orgFilteredWorkspaces.filter((ws) => !ws.archivedAt);
+  const archivedWorkspaces = orgFilteredWorkspaces.filter((ws) => ws.archivedAt);
   const selectedWorkspace = workspaces.find((ws) => ws.id === selectedWorkspaceId) ?? null;
   const isSelectedWorkspaceArchived = Boolean(selectedWorkspace?.archivedAt);
+
+  const currentOrg = organizations.find((o) => o.id === selectedOrganizationId) ?? null;
+  const orgSwitcherItems = [
+    ...organizations.map((org) => ({
+      key: org.id,
+      label: org.name,
+      checked: org.id === selectedOrganizationId,
+      onSelect: () => onSelectOrganization(org.id),
+    })),
+    ...(isSystemAdmin
+      ? [{ key: 'create-org', label: '+ Create organization…', separatorBefore: true, onSelect: onOpenCreateOrganization }]
+      : []),
+    ...(currentOrg && hasOrgManagementAccess(isSystemAdmin, currentOrg.role)
+      ? [{ key: 'manage-org', label: 'Manage organization members…', onSelect: onOpenOrgManagement }]
+      : []),
+  ];
 
   const userMenuItems = [
     ...(notif.supported
@@ -402,13 +499,32 @@ export default function WorkspaceSidebar({
         </div>
       )}
 
+      {organizations.length > 0 && (
+        <div style={styles.adminToolsRow}>
+          <Menu
+            ariaLabel="Organization switcher"
+            items={orgSwitcherItems}
+            renderTrigger={(triggerProps) => (
+              <button type="button" {...triggerProps} style={styles.aiSettingsButton}>
+                {currentOrg?.name ?? 'Organization'} ⌄
+              </button>
+            )}
+          />
+        </div>
+      )}
+
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Workspaces</div>
         {activeWorkspaces.map((ws) => {
-          const canInvite = ['OWNER', 'MANAGER'].includes(ws.role);
-          const canArchive = ws.ownerId === user?.id || ['OWNER', 'MANAGER'].includes(ws.role);
+          const canInvite = hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
+          const canArchive = hasPermission(ws.role, PERMISSIONS.WORKSPACE_ARCHIVE);
           const workspaceMenuItems = [
-            ...(canInvite ? [{ key: 'invite', label: 'Invite member…', onSelect: () => setInviteFormWorkspaceId(ws.id) }] : []),
+            ...(canInvite
+              ? [
+                  { key: 'invite', label: 'Invite member…', onSelect: () => setInviteFormWorkspaceId(ws.id) },
+                  { key: 'invite-link', label: 'Create invite link…', onSelect: () => setInviteLinkFormWorkspaceId(ws.id) },
+                ]
+              : []),
             ...(canArchive
               ? [{ key: 'archive', label: 'Archive workspace', separatorBefore: canInvite, onSelect: () => onArchiveWorkspace(ws.id) }]
               : []),
@@ -448,6 +564,9 @@ export default function WorkspaceSidebar({
               {inviteFormWorkspaceId === ws.id && (
                 <InviteMemberForm onSubmit={(username, role) => onInviteMember(ws.id, username, role)} />
               )}
+              {inviteLinkFormWorkspaceId === ws.id && (
+                <InviteLinkForm onSubmit={(email, role) => onCreateInviteLink(ws.id, email, role)} />
+              )}
             </div>
           );
         })}
@@ -465,7 +584,7 @@ export default function WorkspaceSidebar({
                 onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
               >
                 <span style={{ flex: 1 }}>{ws.name}</span>
-                {['OWNER', 'MANAGER'].includes(ws.role) && (
+                {hasPermission(ws.role, PERMISSIONS.WORKSPACE_ARCHIVE) && (
                   <button
                     type="button"
                     style={styles.archivePill}

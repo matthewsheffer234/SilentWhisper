@@ -68,18 +68,23 @@ const styles = {
   empty: { padding: 20, textAlign: 'center', color: 'var(--text-3)', fontSize: 'var(--text-sm)' },
 };
 
-export default function BrowseWorkspacesPanel({ onClose, onSubscribed }) {
+export default function BrowseWorkspacesPanel({ onClose, onSubscribed, organizationId }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [subscribingId, setSubscribingId] = useState(null);
 
   useEffect(() => {
-    listDiscoverableWorkspaces()
+    // organizationId (FEATURE_REQUEST.md entry 1, slice 3): required once an
+    // account belongs to 2+ orgs — the backend 400s without it
+    // (resolveCallerOrganization) — so this must track the org switcher's
+    // current selection, not just default silently the way it could before
+    // a second org could ever exist.
+    listDiscoverableWorkspaces(organizationId)
       .then(setRows)
       .catch((err) => setError(err.message || 'Failed to load discoverable workspaces'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [organizationId]);
 
   async function handleSubscribe(workspaceId) {
     setSubscribingId(workspaceId);

@@ -252,3 +252,33 @@ organizationsRouter.post('/:orgId/invitations', invitationCreateLimiter, async (
     next(err);
   }
 });
+
+// Pending-invitations roster (slice 3): mirrors the workspace-scoped
+// equivalent in workspaces.js exactly — same reasoning (the only invitation
+// data the frontend would otherwise see is the just-created token, gone on
+// reload), same permission gate as the POST above.
+organizationsRouter.get('/:orgId/invitations', async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_INVITE);
+
+    const rows = await db('invitations as i')
+      .join('users as u', 'u.id', 'i.invited_by')
+      .where({ 'i.scope_type': 'ORGANIZATION', 'i.organization_id': orgId, 'i.status': 'PENDING' })
+      .andWhere('i.expires_at', '>', new Date())
+      .select('i.id', 'i.email', 'i.invited_role', 'i.expires_at', 'u.username as invited_by_username')
+      .orderBy('i.created_at', 'desc');
+
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        email: r.email,
+        invitedRole: r.invited_role,
+        expiresAt: r.expires_at,
+        invitedByUsername: r.invited_by_username,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+});

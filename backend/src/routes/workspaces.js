@@ -99,17 +99,35 @@ workspacesRouter.post('/', async (req, res, next) => {
   }
 });
 
+// organizationId is optional (slice 3, FEATURE_REQUEST.md entry 1): the base
+// join already scopes every row to the caller's own workspace_members rows,
+// so filtering by an org the caller has no relationship to just narrows an
+// already-authorized result set to nothing — unlike GET /discoverable, no
+// membership check is needed on the param since it cannot leak anything.
 workspacesRouter.get('/', async (req, res, next) => {
   try {
+    const organizationId =
+      req.query.organizationId !== undefined ? assertUuid(req.query.organizationId, 'organizationId') : null;
+
     const rows = await db('workspaces as w')
       .join('workspace_members as wm', function joinMembers() {
         this.on('wm.workspace_id', '=', 'w.id').andOn('wm.user_id', '=', db.raw('?', [req.user.id]));
       })
-      .select('w.id', 'w.name', 'w.owner_id', 'w.archived_at', 'wm.system_role')
+      .modify((qb) => {
+        if (organizationId) qb.where('w.organization_id', organizationId);
+      })
+      .select('w.id', 'w.name', 'w.owner_id', 'w.organization_id', 'w.archived_at', 'wm.system_role')
       .orderBy('w.created_at', 'asc');
 
     res.json(
-      rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id, role: r.system_role, archivedAt: r.archived_at })),
+      rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        ownerId: r.owner_id,
+        organizationId: r.organization_id,
+        role: r.system_role,
+        archivedAt: r.archived_at,
+      })),
     );
   } catch (err) {
     next(err);
@@ -343,6 +361,37 @@ workspacesRouter.post('/:workspaceId/invitations', invitationCreateLimiter, asyn
       expiresAt: invitation.expires_at,
       token: rawToken,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Pending-invitations roster (slice 3): the only invitation data the
+// frontend would otherwise see is the single just-created token, held in
+// transient component state — gone on reload. Same permission gate as the
+// POST above; PENDING + not-yet-expired only (ACCEPTED/REVOKED/expired
+// invitations aren't actionable from here).
+workspacesRouter.get('/:workspaceId/invitations', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
+
+    const rows = await db('invitations as i')
+      .join('users as u', 'u.id', 'i.invited_by')
+      .where({ 'i.scope_type': 'WORKSPACE', 'i.workspace_id': workspaceId, 'i.status': 'PENDING' })
+      .andWhere('i.expires_at', '>', new Date())
+      .select('i.id', 'i.email', 'i.invited_role', 'i.expires_at', 'u.username as invited_by_username')
+      .orderBy('i.created_at', 'desc');
+
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        email: r.email,
+        invitedRole: r.invited_role,
+        expiresAt: r.expires_at,
+        invitedByUsername: r.invited_by_username,
+      })),
+    );
   } catch (err) {
     next(err);
   }

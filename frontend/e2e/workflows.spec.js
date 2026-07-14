@@ -55,14 +55,49 @@ async function seedUserWithChannel(label) {
 
 // Self-service workspace subscription (FEATURE_REQUEST.md): a workspace
 // created with visibility: 'PUBLIC', distinct from seedUserWithChannel's
-// default PRIVATE workspace.
-async function createWorkspaceApi(accessToken, name, visibility) {
+// default PRIVATE workspace. organizationId (FEATURE_REQUEST.md entry 1,
+// slice 3) is optional, appended last — every pre-existing call site is
+// unaffected.
+async function createWorkspaceApi(accessToken, name, visibility, organizationId) {
+  const body = { name };
+  if (visibility) body.visibility = visibility;
+  if (organizationId) body.organizationId = organizationId;
   const res = await fetch(`${API_BASE}/workspaces`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify(visibility ? { name, visibility } : { name }),
+    body: JSON.stringify(body),
   });
   return res.json();
+}
+
+// FEATURE_REQUEST.md entry 1, slice 3 — organization test helpers.
+async function createOrgApi(accessToken, name) {
+  const res = await fetch(`${API_BASE}/organizations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ name }),
+  });
+  return res.json();
+}
+
+// No REST endpoint promotes a user to system admin (by design — see
+// scripts/grant-system-admin.mjs, a deliberately out-of-band CLI). Seeds
+// directly in Postgres as app_runtime_user, same precedent as the virtual-
+// scrolling test's direct message-history seeding below.
+async function promoteToSystemAdmin(userId) {
+  const pgClient = new pg.Client({
+    host: process.env.PGHOST,
+    port: Number(process.env.PGPORT || 5432),
+    user: process.env.APP_DB_USER,
+    password: process.env.APP_DB_PASSWORD,
+    database: process.env.PGDATABASE,
+  });
+  await pgClient.connect();
+  try {
+    await pgClient.query('UPDATE users SET is_system_admin = true WHERE id = $1', [userId]);
+  } finally {
+    await pgClient.end();
+  }
 }
 
 // A plain signup with no workspace of their own — used as the invite
@@ -92,6 +127,20 @@ async function inviteToWorkspace(accessToken, workspaceId, username) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ username }),
+  });
+  return res.json();
+}
+
+async function getOrganizationsApi(accessToken) {
+  const res = await fetch(`${API_BASE}/organizations`, { headers: { Authorization: `Bearer ${accessToken}` } });
+  return res.json();
+}
+
+async function createWorkspaceInvitationApi(accessToken, workspaceId, email, role) {
+  const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/invitations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(role ? { email, role } : { email }),
   });
   return res.json();
 }
@@ -1018,5 +1067,144 @@ test.describe('theme toggle (System / Light / Dark)', () => {
     await page.click('button[aria-label="User menu"]');
     await page.click('[role="menuitemcheckbox"]:has-text("System")');
     expect(await page.evaluate(() => document.documentElement.getAttribute('data-theme'))).toBeNull();
+  });
+});
+
+test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
+  test('a system admin can create an organization via the switcher, and it becomes selected', async ({ page }) => {
+    const admin = await seedUserWithChannel('orgcreate');
+    await promoteToSystemAdmin(admin.userId);
+    const [defaultOrg] = await getOrganizationsApi(admin.accessToken);
+    const orgName = `Acme Corp ${Date.now()}`;
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click(`button:has-text("${defaultOrg.name}")`);
+    await page.click('[role="menuitem"]:has-text("+ Create organization…")');
+    await page.fill('#new-org-name', orgName);
+    await page.click('button:has-text("Create organization")');
+
+    await expect(page.locator(`button:has-text("${orgName}")`)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('a non-system-admin never sees "Create organization…" in the switcher', async ({ page }) => {
+    const plain = await seedUserWithChannel('orgcreateplain');
+    const [defaultOrg] = await getOrganizationsApi(plain.accessToken);
+
+    await loginViaUi(page, plain.username, plain.password);
+    await page.click(`button:has-text("${defaultOrg.name}")`);
+    await expect(page.locator('text=+ Create organization…')).not.toBeVisible();
+  });
+
+  test('switching organizations filters the visible workspace list', async ({ page }) => {
+    const admin = await seedUserWithChannel('orgswitch');
+    await promoteToSystemAdmin(admin.userId);
+    const [defaultOrg] = await getOrganizationsApi(admin.accessToken);
+    const orgB = await createOrgApi(admin.accessToken, `Org B ${Date.now()}`);
+    const wsB = await createWorkspaceApi(admin.accessToken, `Org B workspace ${Date.now()}`, undefined, orgB.id);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${wsB.name}`)).not.toBeVisible();
+
+    await page.click(`button:has-text("${defaultOrg.name}")`);
+    await page.click(`[role="menuitemcheckbox"]:has-text("${orgB.name}")`);
+    await expect(page.locator(`text=${wsB.name}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${admin.workspace.name}`)).not.toBeVisible();
+  });
+
+  test('a system admin can manage members and invitations of an org they hold no explicit role in', async ({ page }) => {
+    const admin = await seedUserWithChannel('orgmember');
+    const [defaultOrg] = await getOrganizationsApi(admin.accessToken);
+    // Org creation is system-admin-gated server-side — must promote before
+    // calling createOrgApi, or it 403s.
+    await promoteToSystemAdmin(admin.userId);
+    // A freshly seeded user is already auto-enrolled into the default org by
+    // signup itself (slice 2's own auto-enrollment) — a fresh org is needed
+    // so "add an existing member" has somewhere new to add them to.
+    const org = await createOrgApi(admin.accessToken, `Member Mgmt Org ${Date.now()}`);
+    const target = await seedPlainUser('orgmembertarget');
+
+    await loginViaUi(page, admin.username, admin.password);
+    // Switch to the freshly created org first (default selection on login is
+    // still the default org) — this also exercises the override for an org
+    // whose role GET /organizations reports as null for a system admin.
+    await page.click(`button:has-text("${defaultOrg.name}")`);
+    await page.click(`[role="menuitemcheckbox"]:has-text("${org.name}")`);
+    await page.click(`button:has-text("${org.name}")`);
+    await page.click('[role="menuitem"]:has-text("Manage organization members…")');
+    await page.waitForSelector('text=Manage Organization', { timeout: 10_000 });
+
+    // Add-by-username, then role change, then remove.
+    await page.fill('#org-add-username', target.username);
+    await page.click('button:has-text("Add member")');
+    await expect(page.locator(`text=Added ${target.username} to the organization`)).toBeVisible({ timeout: 10_000 });
+
+    await page.selectOption(`select[aria-label="Role for ${target.username}"]`, 'ORG_ADMIN');
+    await expect(page.locator(`select[aria-label="Role for ${target.username}"]`)).toHaveValue('ORG_ADMIN');
+
+    const memberRow = page.locator('tr', { hasText: target.username });
+    await memberRow.locator('button:has-text("Remove")').click();
+    await expect(page.locator(`td:has-text("${target.username}")`)).not.toBeVisible({ timeout: 10_000 });
+
+    // Create an invitation, see it pending, then revoke it.
+    const email = `orginvite_${Date.now()}@example.com`;
+    await page.fill('#org-invite-email', email);
+    await page.click('button:has-text("Create invitation")');
+    await expect(page.locator('button:has-text("Copy")').first()).toBeVisible({ timeout: 10_000 });
+
+    const invitationRow = page.locator('tr', { hasText: email });
+    await expect(invitationRow).toBeVisible({ timeout: 10_000 });
+    await invitationRow.locator('button:has-text("Revoke")').click();
+    await expect(page.locator(`td:has-text("${email}")`)).not.toBeVisible({ timeout: 10_000 });
+  });
+});
+
+test.describe('workspace token invitations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
+  test('creating an invite link surfaces it in pending invitations, and revoking removes it', async ({ page }) => {
+    const admin = await seedUserWithChannel('wsinvitelink');
+    await loginViaUi(page, admin.username, admin.password);
+
+    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
+    await page.click('text=Create invite link…');
+    const email = `wsinvitelink_${Date.now()}@example.com`;
+    await page.fill('input[placeholder="Email to invite"]', email);
+    await page.click('button:has-text("Create link")');
+    await expect(page.locator('button:has-text("Copy")').first()).toBeVisible({ timeout: 10_000 });
+
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("Manage Users")');
+    await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
+
+    const invitationRow = page.locator('tr', { hasText: email });
+    await expect(invitationRow).toBeVisible({ timeout: 10_000 });
+    await invitationRow.locator('button:has-text("Revoke")').click();
+    await expect(page.locator(`td:has-text("${email}")`)).not.toBeVisible({ timeout: 10_000 });
+  });
+});
+
+test.describe('invitation redemption (public /invite/:token page)', () => {
+  test('a fresh, unauthenticated visitor can redeem a workspace invitation and lands signed in', async ({ page }) => {
+    const admin = await seedUserWithChannel('inviteredeem');
+    const invitation = await createWorkspaceInvitationApi(admin.accessToken, admin.workspace.id, 'redeeminvitee@example.com');
+    const redeemedUsername = uniqueUsername('redeemed');
+
+    await page.goto(`/invite/${invitation.token}`);
+    // Exact match: a plain `text=${admin.username}` substring-matches both
+    // the inviter's name and admin.workspace.name (seedUserWithChannel
+    // names workspaces "<username> workspace"), a real ambiguity found
+    // while writing this test, not a product bug.
+    await expect(page.getByText(admin.username, { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+
+    await page.fill('#invite-username', redeemedUsername);
+    await page.fill('#invite-password', 'correct-horse-battery');
+    await page.click('button:has-text("Accept invitation")');
+
+    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('an invalid token shows a generic error, not a raw 404 or blank page', async ({ page }) => {
+    await page.goto('/invite/not-a-real-token-at-all');
+    await expect(page.locator('text=This invitation link is invalid or has expired.')).toBeVisible({ timeout: 10_000 });
   });
 });

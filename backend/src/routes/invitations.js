@@ -89,7 +89,7 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
       const passwordHash = await bcrypt.hash(req.body.password, config.auth.bcryptSaltRounds);
       const [user] = await trx('users')
         .insert({ username, email: row.email, password_hash: passwordHash, display_name: username })
-        .returning(['id', 'username', 'email']);
+        .returning(['id', 'username', 'email', 'is_system_admin']);
 
       if (row.scope_type === 'ORGANIZATION') {
         await trx('organization_members').insert({
@@ -137,7 +137,12 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
 
     res.status(201).json({
       accessToken: result.accessToken,
-      user: { id: result.user.id, username: result.user.username, email: result.user.email },
+      user: {
+        id: result.user.id,
+        username: result.user.username,
+        email: result.user.email,
+        isSystemAdmin: result.user.is_system_admin,
+      },
     });
   } catch (err) {
     next(err);

@@ -62,6 +62,16 @@ export function AuthProvider({ children }) {
     setStatus('anonymous');
   }, []);
 
+  // Hydrates the context from a session established elsewhere — the invite-
+  // redemption flow calls api/invitations.js's acceptInvitation, which
+  // already called setAccessToken; this just makes user/status catch up,
+  // rather than duplicating signup()'s API call against a different
+  // endpoint.
+  const completeAuth = useCallback((authenticatedUser) => {
+    setUser(authenticatedUser);
+    setStatus('authenticated');
+  }, []);
+
   // No user/status change needed on success — same account, still
   // authenticated; authApi.changePassword already swaps in the freshly
   // issued access token (client.js's setAccessToken), the same way
@@ -74,8 +84,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, status, login, signup, logout, changePassword }),
-    [user, status, login, signup, logout, changePassword],
+    () => ({ user, status, login, signup, logout, changePassword, completeAuth }),
+    [user, status, login, signup, logout, changePassword, completeAuth],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -97,6 +97,95 @@ describe('POST /api/workspaces/:workspaceId/invitations', () => {
   });
 });
 
+describe('GET /api/organizations/:orgId/invitations', () => {
+  test('lists only PENDING, non-expired invitations for that org', async () => {
+    const admin = await signup(app, 'orginvitelist0');
+    await makeSystemAdmin(admin.userId);
+    const org = await createOrg(admin);
+
+    const pending = await request(app)
+      .post(`/api/organizations/${org.id}/invitations`)
+      .set(authHeader(admin.accessToken))
+      .send({ email: 'pending0@example.com' });
+
+    const acceptedSource = await request(app)
+      .post(`/api/organizations/${org.id}/invitations`)
+      .set(authHeader(admin.accessToken))
+      .send({ email: 'accepted0@example.com' });
+    await request(app)
+      .post(`/api/invitations/${acceptedSource.body.token}/accept`)
+      .send({ username: 'orginviteaccepted0', password: 'correct-horse-battery' });
+
+    const revoked = await request(app)
+      .post(`/api/organizations/${org.id}/invitations`)
+      .set(authHeader(admin.accessToken))
+      .send({ email: 'revoked0@example.com' });
+    await request(app).post(`/api/invitations/${revoked.body.id}/revoke`).set(authHeader(admin.accessToken));
+
+    const expired = await request(app)
+      .post(`/api/organizations/${org.id}/invitations`)
+      .set(authHeader(admin.accessToken))
+      .send({ email: 'expired0@example.com' });
+    await db('invitations').where({ id: expired.body.id }).update({ expires_at: new Date(Date.now() - 1000) });
+
+    const res = await request(app).get(`/api/organizations/${org.id}/invitations`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      id: pending.body.id,
+      email: 'pending0@example.com',
+      invitedByUsername: 'orginvitelist0',
+    });
+  });
+
+  test('a non-member gets 404 for a real org, not 403', async () => {
+    const admin = await signup(app, 'orginvitelist1');
+    await makeSystemAdmin(admin.userId);
+    const org = await createOrg(admin);
+
+    const outsider = await signup(app, 'orginvitelistoutsider1');
+    const res = await request(app).get(`/api/organizations/${org.id}/invitations`).set(authHeader(outsider.accessToken));
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/workspaces/:workspaceId/invitations', () => {
+  test('lists only PENDING, non-expired invitations for that workspace', async () => {
+    const owner = await signup(app, 'wsinvitelist0');
+    const ws = await createWorkspace(owner);
+
+    const pending = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({ email: 'wspending0@example.com' });
+
+    const revoked = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({ email: 'wsrevoked0@example.com' });
+    await request(app).post(`/api/invitations/${revoked.body.id}/revoke`).set(authHeader(owner.accessToken));
+
+    const res = await request(app).get(`/api/workspaces/${ws.id}/invitations`).set(authHeader(owner.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      id: pending.body.id,
+      email: 'wspending0@example.com',
+      invitedByUsername: 'wsinvitelist0',
+    });
+  });
+
+  test('a plain member without WORKSPACE_MANAGE_MEMBERS gets 403', async () => {
+    const owner = await signup(app, 'wsinvitelist1');
+    const ws = await createWorkspace(owner);
+    const member = await signup(app, 'wsinvitelistmember1');
+    await request(app).post(`/api/workspaces/${ws.id}/members`).set(authHeader(owner.accessToken)).send({ username: 'wsinvitelistmember1' });
+
+    const res = await request(app).get(`/api/workspaces/${ws.id}/invitations`).set(authHeader(member.accessToken));
+    expect(res.status).toBe(403);
+  });
+});
+
 describe('GET /api/invitations/:token', () => {
   test('a valid pending invitation shows context', async () => {
     const owner = await signup(app, 'wsinvitepreview0');
@@ -150,7 +239,7 @@ describe('POST /api/invitations/:token/accept', () => {
       .send({ username: 'accepteduser0', password: 'correct-horse-battery' });
     expect(res.status).toBe(201);
     expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.user).toMatchObject({ username: 'accepteduser0', email: 'accepted0@example.com' });
+    expect(res.body.user).toMatchObject({ username: 'accepteduser0', email: 'accepted0@example.com', isSystemAdmin: false });
     expect(res.headers['set-cookie']?.[0]).toMatch(/refresh_token=/);
 
     const membership = await db('workspace_members').where({ workspace_id: ws.id, user_id: res.body.user.id }).first();

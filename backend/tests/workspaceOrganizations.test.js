@@ -79,6 +79,72 @@ describe('POST /api/workspaces organizationId resolution', () => {
   });
 });
 
+describe('GET /api/workspaces organizationId field and filter (slice 3)', () => {
+  test('each workspace row includes its own organizationId', async () => {
+    const user = await signup(app, 'wsorgfield0');
+    const createRes = await request(app).post('/api/workspaces').set(authHeader(user.accessToken)).send({ name: 'Field WS' });
+
+    const res = await request(app).get('/api/workspaces').set(authHeader(user.accessToken));
+    expect(res.status).toBe(200);
+    const row = res.body.find((w) => w.id === createRes.body.id);
+    const wsRow = await db('workspaces').where({ id: createRes.body.id }).first('organization_id');
+    expect(row.organizationId).toBe(wsRow.organization_id);
+  });
+
+  test('?organizationId= filters to only that org\'s workspaces', async () => {
+    const admin = await signup(app, 'wsorgfilter0');
+    await makeSystemAdmin(admin.userId);
+    const earliestOrg = await db('organizations').orderBy('created_at', 'asc').first('id');
+    const orgB = await createOrg(admin, 'Filter Org B');
+
+    // admin now belongs to 2 orgs (default + orgB), so organizationId must be
+    // explicit for both — otherwise POST /workspaces 400s on ambiguity.
+    const wsA = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'Filter WS A', organizationId: earliestOrg.id });
+    const wsB = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'Filter WS B', organizationId: orgB.id });
+    expect(wsA.status).toBe(201);
+    expect(wsB.status).toBe(201);
+    const filteredA = await request(app)
+      .get('/api/workspaces')
+      .query({ organizationId: earliestOrg.id })
+      .set(authHeader(admin.accessToken));
+    expect(filteredA.body.map((w) => w.id)).toContain(wsA.body.id);
+    expect(filteredA.body.map((w) => w.id)).not.toContain(wsB.body.id);
+
+    const filteredB = await request(app)
+      .get('/api/workspaces')
+      .query({ organizationId: orgB.id })
+      .set(authHeader(admin.accessToken));
+    expect(filteredB.body.map((w) => w.id)).toContain(wsB.body.id);
+    expect(filteredB.body.map((w) => w.id)).not.toContain(wsA.body.id);
+  });
+
+  test('?organizationId= for an org the caller has no relationship to returns an empty array, not an error', async () => {
+    const admin = await signup(app, 'wsorgfilter1');
+    await makeSystemAdmin(admin.userId);
+    const orgB = await createOrg(admin, 'Filter Org C');
+
+    const outsider = await signup(app, 'wsorgfilteroutsider1');
+    const outsiderWs = await request(app).post('/api/workspaces').set(authHeader(outsider.accessToken)).send({ name: 'Outsider WS' });
+    expect(outsiderWs.status).toBe(201);
+
+    const res = await request(app)
+      .get('/api/workspaces')
+      .query({ organizationId: orgB.id })
+      .set(authHeader(outsider.accessToken));
+    expect(res.status).toBe(200);
+    // Outsider does have a workspace (in their own default org) — proves the
+    // empty result comes from the orgB filter narrowing an already-scoped
+    // result set to nothing, not from having no workspaces at all.
+    expect(res.body).toEqual([]);
+  });
+});
+
 describe('GET /api/workspaces/discoverable organization scoping', () => {
   test('a second org\'s DISCOVERABLE workspace does not leak into the first org\'s list', async () => {
     const admin = await signup(app, 'wsdisc0');

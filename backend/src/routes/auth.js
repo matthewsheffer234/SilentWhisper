@@ -81,7 +81,7 @@ authRouter.post('/signup', signupIpLimiter, async (req, res, next) => {
     const user = await db.transaction(async (trx) => {
       const [u] = await trx('users')
         .insert({ username, email, password_hash: passwordHash, display_name: username })
-        .returning(['id', 'username', 'email']);
+        .returning(['id', 'username', 'email', 'is_system_admin']);
       const defaultOrg = await trx('organizations').orderBy('created_at', 'asc').first('id');
       await trx('organization_members').insert({ organization_id: defaultOrg.id, user_id: u.id, org_role: 'ORG_MEMBER' });
       return u;
@@ -98,7 +98,10 @@ authRouter.post('/signup', signupIpLimiter, async (req, res, next) => {
       targetResource: user.username,
     });
 
-    res.status(201).json({ accessToken, user: { id: user.id, username: user.username, email: user.email } });
+    res.status(201).json({
+      accessToken,
+      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
+    });
   } catch (err) {
     next(err);
   }
@@ -110,11 +113,13 @@ authRouter.post('/signup', signupIpLimiter, async (req, res, next) => {
 // without requiring the client to have cached user info anywhere itself.
 authRouter.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const user = await db('users').where({ id: req.user.id }).first(['id', 'username', 'email']);
+    const user = await db('users').where({ id: req.user.id }).first(['id', 'username', 'email', 'is_system_admin']);
     if (!user) {
       throw new UnauthorizedError('User no longer exists');
     }
-    res.json({ user });
+    res.json({
+      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
+    });
   } catch (err) {
     next(err);
   }
@@ -160,7 +165,10 @@ authRouter.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res,
       targetResource: user.username,
     });
 
-    res.json({ accessToken, user: { id: user.id, username: user.username, email: user.email } });
+    res.json({
+      accessToken,
+      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
+    });
   } catch (err) {
     next(err);
   }
@@ -248,7 +256,10 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
       actionType: 'AUTH_PASSWORD_CHANGE',
     });
 
-    res.json({ accessToken, user: { id: user.id, username: user.username, email: user.email } });
+    res.json({
+      accessToken,
+      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
+    });
   } catch (err) {
     next(err);
   }

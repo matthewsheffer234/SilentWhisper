@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { BrowserRouter, Routes, Route } from 'react-router';
 import App from './App.jsx';
+import InviteRedemptionPage from './components/InviteRedemptionPage.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { ThemeProvider, resolveTheme, applyTheme, THEME_STORAGE_KEY } from './context/ThemeContext.jsx';
 import './global.css';
@@ -19,7 +21,18 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AuthProvider>
       <ThemeProvider>
-        <App />
+        <BrowserRouter>
+          <Routes>
+            {/* /invite/:token must work whether or not a session has been
+                restored yet, and regardless of AuthProvider's status — the
+                only route this app has that isn't gated behind login. Every
+                other path (including "unknown" ones) falls through to the
+                existing App, which is a strict no-op: today every URL
+                already renders App with zero routing at all. */}
+            <Route path="/invite/:token" element={<InviteRedemptionPage />} />
+            <Route path="/*" element={<App />} />
+          </Routes>
+        </BrowserRouter>
       </ThemeProvider>
     </AuthProvider>
   </React.StrictMode>,

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { createSocket } from '../ws/socket.js';
 import * as workspacesApi from '../api/workspaces.js';
+import * as organizationsApi from '../api/organizations.js';
+import { PERMISSIONS, hasSystemPermission } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
@@ -10,6 +12,8 @@ import AuditDashboard from './AuditDashboard.jsx';
 import ChangePasswordPanel from './ChangePasswordPanel.jsx';
 import UserManagementPanel from './UserManagementPanel.jsx';
 import BrowseWorkspacesPanel from './BrowseWorkspacesPanel.jsx';
+import CreateOrganizationModal from './CreateOrganizationModal.jsx';
+import OrgManagementPanel from './OrgManagementPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -62,6 +66,10 @@ export default function ChatShell() {
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
+  const [organizations, setOrganizations] = useState([]);
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState(null);
+  const [createOrgOpen, setCreateOrgOpen] = useState(false);
+  const [orgManagementOpen, setOrgManagementOpen] = useState(false);
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -178,6 +186,13 @@ export default function ChatShell() {
   }, []);
 
   useEffect(() => {
+    organizationsApi.listOrganizations().then((orgs) => {
+      setOrganizations(orgs);
+      if (orgs.length > 0) setSelectedOrganizationId((prev) => prev ?? orgs[0].id);
+    });
+  }, []);
+
+  useEffect(() => {
     if (!selectedWorkspaceId) return;
     workspacesApi.listChannels(selectedWorkspaceId).then(setChannels);
   }, [selectedWorkspaceId]);
@@ -201,9 +216,19 @@ export default function ChatShell() {
   );
 
   async function handleCreateWorkspace(name, visibility) {
-    const ws = await workspacesApi.createWorkspace(name, visibility);
+    // Org picker (FEATURE_REQUEST.md entry 1, slice 3): a workspace created
+    // while org X is selected in the sidebar switcher belongs in org X — no
+    // second, redundant org control inside the creation form itself.
+    const ws = await workspacesApi.createWorkspace(name, visibility, selectedOrganizationId);
     setWorkspaces((prev) => [...prev, ws]);
     setSelectedWorkspaceId(ws.id);
+  }
+
+  async function handleCreateOrganization(name) {
+    const org = await organizationsApi.createOrganization(name);
+    setOrganizations((prev) => [...prev, org]);
+    setSelectedOrganizationId(org.id);
+    setCreateOrgOpen(false);
   }
 
   function handleSubscribed(ws) {
@@ -219,6 +244,10 @@ export default function ChatShell() {
 
   function handleInviteMember(workspaceId, username, role) {
     return workspacesApi.inviteWorkspaceMember(workspaceId, username, role);
+  }
+
+  function handleCreateInviteLink(workspaceId, email, role) {
+    return workspacesApi.createWorkspaceInvitation(workspaceId, email, role);
   }
 
   async function handleArchiveWorkspace(workspaceId) {
@@ -312,7 +341,7 @@ export default function ChatShell() {
   // workspace" (see requireSystemPermission's doc comment), so the entry
   // point mirrors that same rule rather than the currently-selected
   // workspace's role.
-  const canManageAi = workspaces.some((ws) => ['OWNER', 'MANAGER'].includes(ws.role));
+  const canManageAi = hasSystemPermission(user?.isSystemAdmin, workspaces, PERMISSIONS.AI_SETTINGS_MANAGE);
   const isSelectedWorkspaceArchived = Boolean(workspaces.find((ws) => ws.id === selectedWorkspaceId)?.archivedAt);
 
   return (
@@ -335,11 +364,18 @@ export default function ChatShell() {
         onOpenAuditLog={() => setAuditLogOpen(true)}
         onNavigateToSearchResult={handleNavigateToSearchResult}
         onInviteMember={handleInviteMember}
+        onCreateInviteLink={handleCreateInviteLink}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
         onOpenUserManagement={() => setUserManagementOpen(true)}
         onArchiveWorkspace={handleArchiveWorkspace}
         onUnarchiveWorkspace={handleUnarchiveWorkspace}
         onOpenBrowseWorkspaces={() => setBrowseWorkspacesOpen(true)}
+        organizations={organizations}
+        selectedOrganizationId={selectedOrganizationId}
+        onSelectOrganization={setSelectedOrganizationId}
+        isSystemAdmin={Boolean(user?.isSystemAdmin)}
+        onOpenCreateOrganization={() => setCreateOrgOpen(true)}
+        onOpenOrgManagement={() => setOrgManagementOpen(true)}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -379,7 +415,22 @@ export default function ChatShell() {
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
       {userManagementOpen && <UserManagementPanel workspaces={workspaces} onClose={() => setUserManagementOpen(false)} />}
       {browseWorkspacesOpen && (
-        <BrowseWorkspacesPanel onClose={() => setBrowseWorkspacesOpen(false)} onSubscribed={handleSubscribed} />
+        <BrowseWorkspacesPanel
+          onClose={() => setBrowseWorkspacesOpen(false)}
+          onSubscribed={handleSubscribed}
+          organizationId={selectedOrganizationId}
+        />
+      )}
+      {createOrgOpen && (
+        <CreateOrganizationModal onClose={() => setCreateOrgOpen(false)} onCreate={handleCreateOrganization} />
+      )}
+      {orgManagementOpen && (
+        <OrgManagementPanel
+          organizations={organizations}
+          initialOrgId={selectedOrganizationId}
+          isSystemAdmin={Boolean(user?.isSystemAdmin)}
+          onClose={() => setOrgManagementOpen(false)}
+        />
       )}
       {mentionToasts.length > 0 && (
         <div style={styles.mentionToastContainer} role="status" aria-live="polite">

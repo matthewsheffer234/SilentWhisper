@@ -27,7 +27,7 @@ describe('POST /api/auth/signup', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.user).toMatchObject({ username: 'alice', email: 'alice@example.com' });
+    expect(res.body.user).toMatchObject({ username: 'alice', email: 'alice@example.com', isSystemAdmin: false });
 
     const cookie = extractCookie(res, 'refresh_token');
     expect(cookie).toBeTruthy();
@@ -101,9 +101,20 @@ describe('POST /api/auth/login', () => {
     const res = await request(app).post('/api/auth/login').send({ username: 'erin', password: 'correct-horse-battery' });
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toEqual(expect.any(String));
+    expect(res.body.user).toMatchObject({ username: 'erin', isSystemAdmin: false });
 
     const row = await db('audit_logs').where({ action_type: 'AUTH_LOGIN' }).first();
     expect(row).toBeTruthy();
+  });
+
+  // FEATURE_REQUEST.md entry 1, slice 3: the frontend needs isSystemAdmin to
+  // gate system-admin-only UI (e.g. "Create organization…") without an
+  // attempt-then-403 workaround.
+  test('reflects is_system_admin: true once a user is promoted', async () => {
+    await db('users').where({ username: 'erin' }).update({ is_system_admin: true });
+    const res = await request(app).post('/api/auth/login').send({ username: 'erin', password: 'correct-horse-battery' });
+    expect(res.status).toBe(200);
+    expect(res.body.user.isSystemAdmin).toBe(true);
   });
 
   test('fails with wrong password and audits AUTH_LOGIN_FAILURE against the real user', async () => {
@@ -143,6 +154,17 @@ describe('POST /api/auth/refresh', () => {
     const newCookie = extractCookie(res, 'refresh_token');
     expect(newCookie).toBeTruthy();
     expect(newCookie).not.toBe(cookie);
+  });
+
+  // Regression guard (FEATURE_REQUEST.md entry 1, slice 3): /refresh has
+  // never returned a user object (AuthContext.restoreSession() calls
+  // GET /me separately for that) — isSystemAdmin exposure deliberately did
+  // not add one here, and this pins that down.
+  test('response shape stays {accessToken} only — no user key', async () => {
+    const cookie = await signupAndGetCookie();
+    const res = await request(app).post('/api/auth/refresh').set('Cookie', [`refresh_token=${cookie}`]);
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body)).toEqual(['accessToken']);
   });
 
   test('rejects reuse of an already-rotated refresh token and revokes the session', async () => {
@@ -234,6 +256,7 @@ describe('POST /api/auth/change-password', () => {
       .send({ currentPassword: 'correct-horse-battery', newPassword: 'a-brand-new-password' });
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toEqual(expect.any(String));
+    expect(res.body.user).toMatchObject({ username: 'karl', isSystemAdmin: false });
 
     const oldPasswordLogin = await request(app).post('/api/auth/login').send({ username: 'karl', password: 'correct-horse-battery' });
     expect(oldPasswordLogin.status).toBe(401);
@@ -287,7 +310,18 @@ describe('GET /api/auth/me', () => {
 
     const res = await request(app).get('/api/auth/me').set(authHeader(signupRes.body.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body.user).toMatchObject({ username: 'henry', email: 'henry@example.com' });
+    expect(res.body.user).toMatchObject({ username: 'henry', email: 'henry@example.com', isSystemAdmin: false });
+  });
+
+  test('reflects is_system_admin: true once a user is promoted', async () => {
+    const signupRes = await request(app)
+      .post('/api/auth/signup')
+      .send({ username: 'iris', email: 'iris@example.com', password: 'correct-horse-battery' });
+    await db('users').where({ username: 'iris' }).update({ is_system_admin: true });
+
+    const res = await request(app).get('/api/auth/me').set(authHeader(signupRes.body.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.user.isSystemAdmin).toBe(true);
   });
 
   test('rejects a missing or invalid access token', async () => {

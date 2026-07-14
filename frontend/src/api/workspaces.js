@@ -1,13 +1,31 @@
 import { apiFetch } from './client.js';
 
+// organizationId stays optional everywhere below (FEATURE_REQUEST.md entry 1,
+// slice 3): the backend defaults to the caller's sole org membership when
+// omitted, a no-op for every account with exactly one org — the org switcher
+// only needs to pass it once a second org actually exists.
 export const listWorkspaces = () => apiFetch('/workspaces');
-export const createWorkspace = (name, visibility) =>
-  apiFetch('/workspaces', { method: 'POST', body: visibility ? { name, visibility } : { name } });
+export const createWorkspace = (name, visibility, organizationId) =>
+  apiFetch('/workspaces', {
+    method: 'POST',
+    body: { name, ...(visibility ? { visibility } : {}), ...(organizationId ? { organizationId } : {}) },
+  });
 export const inviteWorkspaceMember = (workspaceId, username, role) =>
   apiFetch(`/workspaces/${workspaceId}/members`, { method: 'POST', body: { username, role } });
 
-// Self-service workspace subscription (FEATURE_REQUEST.md).
-export const listDiscoverableWorkspaces = () => apiFetch('/workspaces/discoverable');
+// Invitations (slice 3): token-based, for people who don't have an account
+// yet — coexists with inviteWorkspaceMember above (direct-add of an existing
+// user), doesn't replace it.
+export const createWorkspaceInvitation = (workspaceId, email, role) =>
+  apiFetch(`/workspaces/${workspaceId}/invitations`, { method: 'POST', body: { email, role } });
+export const listWorkspaceInvitations = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/invitations`);
+
+// Self-service workspace subscription (FEATURE_REQUEST.md). organizationId
+// is required here in practice once an account belongs to 2+ orgs — the
+// backend 400s without it (resolveCallerOrganization) — so callers must pass
+// the currently-selected org once the org switcher exists.
+export const listDiscoverableWorkspaces = (organizationId) =>
+  apiFetch(`/workspaces/discoverable${organizationId ? `?organizationId=${organizationId}` : ''}`);
 export const subscribeToWorkspace = (workspaceId) =>
   apiFetch(`/workspaces/${workspaceId}/subscribe`, { method: 'POST' });
 
