@@ -4,20 +4,20 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, CREATABLE_CHANNEL_TYPES, WORKSPACE_ROLES, WORKSPACE_VISIBILITY } from '../validation.js';
+import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, CREATABLE_CHANNEL_TYPES, ASSIGNABLE_WORKSPACE_ROLES, WORKSPACE_VISIBILITY } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
 import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateLimit.js';
 import {
   requireWorkspaceMember,
-  requireWorkspaceAdmin,
-  requireWorkspaceOwnerOrAdmin,
+  requireWorkspacePermission,
   requireWorkspaceNotArchived,
   requireChannelMember,
   getWorkspaceRole,
   getChannel,
   isChannelMember,
 } from '../authz/membershipService.js';
+import { PERMISSIONS } from '../authz/permissions.js';
 import { ValidationError, ConflictError, NotFoundError } from '../errors.js';
 
 export const workspacesRouter = Router();
@@ -31,13 +31,18 @@ workspacesRouter.post('/', async (req, res, next) => {
       req.body?.visibility !== undefined ? assertEnum(req.body.visibility, WORKSPACE_VISIBILITY, 'visibility') : 'PRIVATE';
 
     const workspace = await db.transaction(async (trx) => {
+      // Only one organization exists in this slice (the seeded "Default
+      // Organization" from migration 0012) — every new workspace attaches to
+      // it for now. Real org selection/membership is a later slice's
+      // "Workspace routes" work (FEATURE_REQUEST.md entry 1).
+      const defaultOrg = await trx('organizations').first('id');
       const [ws] = await trx('workspaces')
-        .insert({ name, owner_id: req.user.id, visibility })
+        .insert({ name, owner_id: req.user.id, visibility, organization_id: defaultOrg.id })
         .returning(['id', 'name', 'owner_id', 'visibility', 'created_at']);
       await trx('workspace_members').insert({
         workspace_id: ws.id,
         user_id: req.user.id,
-        system_role: 'ADMIN',
+        system_role: 'OWNER',
       });
       return ws;
     });
@@ -54,7 +59,7 @@ workspacesRouter.post('/', async (req, res, next) => {
       name: workspace.name,
       ownerId: workspace.owner_id,
       visibility: workspace.visibility,
-      role: 'ADMIN',
+      role: 'OWNER',
     });
   } catch (err) {
     next(err);
@@ -78,17 +83,18 @@ workspacesRouter.get('/', async (req, res, next) => {
   }
 });
 
-// Self-service workspace subscription (FEATURE_REQUEST.md): PUBLIC,
-// non-archived workspaces the caller isn't already a member of. Excludes
-// archived PUBLIC workspaces too, not just at subscribe-time — otherwise
-// this list could show a workspace whose own "Subscribe" button 409s
+// Self-service workspace subscription (FEATURE_REQUEST.md): DISCOVERABLE
+// (renamed from PUBLIC, entry 1's enterprise-authz slice 1), non-archived
+// workspaces the caller isn't already a member of. Excludes archived
+// DISCOVERABLE workspaces too, not just at subscribe-time — otherwise this
+// list could show a workspace whose own "Subscribe" button 409s
 // immediately, a dead-end result "discoverable" shouldn't produce. No
 // `role` in the response shape (unlike GET / above) since the caller has
 // none yet.
 workspacesRouter.get('/discoverable', async (req, res, next) => {
   try {
     const rows = await db('workspaces as w')
-      .where('w.visibility', 'PUBLIC')
+      .where('w.visibility', 'DISCOVERABLE')
       .whereNull('w.archived_at')
       .whereNotExists(function excludeExistingMembers() {
         this.select(1)
@@ -105,20 +111,20 @@ workspacesRouter.get('/discoverable', async (req, res, next) => {
   }
 });
 
-// Self-service join, authorized only by visibility = 'PUBLIC' — mirrors
-// channels/:id/join's "only public channels can be self-joined" pattern,
-// one level up. Unlike that endpoint, the caller isn't a workspace member
-// yet at all, so full existence-hiding applies: a PRIVATE workspace and a
-// made-up UUID must be indistinguishable (404, not 400/403) per Section 3's
-// Authorization Model. Idempotent-safe like the archive endpoint: calling
-// this again after already subscribed is a no-op, not a duplicate row or a
-// second audit event.
+// Self-service join, authorized only by visibility = 'DISCOVERABLE' —
+// mirrors channels/:id/join's "only public channels can be self-joined"
+// pattern, one level up. Unlike that endpoint, the caller isn't a workspace
+// member yet at all, so full existence-hiding applies: a PRIVATE workspace
+// and a made-up UUID must be indistinguishable (404, not 400/403) per
+// Section 3's Authorization Model. Idempotent-safe like the archive
+// endpoint: calling this again after already subscribed is a no-op, not a
+// duplicate row or a second audit event.
 workspacesRouter.post('/:workspaceId/subscribe', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
 
     const workspace = await db('workspaces').where({ id: workspaceId }).first();
-    if (!workspace || workspace.visibility !== 'PUBLIC') {
+    if (!workspace || workspace.visibility !== 'DISCOVERABLE') {
       throw new NotFoundError('Workspace not found');
     }
     // Existence is already established at this point (a real PUBLIC
@@ -151,14 +157,15 @@ workspacesRouter.post('/:workspaceId/subscribe', async (req, res, next) => {
   }
 });
 
-// Owner-or-admin (per the request: "owners and admins" can archive) —
-// broader than requireWorkspaceAdmin alone. No-ops (200, not an error) if
-// already archived, matching the existing idempotent-join-style handling
-// elsewhere (channels/:id/join, the members invite route).
+// OWNER or MANAGER (both hold WORKSPACE_ARCHIVE in this slice — see
+// permissions.js). No-ops (200, not an error) if already archived, matching
+// the existing idempotent-join-style handling elsewhere (channels/:id/join,
+// the members invite route).
 workspacesRouter.post('/:workspaceId/archive', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    const workspace = await requireWorkspaceOwnerOrAdmin(db, req.user.id, workspaceId);
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_ARCHIVE);
+    const workspace = await db('workspaces').where({ id: workspaceId }).first();
 
     if (!workspace.archived_at) {
       await db('workspaces').where({ id: workspaceId }).update({ archived_at: new Date(), archived_by: req.user.id });
@@ -177,13 +184,15 @@ workspacesRouter.post('/:workspaceId/archive', async (req, res, next) => {
   }
 });
 
-// Admin-only (deliberately narrower than archive's owner-or-admin gate, per
-// the request's explicit distinction: "admins should also be able to
-// un-archive").
+// Same WORKSPACE_ARCHIVE gate as archive above. Previously narrower
+// (ADMIN-role-only, excluding an owner who wasn't separately an ADMIN
+// member) — migration 0012 guarantees every owner now holds OWNER, which
+// holds WORKSPACE_ARCHIVE, closing that inconsistency (see
+// requireWorkspacePermission's doc comment in membershipService.js).
 workspacesRouter.post('/:workspaceId/unarchive', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_ARCHIVE);
 
     const workspace = await db('workspaces').where({ id: workspaceId }).first('archived_at');
     if (workspace.archived_at) {
@@ -214,11 +223,11 @@ workspacesRouter.post('/:workspaceId/unarchive', async (req, res, next) => {
 workspacesRouter.post('/:workspaceId/members', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
     await requireWorkspaceNotArchived(db, workspaceId);
 
     const username = assertUsername(req.body?.username);
-    const role = req.body?.role !== undefined ? assertEnum(req.body.role, WORKSPACE_ROLES, 'role') : 'MEMBER';
+    const role = req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_WORKSPACE_ROLES, 'role') : 'MEMBER';
 
     const targetUser = await db('users').where({ username }).first('id', 'username');
     if (!targetUser) {
@@ -253,14 +262,14 @@ workspacesRouter.post('/:workspaceId/members', async (req, res, next) => {
 // needs to render — a gap the original design didn't spell out explicitly
 // (it specified role-assignment/create/reset-password but not how the
 // panel would learn who's already in the workspace), found while
-// implementing. Gated on requireWorkspaceAdmin, same as the three mutating
-// actions below, rather than requireWorkspaceMember — this stays a tightly
+// implementing. Gated on WORKSPACE_MANAGE_MEMBERS, same as the three
+// mutating actions below, rather than requireWorkspaceMember — this stays a tightly
 // admin-dashboard-scoped roster, not a general "list my workspace's
 // members" endpoint any member could call.
 workspacesRouter.get('/:workspaceId/members', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
 
     const rows = await db('workspace_members as wm')
       .join('users', 'users.id', 'wm.user_id')
@@ -280,7 +289,7 @@ workspacesRouter.patch('/:workspaceId/members/:userId', async (req, res, next) =
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     const targetUserId = assertUuid(req.params.userId, 'userId');
-    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
     // Role assignment mutates workspace_members, the same class of write
     // the design's gate list already covers for the invite endpoint above —
     // extended here to the admin dashboard's newer write endpoints too
@@ -288,7 +297,7 @@ workspacesRouter.patch('/:workspaceId/members/:userId', async (req, res, next) =
     // workspace cannot be updated" applies equally to them.
     await requireWorkspaceNotArchived(db, workspaceId);
 
-    const role = assertEnum(req.body?.role, WORKSPACE_ROLES, 'role');
+    const role = assertEnum(req.body?.role, ASSIGNABLE_WORKSPACE_ROLES, 'role');
 
     const targetRow = await db('workspace_members as wm')
       .join('users', 'users.id', 'wm.user_id')
@@ -301,18 +310,13 @@ workspacesRouter.patch('/:workspaceId/members/:userId', async (req, res, next) =
       throw new NotFoundError('Workspace member not found');
     }
 
-    if (targetRow.system_role === 'ADMIN' && role === 'MEMBER') {
-      const adminCount = await db('workspace_members')
-        .where({ workspace_id: workspaceId, system_role: 'ADMIN' })
-        .count('* as count')
-        .first();
-      if (Number(adminCount.count) <= 1) {
-        // Without this, a single careless self-demotion (or the only other
-        // admin demoting the last one) permanently locks the workspace out
-        // of every admin-gated action — including this dashboard itself —
-        // with no recovery path short of a raw DB write.
-        throw new ConflictError("Cannot remove the workspace's last admin");
-      }
+    // OWNER is structurally unique per workspace (migration 0012 guarantees
+    // exactly one) and never directly reassignable through this endpoint —
+    // ASSIGNABLE_WORKSPACE_ROLES already rejects 'OWNER' as an input value,
+    // so "is this the workspace's only owner" collapses to "is this the
+    // owner." No count query needed; ownership transfer is a later slice.
+    if (targetRow.system_role === 'OWNER') {
+      throw new ConflictError("Cannot change the workspace owner's role directly; ownership transfer is not yet supported");
     }
 
     await db('workspace_members')
@@ -348,14 +352,14 @@ workspacesRouter.patch('/:workspaceId/members/:userId', async (req, res, next) =
 workspacesRouter.post('/:workspaceId/users', adminUserCreateLimiter, async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
     await requireWorkspaceNotArchived(db, workspaceId);
 
     const username = assertUsername(req.body?.username);
     const email = assertEmail(req.body?.email);
     const passwordError = assertValidPassword(req.body?.password);
     if (passwordError) throw new ValidationError(passwordError);
-    const role = req.body?.role !== undefined ? assertEnum(req.body.role, WORKSPACE_ROLES, 'role') : 'MEMBER';
+    const role = req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_WORKSPACE_ROLES, 'role') : 'MEMBER';
 
     const existing = await db('users').where({ username }).orWhere({ email }).first();
     if (existing) {
@@ -366,7 +370,7 @@ workspacesRouter.post('/:workspaceId/users', adminUserCreateLimiter, async (req,
     const passwordHash = await bcrypt.hash(req.body.password, config.auth.bcryptSaltRounds);
     const newUser = await db.transaction(async (trx) => {
       const [user] = await trx('users')
-        .insert({ username, email, password_hash: passwordHash })
+        .insert({ username, email, password_hash: passwordHash, display_name: username })
         .returning(['id', 'username', 'email']);
       await trx('workspace_members').insert({ workspace_id: workspaceId, user_id: user.id, system_role: role });
       return user;
@@ -399,7 +403,7 @@ workspacesRouter.post('/:workspaceId/members/:userId/reset-password', adminPassw
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     const targetUserId = assertUuid(req.params.userId, 'userId');
-    await requireWorkspaceAdmin(db, req.user.id, workspaceId);
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
 
     const targetRow = await db('workspace_members as wm')
       .join('users', 'users.id', 'wm.user_id')

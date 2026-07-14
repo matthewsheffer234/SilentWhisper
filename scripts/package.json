@@ -6,7 +6,8 @@
   "description": "Standalone local maintenance utilities for Silent Whisper — deliberately its own small dependency tree (see verify-audit-log.mjs), not folded into /backend.",
   "scripts": {
     "verify-audit-log": "node verify-audit-log.mjs",
-    "load-test": "node load-test.mjs"
+    "load-test": "node load-test.mjs",
+    "grant-system-admin": "node grant-system-admin.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

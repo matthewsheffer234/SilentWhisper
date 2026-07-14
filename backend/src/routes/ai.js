@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { requireChannelMember, requireAnyWorkspaceAdmin } from '../authz/membershipService.js';
+import { requireChannelMember, requireSystemPermission } from '../authz/membershipService.js';
+import { PERMISSIONS } from '../authz/permissions.js';
 import { appendAuditEvent } from '../audit/auditService.js';
 import { assertUuid, assertBoundedInt } from '../validation.js';
 import { NotFoundError, ValidationError } from '../errors.js';
@@ -16,12 +17,13 @@ export const aiRouter = Router();
 aiRouter.use(requireAuth);
 
 // Admin-only per PROJECT_PLAN.md Section 6 ("Admins can inspect the active
-// provider..."). "Admin" here means ADMIN in at least one workspace — see
-// requireAnyWorkspaceAdmin's doc comment for why, given app_settings has no
-// per-workspace scoping of its own.
+// provider..."). Gated on AI_SETTINGS_MANAGE — a system admin, or OWNER/
+// MANAGER of at least one workspace (see requireSystemPermission's doc
+// comment for why, given app_settings has no per-workspace scoping of its
+// own).
 aiRouter.get('/ai/settings', async (req, res, next) => {
   try {
-    await requireAnyWorkspaceAdmin(db, req.user.id);
+    await requireSystemPermission(db, req.user.id, PERMISSIONS.AI_SETTINGS_MANAGE);
     const settings = await getEffectiveSettings(db);
     res.json({ ...settings, health: getHealthStatus() });
   } catch (err) {
@@ -31,7 +33,7 @@ aiRouter.get('/ai/settings', async (req, res, next) => {
 
 aiRouter.patch('/ai/settings', async (req, res, next) => {
   try {
-    await requireAnyWorkspaceAdmin(db, req.user.id);
+    const { viaSystemAdminOverride } = await requireSystemPermission(db, req.user.id, PERMISSIONS.AI_SETTINGS_MANAGE);
     const patch = validateSettingsPatch(req.body ?? {});
     const settings = await updateSettings(db, patch, req.user.id);
 
@@ -40,7 +42,7 @@ aiRouter.patch('/ai/settings', async (req, res, next) => {
       actorIp: req.ip,
       actionType: 'AI_SETTINGS_UPDATED',
       targetResource: 'app_settings',
-      payload: patch,
+      payload: { ...patch, viaSystemAdminOverride },
     });
 
     res.json({ ...settings, health: getHealthStatus() });

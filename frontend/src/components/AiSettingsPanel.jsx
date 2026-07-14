@@ -4,9 +4,10 @@ import { getAiSettings, updateAiSettings } from '../api/ai.js';
 // PROJECT_PLAN.md Section 6: "Admins can inspect the active provider, model,
 // timeout, token limits, streaming support, and prompt versions" and "Admins
 // can update non-secret LLM settings later without rebuilding the frontend."
-// Gated server-side (requireAnyWorkspaceAdmin) — this component is only
-// ever rendered for a user WorkspaceSidebar has already determined is an
-// ADMIN of at least one workspace, but the backend enforces it regardless.
+// Gated server-side (requireSystemPermission) — this component is only ever
+// rendered for a user ChatShell has already determined is OWNER/MANAGER of
+// at least one workspace (or a system admin), but the backend enforces it
+// regardless.
 
 const styles = {
   backdrop: {

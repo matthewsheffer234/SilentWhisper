@@ -14,7 +14,7 @@ afterAll(async () => {
 });
 
 describe('workspace + channel authorization', () => {
-  test('creating a workspace makes the creator its ADMIN', async () => {
+  test('creating a workspace makes the creator its OWNER', async () => {
     const owner = await signup(app, 'owner1');
     const res = await request(app)
       .post('/api/workspaces')
@@ -22,7 +22,7 @@ describe('workspace + channel authorization', () => {
       .send({ name: 'Acme Corp' });
 
     expect(res.status).toBe(201);
-    expect(res.body.role).toBe('ADMIN');
+    expect(res.body.role).toBe('OWNER');
   });
 
   test('a non-member gets 404 (not 403) for a workspace they cannot see', async () => {
@@ -152,7 +152,7 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
     expect(listRes.body.find((w) => w.id === workspaceId)?.role).toBe('MEMBER');
   });
 
-  test('an ADMIN can invite someone directly as ADMIN too', async () => {
+  test('an OWNER can invite someone directly as MANAGER too', async () => {
     const owner = await signup(app, 'inviteowner2');
     await signup(app, 'invitee2');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
@@ -160,9 +160,9 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
     const res = await request(app)
       .post(`/api/workspaces/${wsRes.body.id}/members`)
       .set(authHeader(owner.accessToken))
-      .send({ username: 'invitee2', role: 'ADMIN' });
+      .send({ username: 'invitee2', role: 'MANAGER' });
     expect(res.status).toBe(201);
-    expect(res.body.role).toBe('ADMIN');
+    expect(res.body.role).toBe('MANAGER');
   });
 
   test('a non-admin workspace member cannot invite anyone (403, not the channel-add rule)', async () => {
@@ -232,6 +232,21 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
       .post(`/api/workspaces/${wsRes.body.id}/members`)
       .set(authHeader(owner.accessToken))
       .send({ username: 'invitee7', role: 'SUPERUSER' });
+    expect(res.status).toBe(400);
+  });
+
+  // OWNER is structurally unique per workspace and never directly
+  // assignable — there is no transfer-ownership endpoint yet
+  // (FEATURE_REQUEST.md entry 1, slice 1).
+  test('rejects role: OWNER with 400 — OWNER is not directly assignable', async () => {
+    const owner = await signup(app, 'inviteowner9');
+    await signup(app, 'invitee9');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'invitee9', role: 'OWNER' });
     expect(res.status).toBe(400);
   });
 

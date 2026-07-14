@@ -10,11 +10,18 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const CHANNEL_TYPES = ['PUBLIC', 'PRIVATE', 'DIRECT', 'GROUP_DM'];
 export const CREATABLE_CHANNEL_TYPES = ['PUBLIC', 'PRIVATE'];
-export const WORKSPACE_ROLES = ['ADMIN', 'MEMBER'];
+// Roles a caller may *assign* to someone else via the invite/role-change/
+// admin-create-user endpoints. OWNER is deliberately excluded — it's
+// structurally unique per workspace (guaranteed by migration 0012) and, in
+// this slice, never directly assignable at all; there is no
+// transfer-ownership endpoint yet (FEATURE_REQUEST.md entry 1, slice 1).
+export const ASSIGNABLE_WORKSPACE_ROLES = ['MANAGER', 'MEMBER'];
 
 // Self-service workspace subscription (FEATURE_REQUEST.md) — same values
 // and spirit as CHANNEL_TYPES' PUBLIC/PRIVATE distinction, one level up.
-export const WORKSPACE_VISIBILITY = ['PUBLIC', 'PRIVATE'];
+// DISCOVERABLE (renamed from PUBLIC in migration 0012, FEATURE_REQUEST.md
+// entry 1) to match the enterprise-authz design's own vocabulary.
+export const WORKSPACE_VISIBILITY = ['DISCOVERABLE', 'PRIVATE'];
 
 // Matches messages.content being TEXT (unbounded in Postgres) but bounded
 // at the application layer per Section 3 — also bounds audit payload size

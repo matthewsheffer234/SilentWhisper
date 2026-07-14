@@ -236,7 +236,7 @@ function AddUserForm({ onSubmit }) {
           <label style={styles.label} htmlFor="new-user-role">Role</label>
           <select id="new-user-role" style={styles.select} value={role} onChange={(e) => setRole(e.target.value)}>
             <option value="MEMBER">Member</option>
-            <option value="ADMIN">Admin</option>
+            <option value="MANAGER">Manager</option>
           </select>
         </div>
       </div>
@@ -251,7 +251,7 @@ function AddUserForm({ onSubmit }) {
 }
 
 export default function UserManagementPanel({ workspaces, onClose }) {
-  const adminWorkspaces = workspaces.filter((ws) => ws.role === 'ADMIN');
+  const adminWorkspaces = workspaces.filter((ws) => ['OWNER', 'MANAGER'].includes(ws.role));
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(adminWorkspaces[0]?.id ?? null);
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -341,7 +341,7 @@ export default function UserManagementPanel({ workspaces, onClose }) {
                       aria-label={`Role for ${m.username}`}
                     >
                       <option value="MEMBER">Member</option>
-                      <option value="ADMIN">Admin</option>
+                      <option value="MANAGER">Manager</option>
                     </select>
                   </td>
                   <td style={styles.td}>

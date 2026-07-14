@@ -43,7 +43,7 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual(
       expect.arrayContaining([
-        { userId: admin.userId, username: 'wsadmin0', role: 'ADMIN' },
+        { userId: admin.userId, username: 'wsadmin0', role: 'OWNER' },
         { userId: member.userId, username: 'wsmember0', role: 'MEMBER' },
       ]),
     );
@@ -70,7 +70,7 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
 });
 
 describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
-  test('an admin can promote a member to ADMIN', async () => {
+  test('an owner can promote a member to MANAGER', async () => {
     const admin = await signup(app, 'roleadmin0');
     const member = await signup(app, 'rolemember0');
     const workspaceId = await createWorkspace(admin);
@@ -79,28 +79,32 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
     const res = await request(app)
       .patch(`/api/workspaces/${workspaceId}/members/${member.userId}`)
       .set(authHeader(admin.accessToken))
-      .send({ role: 'ADMIN' });
+      .send({ role: 'MANAGER' });
     expect(res.status).toBe(200);
-    expect(res.body.role).toBe('ADMIN');
+    expect(res.body.role).toBe('MANAGER');
 
     const row = await db('audit_logs').where({ action_type: 'WORKSPACE_MEMBERSHIP_CHANGE' }).orderBy('id', 'desc').first();
-    expect(row.payload).toMatchObject({ action: 'role_change', targetUserId: member.userId, fromRole: 'MEMBER', toRole: 'ADMIN' });
+    expect(row.payload).toMatchObject({ action: 'role_change', targetUserId: member.userId, fromRole: 'MEMBER', toRole: 'MANAGER' });
   });
 
-  test('demoting one of two admins succeeds', async () => {
+  test('demoting a manager succeeds', async () => {
     const admin = await signup(app, 'roleadmin1');
-    const secondAdmin = await signup(app, 'rolemember1');
+    const manager = await signup(app, 'rolemember1');
     const workspaceId = await createWorkspace(admin);
-    await addMember(admin, workspaceId, 'rolemember1', 'ADMIN');
+    await addMember(admin, workspaceId, 'rolemember1', 'MANAGER');
 
     const res = await request(app)
-      .patch(`/api/workspaces/${workspaceId}/members/${secondAdmin.userId}`)
+      .patch(`/api/workspaces/${workspaceId}/members/${manager.userId}`)
       .set(authHeader(admin.accessToken))
       .send({ role: 'MEMBER' });
     expect(res.status).toBe(200);
   });
 
-  test('demoting the workspace\'s sole admin is rejected with 409', async () => {
+  // Supersedes the old "sole admin" last-admin-count guard: OWNER is now
+  // structurally unique per workspace (migration 0012) and never directly
+  // reassignable through this endpoint at all — the check is a flat
+  // equality, not a count, and applies even if other MANAGERs exist.
+  test("changing the workspace owner's own role directly is rejected with 409", async () => {
     const admin = await signup(app, 'roleadmin2');
     const workspaceId = await createWorkspace(admin);
 
@@ -135,7 +139,7 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
     const res = await request(app)
       .patch(`/api/workspaces/${workspaceA}/members/${memberB.userId}`)
       .set(authHeader(adminA.accessToken))
-      .send({ role: 'ADMIN' });
+      .send({ role: 'MANAGER' });
     expect(res.status).toBe(404);
   });
 
@@ -147,6 +151,19 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
       .patch(`/api/workspaces/${workspaceId}/members/${admin.userId}`)
       .set(authHeader(admin.accessToken))
       .send({ role: 'SUPERUSER' });
+    expect(res.status).toBe(400);
+  });
+
+  test('role: OWNER is rejected with 400 — not an assignable role value', async () => {
+    const admin = await signup(app, 'roleadmin5');
+    const member = await signup(app, 'rolemember5');
+    const workspaceId = await createWorkspace(admin);
+    await addMember(admin, workspaceId, 'rolemember5');
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/members/${member.userId}`)
+      .set(authHeader(admin.accessToken))
+      .send({ role: 'OWNER' });
     expect(res.status).toBe(400);
   });
 });
@@ -174,18 +191,18 @@ describe('POST /api/workspaces/:workspaceId/users', () => {
     expect(row.payload).toMatchObject({ username: 'newperson0', workspaceId, role: 'MEMBER' });
   });
 
-  test('an admin can create a new account directly as ADMIN', async () => {
+  test('an admin can create a new account directly as MANAGER', async () => {
     const admin = await signup(app, 'createadmin1');
     const workspaceId = await createWorkspace(admin);
 
     const res = await request(app)
       .post(`/api/workspaces/${workspaceId}/users`)
       .set(authHeader(admin.accessToken))
-      .send({ username: 'newperson1', email: 'newperson1@example.com', password: 'correct-horse-battery', role: 'ADMIN' });
+      .send({ username: 'newperson1', email: 'newperson1@example.com', password: 'correct-horse-battery', role: 'MANAGER' });
     expect(res.status).toBe(201);
 
     const membership = await db('workspace_members').where({ workspace_id: workspaceId, user_id: res.body.userId }).first();
-    expect(membership.system_role).toBe('ADMIN');
+    expect(membership.system_role).toBe('MANAGER');
   });
 
   test('a duplicate username or email 409s with the same generic message signup uses', async () => {
@@ -214,6 +231,17 @@ describe('POST /api/workspaces/:workspaceId/users', () => {
       .post(`/api/workspaces/${workspaceId}/users`)
       .set(authHeader(admin.accessToken))
       .send({ username: 'newperson3', email: 'newperson3@example.com', password: 'short' });
+    expect(res.status).toBe(400);
+  });
+
+  test('role: OWNER is rejected with 400 — not an assignable role value', async () => {
+    const admin = await signup(app, 'createadmin5');
+    const workspaceId = await createWorkspace(admin);
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/users`)
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'newperson5', email: 'newperson5@example.com', password: 'correct-horse-battery', role: 'OWNER' });
     expect(res.status).toBe(400);
   });
 

@@ -81,7 +81,7 @@ describe('GET /api/audit/logs', () => {
     expect(res.status).toBe(401);
   });
 
-  test('rejects a non-admin (workspace member but not ADMIN of any workspace)', async () => {
+  test('rejects a non-admin (workspace member but not OWNER/MANAGER of any workspace)', async () => {
     const admin = await signup(app, 'auditadmin0');
     const member = await signup(app, 'auditmember0');
     const workspaceId = await createWorkspace(admin);
@@ -91,7 +91,7 @@ describe('GET /api/audit/logs', () => {
     expect(res.status).toBe(403);
   });
 
-  test('an ADMIN sees existing audit events, newest first, and the access itself is audited', async () => {
+  test('an OWNER sees existing audit events, newest first, and the access itself is audited', async () => {
     const admin = await signup(app, 'auditadmin1');
     // signup + creating a workspace already produced AUTH_SIGNUP and
     // WORKSPACE_CREATED audit rows.
@@ -150,7 +150,7 @@ describe('POST /api/audit/verify', () => {
     expect(res.status).toBe(403);
   });
 
-  test('an ADMIN gets a verified result and it is audited as AUDIT_VERIFICATION_ATTEMPTED', async () => {
+  test('an OWNER gets a verified result and it is audited as AUDIT_VERIFICATION_ATTEMPTED', async () => {
     const admin = await signup(app, 'auditadmin4');
     await createWorkspace(admin);
 

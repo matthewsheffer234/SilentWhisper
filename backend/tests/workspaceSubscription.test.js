@@ -38,10 +38,10 @@ describe('POST /api/workspaces visibility', () => {
     expect(row.visibility).toBe('PRIVATE');
   });
 
-  test('persists an explicit PUBLIC visibility', async () => {
+  test('persists an explicit DISCOVERABLE visibility', async () => {
     const owner = await signup(app, 'vizowner1');
-    const ws = await createWorkspace(owner, { visibility: 'PUBLIC' });
-    expect(ws.visibility).toBe('PUBLIC');
+    const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
+    expect(ws.visibility).toBe('DISCOVERABLE');
   });
 
   test('rejects an invalid visibility value', async () => {
@@ -55,10 +55,10 @@ describe('POST /api/workspaces visibility', () => {
 });
 
 describe('GET /api/workspaces/discoverable', () => {
-  test('lists a PUBLIC workspace the caller is not a member of', async () => {
+  test('lists a DISCOVERABLE workspace the caller is not a member of', async () => {
     const owner = await signup(app, 'discowner0');
     const seeker = await signup(app, 'discseeker0');
-    const ws = await createWorkspace(owner, { visibility: 'PUBLIC' });
+    const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
     expect(res.status).toBe(200);
@@ -77,16 +77,16 @@ describe('GET /api/workspaces/discoverable', () => {
 
   test('excludes a workspace the caller already belongs to', async () => {
     const owner = await signup(app, 'discowner2');
-    const ws = await createWorkspace(owner, { visibility: 'PUBLIC' });
+    const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(owner.accessToken));
     expect(res.body.map((w) => w.id)).not.toContain(ws.id);
   });
 
-  test('excludes an archived PUBLIC workspace', async () => {
+  test('excludes an archived DISCOVERABLE workspace', async () => {
     const owner = await signup(app, 'discowner3');
     const seeker = await signup(app, 'discseeker3');
-    const ws = await createWorkspace(owner, { visibility: 'PUBLIC' });
+    const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
     await request(app).post(`/api/workspaces/${ws.id}/archive`).set(authHeader(owner.accessToken));
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
@@ -95,10 +95,10 @@ describe('GET /api/workspaces/discoverable', () => {
 });
 
 describe('POST /api/workspaces/:workspaceId/subscribe', () => {
-  test('succeeds on a PUBLIC workspace and is idempotent-safe', async () => {
+  test('succeeds on a DISCOVERABLE workspace and is idempotent-safe', async () => {
     const owner = await signup(app, 'subowner0');
     const joiner = await signup(app, 'subjoiner0');
-    const ws = await createWorkspace(owner, { visibility: 'PUBLIC' });
+    const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
 
     const first = await request(app).post(`/api/workspaces/${ws.id}/subscribe`).set(authHeader(joiner.accessToken));
     expect(first.status).toBe(200);
@@ -132,10 +132,10 @@ describe('POST /api/workspaces/:workspaceId/subscribe', () => {
     expect(res.status).toBe(404);
   });
 
-  test('an archived PUBLIC workspace 409s', async () => {
+  test('an archived DISCOVERABLE workspace 409s', async () => {
     const owner = await signup(app, 'subowner3');
     const joiner = await signup(app, 'subjoiner3');
-    const ws = await createWorkspace(owner, { visibility: 'PUBLIC' });
+    const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
     await request(app).post(`/api/workspaces/${ws.id}/archive`).set(authHeader(owner.accessToken));
 
     const res = await request(app).post(`/api/workspaces/${ws.id}/subscribe`).set(authHeader(joiner.accessToken));

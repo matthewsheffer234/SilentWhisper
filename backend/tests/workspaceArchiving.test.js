@@ -78,13 +78,13 @@ describe('POST /api/workspaces/:workspaceId/archive', () => {
     expect(Number(row.count)).toBe(1);
   });
 
-  test('an admin (who is not the owner) can archive', async () => {
+  test('a manager (who is not the owner) can archive', async () => {
     const owner = await signup(app, 'archowner1');
-    const admin = await signup(app, 'archadmin1');
+    const manager = await signup(app, 'archadmin1');
     const workspaceId = await createWorkspace(owner);
-    await addMember(owner, workspaceId, 'archadmin1', 'ADMIN');
+    await addMember(owner, workspaceId, 'archadmin1', 'MANAGER');
 
-    const res = await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(admin.accessToken));
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(manager.accessToken));
     expect(res.status).toBe(200);
   });
 
@@ -119,20 +119,24 @@ describe('POST /api/workspaces/:workspaceId/unarchive', () => {
     expect(res.body.archivedAt).toBeNull();
   });
 
-  test("the owner alone (not also an ADMIN) cannot unarchive — narrower than archive's owner-or-admin gate", async () => {
+  // Superseded by the enterprise-authz slice 1 role model (FEATURE_REQUEST.md
+  // entry 1): a workspace owner can no longer be demoted at all (migration
+  // 0012 guarantees exactly one OWNER, and PATCH .../members/:userId rejects
+  // changing the owner's own role — see adminUserManagement.test.js's
+  // "cannot change the owner's role directly" coverage), so the old scenario
+  // this test exercised ("an owner who isn't separately an ADMIN member")
+  // can no longer be constructed. Archive/unarchive now share one
+  // WORKSPACE_ARCHIVE gate (OWNER or MANAGER), tested below instead.
+  test('a manager (not the owner) can also unarchive', async () => {
     const owner = await signup(app, 'unarchowner1');
-    const secondAdmin = await signup(app, 'unarchadmin1');
+    const manager = await signup(app, 'unarchadmin1');
     const workspaceId = await createWorkspace(owner);
-    await addMember(owner, workspaceId, 'unarchadmin1', 'ADMIN');
-    // Demote the owner to MEMBER — a second admin exists, so this is allowed.
-    await request(app)
-      .patch(`/api/workspaces/${workspaceId}/members/${owner.userId}`)
-      .set(authHeader(secondAdmin.accessToken))
-      .send({ role: 'MEMBER' });
-    await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(secondAdmin.accessToken));
+    await addMember(owner, workspaceId, 'unarchadmin1', 'MANAGER');
+    await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
 
-    const res = await request(app).post(`/api/workspaces/${workspaceId}/unarchive`).set(authHeader(owner.accessToken));
-    expect(res.status).toBe(403);
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/unarchive`).set(authHeader(manager.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).toBeNull();
   });
 
   test('both directions are audited with the right action discriminator', async () => {

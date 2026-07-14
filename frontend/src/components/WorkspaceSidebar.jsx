@@ -229,7 +229,7 @@ function InlineCreateForm({ placeholder, onSubmit, extra, showVisibilityToggle }
       onSubmit={(e) => {
         e.preventDefault();
         if (!value.trim()) return;
-        onSubmit(value.trim(), showVisibilityToggle ? (isPublic ? 'PUBLIC' : 'PRIVATE') : undefined);
+        onSubmit(value.trim(), showVisibilityToggle ? (isPublic ? 'DISCOVERABLE' : 'PRIVATE') : undefined);
         setValue('');
         setIsPublic(false);
       }}
@@ -243,7 +243,7 @@ function InlineCreateForm({ placeholder, onSubmit, extra, showVisibilityToggle }
       {showVisibilityToggle && (
         <label style={styles.visibilityToggleLabel}>
           <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
-          Public
+          Discoverable
         </label>
       )}
       {extra}
@@ -287,7 +287,7 @@ function InviteMemberForm({ onSubmit }) {
         />
         <select style={styles.roleSelect} value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
           <option value="MEMBER">Member</option>
-          <option value="ADMIN">Admin</option>
+          <option value="MANAGER">Manager</option>
         </select>
         <button type="submit" style={styles.inviteSubmit}>Add</button>
       </form>
@@ -405,8 +405,8 @@ export default function WorkspaceSidebar({
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Workspaces</div>
         {activeWorkspaces.map((ws) => {
-          const canInvite = ws.role === 'ADMIN';
-          const canArchive = ws.ownerId === user?.id || ws.role === 'ADMIN';
+          const canInvite = ['OWNER', 'MANAGER'].includes(ws.role);
+          const canArchive = ws.ownerId === user?.id || ['OWNER', 'MANAGER'].includes(ws.role);
           const workspaceMenuItems = [
             ...(canInvite ? [{ key: 'invite', label: 'Invite member…', onSelect: () => setInviteFormWorkspaceId(ws.id) }] : []),
             ...(canArchive
@@ -465,7 +465,7 @@ export default function WorkspaceSidebar({
                 onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
               >
                 <span style={{ flex: 1 }}>{ws.name}</span>
-                {ws.role === 'ADMIN' && (
+                {['OWNER', 'MANAGER'].includes(ws.role) && (
                   <button
                     type="button"
                     style={styles.archivePill}

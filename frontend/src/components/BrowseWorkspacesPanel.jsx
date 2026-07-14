@@ -102,7 +102,7 @@ export default function BrowseWorkspacesPanel({ onClose, onSubscribed }) {
           <span style={styles.title}>Browse workspaces</span>
           <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close browse workspaces">×</button>
         </div>
-        <div style={styles.subtitle}>Public workspaces you're not already a member of.</div>
+        <div style={styles.subtitle}>Discoverable workspaces you're not already a member of.</div>
 
         {error && <div style={styles.error}>{error}</div>}
 

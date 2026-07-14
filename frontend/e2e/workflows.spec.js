@@ -511,7 +511,7 @@ test.describe('workspace invite', () => {
 test.describe('workspace discovery / self-service subscribe', () => {
   test('a public workspace is discoverable and joinable with no invite; a private one never appears', async ({ page }) => {
     const owner = await seedPlainUser('discoowner');
-    const publicWs = await createWorkspaceApi(owner.accessToken, `${owner.username} public ws`, 'PUBLIC');
+    const publicWs = await createWorkspaceApi(owner.accessToken, `${owner.username} public ws`, 'DISCOVERABLE');
     const privateWs = await createWorkspaceApi(owner.accessToken, `${owner.username} private ws`, 'PRIVATE');
     const seeker = await seedPlainUser('discoseeker');
 
@@ -527,7 +527,7 @@ test.describe('workspace discovery / self-service subscribe', () => {
     // discoverable list, matching BrowseWorkspacesPanel's local filter on a
     // successful subscribe. Scoped to this row's own aria-labeled button
     // (not a bare "Subscribe" text/global-emptiness check) since this
-    // stack has no per-test data reset — other PUBLIC workspaces from
+    // stack has no per-test data reset — other DISCOVERABLE workspaces from
     // earlier runs may still legitimately be listed, and subscribing here
     // also immediately adds/selects publicWs in the sidebar behind the
     // still-open modal (ChatShell's onSubscribed), so its name alone
@@ -722,7 +722,7 @@ test.describe('change password', () => {
 });
 
 test.describe('admin user management', () => {
-  test('an admin can add a user, promote them to admin, and reset their password — all through the panel', async ({ page }) => {
+  test('an admin can add a user, promote them to manager, and reset their password — all through the panel', async ({ page }) => {
     const admin = await seedUserWithChannel('usermgmt');
     await loginViaUi(page, admin.username, admin.password);
 
@@ -738,11 +738,11 @@ test.describe('admin user management', () => {
     await expect(page.locator(`text=Created ${newUsername}`)).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(`td:has-text("${newUsername}")`)).toBeVisible({ timeout: 10_000 });
 
-    await page.selectOption(`select[aria-label="Role for ${newUsername}"]`, 'ADMIN');
+    await page.selectOption(`select[aria-label="Role for ${newUsername}"]`, 'MANAGER');
     // The role <select> reflects the change immediately from local state;
     // give the PATCH a moment to land before proceeding to reset-password
     // against the same row.
-    await expect(page.locator(`select[aria-label="Role for ${newUsername}"]`)).toHaveValue('ADMIN', { timeout: 10_000 });
+    await expect(page.locator(`select[aria-label="Role for ${newUsername}"]`)).toHaveValue('MANAGER', { timeout: 10_000 });
 
     const memberRow = page.locator('tr', { has: page.locator(`td:has-text("${newUsername}")`) });
     await memberRow.locator('button:has-text("Reset password")').click();

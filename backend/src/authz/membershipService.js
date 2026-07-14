@@ -1,4 +1,5 @@
 import { ForbiddenError, NotFoundError, ConflictError } from '../errors.js';
+import { WORKSPACE_ROLE_PERMISSIONS } from './permissions.js';
 
 // The one shared authorization module used by every REST handler now, and
 // by WebSocket room-join/reconnect handling starting Phase 3 (PROJECT_PLAN.md
@@ -26,52 +27,67 @@ export async function requireWorkspaceMember(db, userId, workspaceId) {
   return role;
 }
 
-// Membership already established (existence known) -> insufficient privilege
-// is 403, not 404.
-export async function requireWorkspaceAdmin(db, userId, workspaceId) {
-  const role = await requireWorkspaceMember(db, userId, workspaceId);
-  if (role !== 'ADMIN') {
-    throw new ForbiddenError('Workspace admin privileges required');
-  }
+export async function isSystemAdminUser(db, userId) {
+  const row = await db('users').where({ id: userId }).first('is_system_admin');
+  return Boolean(row?.is_system_admin);
 }
 
-// `system_role` (ADMIN/MEMBER) is scoped per-workspace (Section 4) — there
-// is no separate global-admin table. The AI settings surface in Phase 4
-// ("admin-only settings surface" per Section 6) is a single, workspace-
-// agnostic set of app_settings rows, so it's gated on "is an ADMIN of at
-// least one workspace" rather than any particular workspace's admin, which
-// is the closest fit the existing schema supports without adding a new
-// global-role concept for one settings screen.
-export async function requireAnyWorkspaceAdmin(db, userId) {
-  const row = await db('workspace_members').where({ user_id: userId, system_role: 'ADMIN' }).first('workspace_id');
+// Permission-based replacement for requireWorkspaceAdmin/
+// requireWorkspaceOwnerOrAdmin (FEATURE_REQUEST.md entry 1, slice 1). A
+// system admin (users.is_system_admin, migration 0011) bypasses the
+// workspace's own role map entirely, but still gets a 404 for a nonexistent
+// workspace — the override grants privilege, not omniscience about resources
+// that don't exist. Otherwise: not-a-member -> 404 (requireWorkspaceMember's
+// existing existence-hiding), member-but-insufficient-role -> 403.
+//
+// This single function now covers what used to be three separate ones
+// (requireWorkspaceAdmin, requireAnyWorkspaceAdmin's workspace-scoped sibling
+// requireWorkspaceOwnerOrAdmin). One deliberate behavior change worth noting
+// here rather than leaving implicit: today's unarchive gate
+// (requireWorkspaceAdmin, ADMIN-only) excluded an owner who wasn't
+// separately an ADMIN member — an edge case the schema allowed. Migration
+// 0012 guarantees every owner now holds OWNER, and OWNER holds
+// WORKSPACE_ARCHIVE, so every owner can now always both archive and
+// unarchive their own workspace. This closes a pre-existing inconsistency;
+// it does not open up unarchive to anyone who couldn't already archive.
+export async function requireWorkspacePermission(db, userId, workspaceId, permission) {
+  if (await isSystemAdminUser(db, userId)) {
+    const workspace = await db('workspaces').where({ id: workspaceId }).first();
+    if (!workspace) {
+      throw new NotFoundError('Workspace not found');
+    }
+    return { role: null, viaSystemAdminOverride: true };
+  }
+
+  const role = await requireWorkspaceMember(db, userId, workspaceId);
+  const granted = (WORKSPACE_ROLE_PERMISSIONS[role] ?? []).includes(permission);
+  if (!granted) {
+    throw new ForbiddenError('Insufficient workspace privileges');
+  }
+  return { role, viaSystemAdminOverride: false };
+}
+
+// System-wide surfaces (AI settings, audit dashboard) have no per-workspace
+// scoping of their own, so — same reasoning the old requireAnyWorkspaceAdmin
+// comment gave — access is granted to a system admin OR anyone who holds
+// OWNER/MANAGER in at least one workspace. The OR-fallback is a deliberate,
+// temporary widening: tightening this to is_system_admin-only would lock out
+// every current workspace admin immediately, since no is_system_admin
+// account is provisioned by this slice (see scripts/grant-system-admin.mjs).
+// Remove the fallback only once account provisioning (a later slice) makes
+// that safe — not part of this slice's scope.
+export async function requireSystemPermission(db, userId, _permission) {
+  if (await isSystemAdminUser(db, userId)) {
+    return { viaSystemAdminOverride: true };
+  }
+  const row = await db('workspace_members')
+    .where({ user_id: userId })
+    .whereIn('system_role', ['OWNER', 'MANAGER'])
+    .first('workspace_id');
   if (!row) {
     throw new ForbiddenError('Workspace admin privileges required');
   }
-}
-
-// FEATURE_REQUEST.md, workspace archive/unarchive: archiving is authorized
-// if the caller is the workspace's owner_id *or* holds system_role=ADMIN —
-// broader than requireWorkspaceAdmin alone, since an owner who isn't
-// separately an ADMIN member (an edge case the schema otherwise allows)
-// should still be able to archive their own workspace. Existence-hiding
-// applies the same way as requireWorkspaceMember: a caller who is neither
-// the owner nor any kind of member gets 404, not 403.
-export async function requireWorkspaceOwnerOrAdmin(db, userId, workspaceId) {
-  const workspace = await db('workspaces').where({ id: workspaceId }).first();
-  if (!workspace) {
-    throw new NotFoundError('Workspace not found');
-  }
-  if (workspace.owner_id === userId) {
-    return workspace;
-  }
-  const role = await getWorkspaceRole(db, userId, workspaceId);
-  if (!role) {
-    throw new NotFoundError('Workspace not found');
-  }
-  if (role !== 'ADMIN') {
-    throw new ForbiddenError('Workspace owner or admin privileges required');
-  }
-  return workspace;
+  return { viaSystemAdminOverride: false };
 }
 
 // Centralized so the "an archived workspace can't be written to" rule is

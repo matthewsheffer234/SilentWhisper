@@ -308,11 +308,11 @@ export default function ChatShell() {
 
   const selectedChannel = channels.find((c) => c.id === selectedChannelId) ?? null;
   // The AI settings surface is admin-only (PROJECT_PLAN.md Section 6); the
-  // backend gates it on "ADMIN in at least one workspace" (Section 8, Phase
-  // 4 — see requireAnyWorkspaceAdmin's doc comment), so the entry point
-  // mirrors that same rule rather than the currently-selected workspace's
-  // role.
-  const canManageAi = workspaces.some((ws) => ws.role === 'ADMIN');
+  // backend gates it on "system admin, or OWNER/MANAGER in at least one
+  // workspace" (see requireSystemPermission's doc comment), so the entry
+  // point mirrors that same rule rather than the currently-selected
+  // workspace's role.
+  const canManageAi = workspaces.some((ws) => ['OWNER', 'MANAGER'].includes(ws.role));
   const isSelectedWorkspaceArchived = Boolean(workspaces.find((ws) => ws.id === selectedWorkspaceId)?.archivedAt);
 
   return (

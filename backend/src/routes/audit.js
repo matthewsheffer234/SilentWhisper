@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { requireAnyWorkspaceAdmin } from '../authz/membershipService.js';
+import { requireSystemPermission } from '../authz/membershipService.js';
+import { PERMISSIONS } from '../authz/permissions.js';
 import { appendAuditEvent, verifyAuditChain } from '../audit/auditService.js';
 import { assertBoundedInt } from '../validation.js';
 
@@ -19,12 +20,13 @@ const MAX_LIMIT = 200;
 // an audited action." — every page of the dashboard a caller loads inserts
 // its own `AUDIT_DASHBOARD_ACCESSED` row, not just a one-time "dashboard
 // opened" event, since each call is a fresh read of potentially sensitive
-// metadata (e.g. who was added to a private channel). "Admin" here is the
-// same "ADMIN in at least one workspace" gate Phase 4 established for the
-// AI settings surface — see requireAnyWorkspaceAdmin's doc comment.
+// metadata (e.g. who was added to a private channel). Gated on AUDIT_VIEW —
+// the same system-admin / OWNER-or-MANAGER-of-any-workspace rule Phase 4
+// established for the AI settings surface — see requireSystemPermission's
+// doc comment.
 auditRouter.get('/audit/logs', async (req, res, next) => {
   try {
-    await requireAnyWorkspaceAdmin(db, req.user.id);
+    const { viaSystemAdminOverride } = await requireSystemPermission(db, req.user.id, PERMISSIONS.AUDIT_VIEW);
 
     const limit =
       req.query.limit !== undefined ? assertBoundedInt(req.query.limit, { min: 1, max: MAX_LIMIT }, 'limit') : DEFAULT_LIMIT;
@@ -50,7 +52,7 @@ auditRouter.get('/audit/logs', async (req, res, next) => {
       actorId: req.user.id,
       actorIp: req.ip,
       actionType: 'AUDIT_DASHBOARD_ACCESSED',
-      payload: { limit, beforeId, rowsReturned: rows.length },
+      payload: { limit, beforeId, rowsReturned: rows.length, viaSystemAdminOverride },
     });
 
     res.json(
@@ -77,7 +79,7 @@ auditRouter.get('/audit/logs', async (req, res, next) => {
 // verification attempts").
 auditRouter.post('/audit/verify', async (req, res, next) => {
   try {
-    await requireAnyWorkspaceAdmin(db, req.user.id);
+    const { viaSystemAdminOverride } = await requireSystemPermission(db, req.user.id, PERMISSIONS.AUDIT_VIEW);
 
     const result = await verifyAuditChain(db);
 
@@ -85,7 +87,12 @@ auditRouter.post('/audit/verify', async (req, res, next) => {
       actorId: req.user.id,
       actorIp: req.ip,
       actionType: 'AUDIT_VERIFICATION_ATTEMPTED',
-      payload: { verified: result.verified, rowsChecked: result.rowsChecked, firstFailure: result.firstFailure ?? null },
+      payload: {
+        verified: result.verified,
+        rowsChecked: result.rowsChecked,
+        firstFailure: result.firstFailure ?? null,
+        viaSystemAdminOverride,
+      },
     });
 
     res.json(result);

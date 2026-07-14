@@ -60,8 +60,12 @@ authRouter.post('/signup', signupIpLimiter, async (req, res, next) => {
     }
 
     const passwordHash = await bcrypt.hash(password, config.auth.bcryptSaltRounds);
+    // display_name (migration 0011, FEATURE_REQUEST.md entry 1) defaults to
+    // username at creation time, same as the migration's own backfill for
+    // pre-existing accounts — independently editable later, but nothing in
+    // slice 1 exposes an edit path yet.
     const [user] = await db('users')
-      .insert({ username, email, password_hash: passwordHash })
+      .insert({ username, email, password_hash: passwordHash, display_name: username })
       .returning(['id', 'username', 'email']);
 
     const accessToken = signAccessToken({ userId: user.id, username: user.username });

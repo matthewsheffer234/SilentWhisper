@@ -55,7 +55,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
     expect(res.status).toBe(401);
   });
 
-  test('rejects a workspace member who is not an ADMIN of any workspace', async () => {
+  test('rejects a workspace member who is not OWNER/MANAGER of any workspace', async () => {
     const admin = await signup(app, 'aiadmin0');
     const member = await signup(app, 'aimember0');
     const workspaceId = await createWorkspace(admin);
@@ -65,7 +65,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
     expect(res.status).toBe(403);
   });
 
-  test('allows a workspace ADMIN to read settings, including health status', async () => {
+  test('allows a workspace OWNER to read settings, including health status', async () => {
     const admin = await signup(app, 'aiadmin1');
     await createWorkspace(admin);
 
@@ -76,7 +76,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
     expect(res.body.apiKey).toBeUndefined();
   });
 
-  test('a workspace ADMIN can update non-secret settings, and it is audited', async () => {
+  test('a workspace OWNER can update non-secret settings, and it is audited', async () => {
     const admin = await signup(app, 'aiadmin2');
     await createWorkspace(admin);
 
