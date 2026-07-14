@@ -20,17 +20,23 @@ const adminDb = knexFactory({
 });
 
 // Deletion order respects every FK that isn't ON DELETE CASCADE (e.g.
-// workspaces.owner_id -> users, messages.user_id -> users, and now
-// organization_members.user_id -> users) regardless of which ones happen to
-// cascade — safe either way. organization_members has no route that writes
-// to it in this slice, but it does have a real FK to users, so it must still
-// be cleared before users can be deleted. organizations itself (just the
-// one seeded "Default Organization" row) is never cleared — nothing ever
-// references a user from it, so it isn't in anyone's way.
+// workspaces.owner_id -> users, messages.user_id -> users,
+// organization_members.user_id -> users, and now invitations.workspace_id/
+// organization_id/invited_by -> workspaces/organizations/users) regardless
+// of which ones happen to cascade — safe either way. invitations is cleared
+// before workspaces/organizations/users for exactly that reason (no cascade
+// specified on any of its three FKs). organizations itself is never
+// cleared, including the extra rows organizations.test.js's creation tests
+// add beyond the one seeded "Default Organization" — nothing asserts an
+// exact global count, and the earliest-created row must never be deleted
+// anyway (POST /auth/signup and invitation redemption both enroll into
+// whichever org has the earliest created_at, so deleting it would break
+// every subsequent signup in the same test run).
 export async function resetDb(db) {
   await adminDb('messages').del();
   await db('channel_members').del();
   await adminDb('channels').del();
+  await db('invitations').del();
   await db('workspace_members').del();
   await adminDb('workspaces').del();
   await db('refresh_tokens').del();

@@ -91,6 +91,19 @@ export const adminPasswordResetLimiter = rateLimit({
   handler: jsonRateLimitHandler,
 });
 
+// Invitation creation (slice 2, FEATURE_REQUEST.md entry 1): same shape and
+// ceiling as adminUserCreateLimiter — the same class of action (provisioning
+// access for another person), keyed by the inviting actor rather than IP.
+export const invitationCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `invitation-create:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});
+
 // FEATURE_REQUEST.md's @mention autocomplete entry: the first endpoint in
 // this app designed to be hit on every keystroke rather than once per user
 // action — per-user (not per-IP, like llm/aiRateLimit.js's

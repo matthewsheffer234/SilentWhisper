@@ -1,0 +1,254 @@
+import { Router } from 'express';
+import { db } from '../db.js';
+import { requireAuth } from '../auth/requireAuth.js';
+import { appendAuditEvent } from '../audit/auditService.js';
+import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, ASSIGNABLE_ORG_ROLES } from '../validation.js';
+import { invitationCreateLimiter } from '../auth/rateLimit.js';
+import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
+import { requireOrgPermission, isSystemAdminUser } from '../authz/membershipService.js';
+import { PERMISSIONS } from '../authz/permissions.js';
+import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from '../errors.js';
+
+export const organizationsRouter = Router();
+
+organizationsRouter.use(requireAuth);
+
+// System-admin only — plain isSystemAdminUser check, deliberately not
+// requireSystemPermission (FEATURE_REQUEST.md entry 1, slice 2):
+// requireSystemPermission's OR-fallback (any workspace OWNER/MANAGER) exists
+// narrowly to avoid locking out existing workspace admins from AI-settings/
+// audit during slice 1's transition. Extending that fallback to "any
+// workspace admin can create an organization" would be a real, unintended
+// privilege widening, not a continuation of its purpose.
+organizationsRouter.post('/', async (req, res, next) => {
+  try {
+    if (!(await isSystemAdminUser(db, req.user.id))) {
+      throw new ForbiddenError('System admin privileges required');
+    }
+    const name = assertName(req.body?.name, 'organization name');
+
+    // Auto-enrolls the creator as ORG_ADMIN, transactionally — an org with
+    // zero members is a dead end nobody could ever manage without going
+    // back to a system admin.
+    const org = await db.transaction(async (trx) => {
+      const [o] = await trx('organizations').insert({ name }).returning(['id', 'name', 'created_at']);
+      await trx('organization_members').insert({ organization_id: o.id, user_id: req.user.id, org_role: 'ORG_ADMIN' });
+      return o;
+    });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ORGANIZATION_CREATED',
+      targetResource: org.id,
+      payload: { name: org.name },
+    });
+
+    res.status(201).json({ id: org.id, name: org.name, role: 'ORG_ADMIN' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Caller's own orgs, or every org if system admin — mirrors GET /workspaces'
+// join-and-shape pattern. role: null in the system-admin-sees-all branch is
+// a deliberate response-shape asymmetry (no per-row membership guaranteed),
+// same as GET /workspaces/discoverable's existing precedent of omitting
+// `role` when the caller has none yet.
+organizationsRouter.get('/', async (req, res, next) => {
+  try {
+    const isAdmin = await isSystemAdminUser(db, req.user.id);
+    const rows = isAdmin
+      ? await db('organizations').select('id', 'name', 'created_at').orderBy('created_at', 'asc')
+      : await db('organizations as o')
+          .join('organization_members as om', function joinMembers() {
+            this.on('om.organization_id', '=', 'o.id').andOn('om.user_id', '=', db.raw('?', [req.user.id]));
+          })
+          .select('o.id', 'o.name', 'o.created_at', 'om.org_role')
+          .orderBy('o.created_at', 'asc');
+
+    res.json(rows.map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, role: r.org_role ?? null })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+organizationsRouter.get('/:orgId/members', async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+
+    const rows = await db('organization_members as om')
+      .join('users', 'users.id', 'om.user_id')
+      .where('om.organization_id', orgId)
+      .select('users.id', 'users.username', 'om.org_role')
+      .orderBy('users.username', 'asc');
+
+    res.json(rows.map((r) => ({ userId: r.id, username: r.username, role: r.org_role })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Direct-add of an *already-existing* user by username — mirrors
+// POST /:workspaceId/members exactly. Invitations (below) are for people
+// who don't have an account yet.
+organizationsRouter.post('/:orgId/members', async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+
+    const username = assertUsername(req.body?.username);
+    const role = req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_ORG_ROLES, 'role') : 'ORG_MEMBER';
+
+    const targetUser = await db('users').where({ username }).first('id', 'username');
+    if (!targetUser) {
+      throw new ValidationError('No user with that username exists');
+    }
+
+    const existingRole = await db('organization_members')
+      .where({ organization_id: orgId, user_id: targetUser.id })
+      .first('org_role');
+    if (existingRole) {
+      throw new ConflictError('User is already a member of this organization');
+    }
+
+    await db('organization_members').insert({ organization_id: orgId, user_id: targetUser.id, org_role: role });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ORGANIZATION_MEMBERSHIP_CHANGE',
+      targetResource: orgId,
+      payload: { action: 'add', addedUserId: targetUser.id, addedUsername: targetUser.username, role },
+    });
+
+    res.status(201).json({ userId: targetUser.id, username: targetUser.username, role });
+  } catch (err) {
+    next(err);
+  }
+});
+
+organizationsRouter.patch('/:orgId/members/:userId', async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    const targetUserId = assertUuid(req.params.userId, 'userId');
+    await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+
+    const role = assertEnum(req.body?.role, ASSIGNABLE_ORG_ROLES, 'role');
+
+    const targetRow = await db('organization_members as om')
+      .join('users', 'users.id', 'om.user_id')
+      .where({ 'om.organization_id': orgId, 'om.user_id': targetUserId })
+      .first('users.username', 'om.org_role');
+    if (!targetRow) {
+      throw new NotFoundError('Organization member not found');
+    }
+
+    // No "last admin" guard here, unlike workspaces' last-owner guard —
+    // deliberate (FEATURE_REQUEST.md entry 1's locked-in decision):
+    // organizations have no owner-uniqueness invariant, so an org can end up
+    // with zero ORG_ADMIN members. The system-admin override remains the
+    // escape hatch (it checks org existence, not org-admin existence).
+    await db('organization_members')
+      .where({ organization_id: orgId, user_id: targetUserId })
+      .update({ org_role: role });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ORGANIZATION_MEMBERSHIP_CHANGE',
+      targetResource: orgId,
+      payload: {
+        action: 'role_change',
+        targetUserId,
+        targetUsername: targetRow.username,
+        fromRole: targetRow.org_role,
+        toRole: role,
+      },
+    });
+
+    res.json({ userId: targetUserId, username: targetRow.username, role });
+  } catch (err) {
+    next(err);
+  }
+});
+
+organizationsRouter.delete('/:orgId/members/:userId', async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    const targetUserId = assertUuid(req.params.userId, 'userId');
+    await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+
+    const targetRow = await db('organization_members as om')
+      .join('users', 'users.id', 'om.user_id')
+      .where({ 'om.organization_id': orgId, 'om.user_id': targetUserId })
+      .first('users.username');
+    if (!targetRow) {
+      throw new NotFoundError('Organization member not found');
+    }
+
+    // Deliberately no cascade — org and workspace membership are
+    // independent (FEATURE_REQUEST.md entry 1's locked-in decision).
+    // Removing someone from an org does not touch their workspace_members
+    // rows, including any workspace under this org.
+    await db('organization_members').where({ organization_id: orgId, user_id: targetUserId }).del();
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ORGANIZATION_MEMBERSHIP_CHANGE',
+      targetResource: orgId,
+      payload: { action: 'remove', targetUserId, targetUsername: targetRow.username },
+    });
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Raw token returned once — no email infra exists in this project, same
+// out-of-band precedent as admin-set passwords (workspaces.js's
+// POST /:workspaceId/users).
+organizationsRouter.post('/:orgId/invitations', invitationCreateLimiter, async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_INVITE);
+
+    const email = assertEmail(req.body?.email);
+    const invitedRole =
+      req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_ORG_ROLES, 'role') : 'ORG_MEMBER';
+
+    const rawToken = generateInvitationToken();
+    const [invitation] = await db('invitations')
+      .insert({
+        scope_type: 'ORGANIZATION',
+        organization_id: orgId,
+        email,
+        invited_role: invitedRole,
+        invited_by: req.user.id,
+        token_hash: hashInvitationToken(rawToken),
+        expires_at: new Date(Date.now() + INVITATION_TOKEN_TTL_MS),
+      })
+      .returning(['id', 'email', 'invited_role', 'expires_at']);
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'INVITATION_CREATED',
+      targetResource: invitation.id,
+      payload: { scopeType: 'ORGANIZATION', organizationId: orgId, email, invitedRole },
+    });
+
+    res.status(201).json({
+      id: invitation.id,
+      email: invitation.email,
+      role: invitation.invited_role,
+      expiresAt: invitation.expires_at,
+      token: rawToken,
+    });
+  } catch (err) {
+    next(err);
+  }
+});

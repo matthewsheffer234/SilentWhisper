@@ -7,18 +7,50 @@ import { appendAuditEvent } from '../audit/auditService.js';
 import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, CREATABLE_CHANNEL_TYPES, ASSIGNABLE_WORKSPACE_ROLES, WORKSPACE_VISIBILITY } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
-import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateLimit.js';
+import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
+import { adminUserCreateLimiter, adminPasswordResetLimiter, invitationCreateLimiter } from '../auth/rateLimit.js';
 import {
   requireWorkspaceMember,
   requireWorkspacePermission,
   requireWorkspaceNotArchived,
   requireChannelMember,
+  requireOrgMember,
   getWorkspaceRole,
   getChannel,
   isChannelMember,
 } from '../authz/membershipService.js';
 import { PERMISSIONS } from '../authz/permissions.js';
 import { ValidationError, ConflictError, NotFoundError } from '../errors.js';
+
+// Resolves which organization a new workspace attaches to, or which one
+// GET /discoverable is scoped to (slice 2, FEATURE_REQUEST.md entry 1):
+// an explicit organizationId is validated via the caller's membership
+// (404, not 403, for a non-member/nonexistent org — same existence-hiding
+// convention as everywhere else); when omitted, defaults to the caller's
+// sole org membership. Kept local to this file rather than promoted into
+// membershipService.js — it's a workspace-route-specific convenience
+// ("caller's sole org"), not a general authorization primitive the way
+// requireOrgMember is (organizations.js's routes always take an explicit
+// :orgId path param and never need this resolution).
+async function resolveCallerOrganization(db, userId, requestedOrgId) {
+  if (requestedOrgId) {
+    await requireOrgMember(db, userId, requestedOrgId);
+    return requestedOrgId;
+  }
+
+  const memberships = await db('organization_members').where({ user_id: userId }).select('organization_id');
+  if (memberships.length === 0) {
+    // Should be unreachable post-slice-2 — signup and invitation redemption
+    // both now guarantee >=1 organization_members row. Kept as a defensive
+    // 400 rather than crashing below, in case an account somehow reached
+    // this without one.
+    throw new ValidationError('You do not belong to any organization; specify organizationId explicitly');
+  }
+  if (memberships.length > 1) {
+    throw new ValidationError('You belong to more than one organization; specify organizationId explicitly');
+  }
+  return memberships[0].organization_id;
+}
 
 export const workspacesRouter = Router();
 
@@ -29,15 +61,16 @@ workspacesRouter.post('/', async (req, res, next) => {
     const name = assertName(req.body?.name, 'workspace name');
     const visibility =
       req.body?.visibility !== undefined ? assertEnum(req.body.visibility, WORKSPACE_VISIBILITY, 'visibility') : 'PRIVATE';
+    const requestedOrgId = req.body?.organizationId !== undefined ? assertUuid(req.body.organizationId, 'organizationId') : null;
 
     const workspace = await db.transaction(async (trx) => {
-      // Only one organization exists in this slice (the seeded "Default
-      // Organization" from migration 0012) — every new workspace attaches to
-      // it for now. Real org selection/membership is a later slice's
-      // "Workspace routes" work (FEATURE_REQUEST.md entry 1).
-      const defaultOrg = await trx('organizations').first('id');
+      // Org-aware as of slice 2 (FEATURE_REQUEST.md entry 1): defaults to
+      // the caller's sole org membership when organizationId is omitted —
+      // a no-op until a second organization actually exists, since every
+      // account today has exactly one org membership.
+      const organizationId = await resolveCallerOrganization(trx, req.user.id, requestedOrgId);
       const [ws] = await trx('workspaces')
-        .insert({ name, owner_id: req.user.id, visibility, organization_id: defaultOrg.id })
+        .insert({ name, owner_id: req.user.id, visibility, organization_id: organizationId })
         .returning(['id', 'name', 'owner_id', 'visibility', 'created_at']);
       await trx('workspace_members').insert({
         workspace_id: ws.id,
@@ -85,17 +118,25 @@ workspacesRouter.get('/', async (req, res, next) => {
 
 // Self-service workspace subscription (FEATURE_REQUEST.md): DISCOVERABLE
 // (renamed from PUBLIC, entry 1's enterprise-authz slice 1), non-archived
-// workspaces the caller isn't already a member of. Excludes archived
-// DISCOVERABLE workspaces too, not just at subscribe-time — otherwise this
-// list could show a workspace whose own "Subscribe" button 409s
-// immediately, a dead-end result "discoverable" shouldn't produce. No
+// workspaces the caller isn't already a member of, scoped to one
+// organization (slice 2 — organizationId optional, same
+// resolveCallerOrganization default-to-sole-org logic as POST / above; a
+// no-op filter until a second org's workspace actually exists). Excludes
+// archived DISCOVERABLE workspaces too, not just at subscribe-time —
+// otherwise this list could show a workspace whose own "Subscribe" button
+// 409s immediately, a dead-end result "discoverable" shouldn't produce. No
 // `role` in the response shape (unlike GET / above) since the caller has
 // none yet.
 workspacesRouter.get('/discoverable', async (req, res, next) => {
   try {
+    const requestedOrgId =
+      req.query.organizationId !== undefined ? assertUuid(req.query.organizationId, 'organizationId') : null;
+    const organizationId = await resolveCallerOrganization(db, req.user.id, requestedOrgId);
+
     const rows = await db('workspaces as w')
       .where('w.visibility', 'DISCOVERABLE')
       .whereNull('w.archived_at')
+      .where('w.organization_id', organizationId)
       .whereNotExists(function excludeExistingMembers() {
         this.select(1)
           .from('workspace_members as wm')
@@ -253,6 +294,55 @@ workspacesRouter.post('/:workspaceId/members', async (req, res, next) => {
     });
 
     res.status(201).json({ userId: targetUser.id, username: targetUser.username, role });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Invitations (slice 2, FEATURE_REQUEST.md entry 1): for people who don't
+// have an account yet — the invite-by-username route above stays the path
+// for adding an *existing* user. Gated on WORKSPACE_MANAGE_MEMBERS, not a
+// separate WORKSPACE_INVITE permission (see permissions.js's comment).
+// Raw token returned once — no email infra exists in this project, same
+// out-of-band precedent as admin-set passwords.
+workspacesRouter.post('/:workspaceId/invitations', invitationCreateLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
+    await requireWorkspaceNotArchived(db, workspaceId);
+
+    const email = assertEmail(req.body?.email);
+    const invitedRole =
+      req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_WORKSPACE_ROLES, 'role') : 'MEMBER';
+
+    const rawToken = generateInvitationToken();
+    const [invitation] = await db('invitations')
+      .insert({
+        scope_type: 'WORKSPACE',
+        workspace_id: workspaceId,
+        email,
+        invited_role: invitedRole,
+        invited_by: req.user.id,
+        token_hash: hashInvitationToken(rawToken),
+        expires_at: new Date(Date.now() + INVITATION_TOKEN_TTL_MS),
+      })
+      .returning(['id', 'email', 'invited_role', 'expires_at']);
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'INVITATION_CREATED',
+      targetResource: invitation.id,
+      payload: { scopeType: 'WORKSPACE', workspaceId, email, invitedRole },
+    });
+
+    res.status(201).json({
+      id: invitation.id,
+      email: invitation.email,
+      role: invitation.invited_role,
+      expiresAt: invitation.expires_at,
+      token: rawToken,
+    });
   } catch (err) {
     next(err);
   }

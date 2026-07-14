@@ -17,6 +17,16 @@ export const CREATABLE_CHANNEL_TYPES = ['PUBLIC', 'PRIVATE'];
 // transfer-ownership endpoint yet (FEATURE_REQUEST.md entry 1, slice 1).
 export const ASSIGNABLE_WORKSPACE_ROLES = ['MANAGER', 'MEMBER'];
 
+// Org membership roles a caller may assign via org invitation/direct-add/
+// role-change endpoints (slice 2). Unlike ASSIGNABLE_WORKSPACE_ROLES,
+// ORG_ADMIN is assignable here — organizations have no OWNER-equivalent
+// uniqueness invariant (FEATURE_REQUEST.md entry 1's locked-in decision:
+// "no 'every org needs ≥1 admin' invariant is enforced"), so there's no
+// role to structurally exclude the way OWNER is excluded above.
+export const ASSIGNABLE_ORG_ROLES = ['ORG_ADMIN', 'ORG_MEMBER'];
+
+export const INVITATION_SCOPE_TYPES = ['ORGANIZATION', 'WORKSPACE'];
+
 // Self-service workspace subscription (FEATURE_REQUEST.md) — same values
 // and spirit as CHANNEL_TYPES' PUBLIC/PRIVATE distinction, one level up.
 // DISCOVERABLE (renamed from PUBLIC in migration 0012, FEATURE_REQUEST.md

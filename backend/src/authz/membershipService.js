@@ -1,5 +1,5 @@
 import { ForbiddenError, NotFoundError, ConflictError } from '../errors.js';
-import { WORKSPACE_ROLE_PERMISSIONS } from './permissions.js';
+import { WORKSPACE_ROLE_PERMISSIONS, ORG_ROLE_PERMISSIONS } from './permissions.js';
 
 // The one shared authorization module used by every REST handler now, and
 // by WebSocket room-join/reconnect handling starting Phase 3 (PROJECT_PLAN.md
@@ -88,6 +88,43 @@ export async function requireSystemPermission(db, userId, _permission) {
     throw new ForbiddenError('Workspace admin privileges required');
   }
   return { viaSystemAdminOverride: false };
+}
+
+export async function getOrgRole(db, userId, organizationId) {
+  const row = await db('organization_members')
+    .where({ organization_id: organizationId, user_id: userId })
+    .first('org_role');
+  return row ? row.org_role : null;
+}
+
+// Not-a-member -> 404, identical reasoning to requireWorkspaceMember.
+export async function requireOrgMember(db, userId, organizationId) {
+  const role = await getOrgRole(db, userId, organizationId);
+  if (!role) {
+    throw new NotFoundError('Organization not found');
+  }
+  return role;
+}
+
+// Mirrors requireWorkspacePermission exactly: a system admin bypasses the
+// org's own role map entirely, but still gets a 404 for a nonexistent org
+// (the override grants privilege, not omniscience about resources that
+// don't exist) — not-a-member -> 404, member-but-insufficient-role -> 403.
+export async function requireOrgPermission(db, userId, organizationId, permission) {
+  if (await isSystemAdminUser(db, userId)) {
+    const org = await db('organizations').where({ id: organizationId }).first();
+    if (!org) {
+      throw new NotFoundError('Organization not found');
+    }
+    return { role: null, viaSystemAdminOverride: true };
+  }
+
+  const role = await requireOrgMember(db, userId, organizationId);
+  const granted = (ORG_ROLE_PERMISSIONS[role] ?? []).includes(permission);
+  if (!granted) {
+    throw new ForbiddenError('Insufficient organization privileges');
+  }
+  return { role, viaSystemAdminOverride: false };
 }
 
 // Centralized so the "an archived workspace can't be written to" rule is

@@ -38,6 +38,23 @@ describe('POST /api/auth/signup', () => {
     expect(row).toBeTruthy();
   });
 
+  // FEATURE_REQUEST.md entry 1, slice 2: signup stays open, so every fresh
+  // account still needs an organization_members row for POST /workspaces'
+  // org-aware default-to-sole-org logic to have something to resolve
+  // against.
+  test('enrolls the new user into the earliest-created organization as ORG_MEMBER', async () => {
+    const earliestOrg = await db('organizations').orderBy('created_at', 'asc').first('id');
+
+    const res = await request(app)
+      .post('/api/auth/signup')
+      .send({ username: 'enrollee', email: 'enrollee@example.com', password: 'correct-horse-battery' });
+    expect(res.status).toBe(201);
+
+    const memberships = await db('organization_members').where({ user_id: res.body.user.id });
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0]).toMatchObject({ organization_id: earliestOrg.id, org_role: 'ORG_MEMBER' });
+  });
+
   test('rejects a password shorter than the minimum length', async () => {
     const res = await request(app)
       .post('/api/auth/signup')

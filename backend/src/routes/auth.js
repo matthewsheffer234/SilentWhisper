@@ -30,7 +30,12 @@ const REFRESH_COOKIE_OPTIONS = {
   path: '/api/auth',
 };
 
-function setRefreshCookie(res, rawToken) {
+// Exported (slice 2, FEATURE_REQUEST.md entry 1): invitations.js's
+// redemption route logs a newly-created account in exactly the same way
+// signup does, and needs to set the identical cookie — re-exporting this
+// one function keeps the cookie shape (httpOnly/secure/sameSite/path)
+// defined in exactly one place rather than risking a second, driftable copy.
+export function setRefreshCookie(res, rawToken) {
   res.cookie(REFRESH_COOKIE_NAME, rawToken, {
     ...REFRESH_COOKIE_OPTIONS,
     maxAge: config.auth.refreshTokenTtlMs,
@@ -64,9 +69,23 @@ authRouter.post('/signup', signupIpLimiter, async (req, res, next) => {
     // username at creation time, same as the migration's own backfill for
     // pre-existing accounts — independently editable later, but nothing in
     // slice 1 exposes an edit path yet.
-    const [user] = await db('users')
-      .insert({ username, email, password_hash: passwordHash, display_name: username })
-      .returning(['id', 'username', 'email']);
+    //
+    // Transactional as of slice 2: self-service signup stays open (invitations
+    // are an *additional* account-creation path, not a replacement), so every
+    // fresh signup still needs an organization_members row — otherwise
+    // POST /workspaces' org-aware default-to-sole-org logic has nothing to
+    // resolve against and a brand-new user could never create a workspace.
+    // Enrolled into the earliest-created organization (deterministic,
+    // matches migration 0012's own backfill rule for pre-existing users), as
+    // a plain ORG_MEMBER.
+    const user = await db.transaction(async (trx) => {
+      const [u] = await trx('users')
+        .insert({ username, email, password_hash: passwordHash, display_name: username })
+        .returning(['id', 'username', 'email']);
+      const defaultOrg = await trx('organizations').orderBy('created_at', 'asc').first('id');
+      await trx('organization_members').insert({ organization_id: defaultOrg.id, user_id: u.id, org_role: 'ORG_MEMBER' });
+      return u;
+    });
 
     const accessToken = signAccessToken({ userId: user.id, username: user.username });
     const refreshToken = await issueRefreshToken(db, user.id);

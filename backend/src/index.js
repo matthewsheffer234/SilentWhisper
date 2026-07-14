@@ -7,6 +7,8 @@ import { securityHeaders, corsMiddleware } from './middleware/security.js';
 import { errorHandler } from './errors.js';
 import { authRouter } from './routes/auth.js';
 import { workspacesRouter } from './routes/workspaces.js';
+import { organizationsRouter } from './routes/organizations.js';
+import { invitationsRouter } from './routes/invitations.js';
 import { directMessagesRouter, groupDirectMessagesRouter } from './routes/directMessages.js';
 import { messagesRouter } from './routes/messages.js';
 import { aiRouter } from './routes/ai.js';
@@ -45,6 +47,8 @@ app.get('/health', async (_req, res) => {
 
 app.use('/api/auth', authRouter);
 app.use('/api/workspaces', workspacesRouter);
+app.use('/api/organizations', organizationsRouter);
+app.use('/api/invitations', invitationsRouter);
 app.use('/api/direct-messages', directMessagesRouter);
 app.use('/api/group-direct-messages', groupDirectMessagesRouter);
 app.use('/api', messagesRouter);
