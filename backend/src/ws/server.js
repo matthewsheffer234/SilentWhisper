@@ -5,6 +5,7 @@ import { verifyAccessToken } from '../auth/jwt.js';
 import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
+import { createMentionNotifications } from '../services/mentionNotificationService.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import {
   registerConnection,
@@ -223,8 +224,28 @@ async function handleMessage(ws, frame) {
       channelId,
       excludeUserId: ws.userId,
     });
+    let notificationRows = [];
+    try {
+      notificationRows = await createMentionNotifications(db, {
+        mentionedUserIds,
+        message,
+        workspaceId: channel.workspace_id,
+        mentionedByUserId: ws.userId,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to create mention notifications:', err);
+    }
+    const notificationIdsByRecipient = new Map(notificationRows.map((r) => [r.recipient_user_id, r.id]));
     for (const mentionedUserId of mentionedUserIds) {
-      sendToUser(mentionedUserId, { type: 'mention', message, channelId, mentionedBy: ws.username });
+      sendToUser(mentionedUserId, {
+        type: 'mention',
+        message,
+        channelId,
+        workspaceId: channel.workspace_id,
+        mentionedBy: ws.username,
+        notificationId: notificationIdsByRecipient.get(mentionedUserId) ?? null,
+      });
     }
 
     // Same sibling-call pattern as mentions above and as

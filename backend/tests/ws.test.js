@@ -173,7 +173,7 @@ describe('room join authorization', () => {
     await request(app)
       .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
       .set(authHeader(owner.accessToken))
-      .send({ userId: member.userId });
+      .send({ username: member.username });
 
     // A brand-new connection (simulating reconnect) re-checks membership
     // fresh and now succeeds — nothing about the first connection's denial

@@ -574,6 +574,18 @@ Reuse this token system directly rather than redefining equivalent tokens under 
 
 Every implemented element is logged here as it lands, per-phase, with the files touched and what was actually verified (not just written) — so this section is a record of what's real, not a restatement of the roadmap above.
 
+### Persistent mention notifications display (2026-07-15)
+
+Implemented from `FEATURE_REQUEST.md` on request, as the durable display layer on top of the already-shipped contextual mention/browser-notification feature.
+
+- **Schema** (`database/migrations/0016_mention_notifications.js`): new `mention_notifications` table with one row per recipient per message, `read_at`/`dismissed_at` personal state, workspace/channel/message/sender references, a uniqueness guard on `(recipient_user_id, message_id)`, and indexes for unread-by-recipient, unread-by-workspace, and message cleanup/reference. Runtime grants are included in the migration; `resetDb.js` clears notification rows before messages.
+- **Backend service/API** (`backend/src/services/mentionNotificationService.js`, `backend/src/routes/notifications.js`): `GET /api/notifications/mentions`, `GET /api/notifications/summary`, `PATCH /api/notifications/mentions/:id/read`, and `POST /api/notifications/mentions/read-all`, all behind `requireAuth` and scoped to the caller. Listing and counts join through current `channel_members`, so stale notifications from channels the user can no longer read do not leak private message previews.
+- **Creation path** (`backend/src/routes/messages.js`, `backend/src/ws/server.js`): both REST and WebSocket sends now call the shared notification service immediately after `extractMentionedUserIds`. Notification insert failures are logged but do not block message delivery, preserving the existing "mention notification is a side effect of message creation" contract. Live `mention` WebSocket frames now include `workspaceId` and `notificationId` when persistence succeeds.
+- **Frontend** (`frontend/src/api/notifications.js`, `frontend/src/components/{ChatShell,WorkspaceSidebar,NotificationPanel}.jsx`): the user menu gets a Mentions entry and an unread badge on the trigger. The Mentions panel lists newest-first notifications with sender, workspace/channel, timestamp, preview, and "Mark all read"; selecting one navigates to the channel/thread target and marks it read. Incoming live mentions refresh the unread summary; toasts are clickable and browser-notification clicks mark read when a persisted id is available.
+- **One small navigation correction made while wiring this**: `openThread` now accepts an explicit channel id, so cross-channel navigation from search results or notifications can load a thread's replies from the target channel rather than relying on whatever channel happened to be selected before the navigation.
+- **Not audited**: notification creation/read state remains personal UI state, not a security-relevant action. Existing message creation and authorization controls remain the source of record.
+- **Test suite**: new `backend/tests/mentionNotifications.test.js` covers REST and WebSocket persistence, notification id delivery in live frames, repeated-mention dedupe, self/non-member suppression, recipient-scoped mark-read/read-all, and stale private-channel filtering. Regression-ran `backend/tests/mentions.test.js`; frontend production build passes.
+
 ### Phase 1: Local Foundation And Database Setup — complete (2026-07-12)
 
 - **Monorepo scaffold**: `/frontend`, `/backend`, `/database` (`migrations/`, `seeds/`), `/scripts` created. Root `.gitignore` and `.env.example` already existed from repo setup; extended with the Docker Compose variable set. Added `backend/.env.example` and `frontend/.env.example`.

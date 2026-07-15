@@ -54,6 +54,8 @@ export const createChannel = (workspaceId, name, type) =>
   apiFetch(`/workspaces/${workspaceId}/channels`, { method: 'POST', body: { name, type } });
 export const joinChannel = (workspaceId, channelId) =>
   apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/join`, { method: 'POST' });
+export const addChannelMember = (workspaceId, channelId, username) =>
+  apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members`, { method: 'POST', body: { username } });
 
 export const createDirectMessage = (targetUserId) =>
   apiFetch('/direct-messages', { method: 'POST', body: { targetUserId } });

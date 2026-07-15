@@ -611,6 +611,86 @@ test.describe('workspace invite', () => {
   });
 });
 
+test.describe('private channels', () => {
+  test('creating a channel with the Private toggle checked hides it from a non-member, and the "Invite to channel…" overflow item adds a real user who can then see it', async ({
+    page,
+  }) => {
+    const owner = await seedUserWithChannel('privchanowner');
+    const invitee = await seedPlainUser('privchaninvitee');
+    await inviteToWorkspace(owner.accessToken, owner.workspace.id, invitee.username);
+
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`text=${owner.workspace.name}`);
+
+    // The new-channel form's Private checkbox — unchecked by default so
+    // existing "+ New channel" behavior (always PUBLIC) is unaffected;
+    // checking it is what makes this a PRIVATE channel.
+    await page.click('text=+ New channel');
+    await page.fill('input[placeholder="Channel name"]', 'e2e-secret-room');
+    await page.click('label:has-text("🔒 Private") input[type="checkbox"]');
+    // Enter must target the name input specifically, not just the page:
+    // checking the checkbox moved focus there, and a checkbox doesn't
+    // trigger a form's implicit submit-on-Enter the way a text input does.
+    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    // Scoped to the sidebar (`aside`) and exact-matched: ChannelView's own
+    // header repeats this same "🔒 name" text in #main once the new channel
+    // auto-selects, and a bare page-wide `text=` locator matches both.
+    await expect(page.locator('aside').getByText('🔒 e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+    // Invite the existing workspace member via the channel row's own "•••"
+    // overflow menu — the same pull-down-button pattern the workspace row
+    // already uses for its own Invite item.
+    await page.click('button[aria-label="e2e-secret-room options"]');
+    await page.click('text=Invite to channel…');
+    await page.fill('input[placeholder="Username to add to channel"]', invitee.username);
+    await page.click('button:has-text("Add")');
+    await expect(page.locator(`text=Added ${invitee.username} to the channel`)).toBeVisible({ timeout: 10_000 });
+
+    // Verified from the invitee's own logged-in session, not just the
+    // owner's screen: a PRIVATE channel the invitee was never added to must
+    // never be listed for them (Section 3's "never joinable, listable, or
+    // readable by non-members" rule) — this is the same double-check
+    // pattern the "workspace invite" test above uses.
+    await page.click('button[aria-label="User menu"]');
+    await page.click('text=Sign out');
+    await loginViaUi(page, invitee.username, invitee.password);
+    await page.click(`text=${owner.workspace.name}`);
+    await expect(page.locator('aside').getByText('🔒 e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
+    // A channel member, not a pending invite: no "Join" pill on this
+    // channel's own row (scoped to it, not the whole sidebar — the
+    // invitee is also a workspace member of the seeded PUBLIC "general"
+    // channel without having joined it, which legitimately still shows one).
+    const secretRoomRow = page.locator('div.sl-row', { hasText: 'e2e-secret-room' });
+    await expect(secretRoomRow.locator('button:has-text("Join")')).toHaveCount(0);
+  });
+
+  test('a non-member of a private channel never sees an "Invite to channel…" option for it', async ({ page }) => {
+    const owner = await seedUserWithChannel('privchanowner2');
+    const bystander = await seedPlainUser('privchanbystander2');
+    await inviteToWorkspace(owner.accessToken, owner.workspace.id, bystander.username);
+
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`text=${owner.workspace.name}`);
+    await page.click('text=+ New channel');
+    await page.fill('input[placeholder="Channel name"]', 'e2e-locked-room');
+    await page.click('label:has-text("🔒 Private") input[type="checkbox"]');
+    // Enter must target the name input specifically, not just the page:
+    // checking the checkbox moved focus there, and a checkbox doesn't
+    // trigger a form's implicit submit-on-Enter the way a text input does.
+    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    await expect(page.locator('aside').getByText('🔒 e2e-locked-room', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('text=Sign out');
+    await loginViaUi(page, bystander.username, bystander.password);
+    await page.click(`text=${owner.workspace.name}`);
+    // A workspace member who isn't in the private channel doesn't even see
+    // it listed (existence-hiding), so there's nothing to attach an
+    // overflow trigger to in the first place.
+    await expect(page.locator('text=e2e-locked-room')).not.toBeVisible();
+  });
+});
+
 test.describe('workspace discovery / self-service subscribe', () => {
   test('a public workspace is discoverable and joinable with no invite; a private one never appears', async ({ page }) => {
     const owner = await seedPlainUser('discoowner');

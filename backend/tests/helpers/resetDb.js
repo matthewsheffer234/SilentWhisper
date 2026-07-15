@@ -42,6 +42,7 @@ export async function resetDb(db) {
   // below. Nulled, not restored — no test relies on archived_by surviving
   // across a reset.
   await adminDb('organizations').update({ archived_by: null });
+  await db('mention_notifications').del();
   await adminDb('messages').del();
   await db('channel_members').del();
   await adminDb('channels').del();

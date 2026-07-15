@@ -889,29 +889,39 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/members', async (req, r
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     const channelId = assertUuid(req.params.channelId, 'channelId');
-    const targetUserId = assertUuid(req.body?.userId, 'userId');
+    // Username, not userId — matches every other "invite by typing a name"
+    // route in this file (POST /:workspaceId/members, transfer-ownership).
+    // A member typing an invite into the new channel-invite UI knows a
+    // username, not a UUID.
+    const username = assertUsername(req.body?.username);
 
     // Caller must already belong to the channel to add someone else to it.
     await requireChannelMember(db, req.user.id, channelId);
     await requireWorkspaceNotArchived(db, workspaceId);
+
+    const targetUser = await db('users').where({ username }).first('id', 'username');
+    if (!targetUser) {
+      throw new ValidationError('No user with that username exists');
+    }
+
     // Target must already belong to the workspace — this endpoint adds an
     // existing workspace member to a channel, not a stranger to the workspace.
     const targetRole = await db('workspace_members')
-      .where({ workspace_id: workspaceId, user_id: targetUserId })
+      .where({ workspace_id: workspaceId, user_id: targetUser.id })
       .first();
     if (!targetRole) {
       throw new ValidationError('Target user is not a member of this workspace');
     }
 
-    const alreadyMember = await isChannelMember(db, targetUserId, channelId);
+    const alreadyMember = await isChannelMember(db, targetUser.id, channelId);
     if (!alreadyMember) {
-      await db('channel_members').insert({ channel_id: channelId, user_id: targetUserId });
+      await db('channel_members').insert({ channel_id: channelId, user_id: targetUser.id });
       await appendAuditEvent(db, {
         actorId: req.user.id,
         actorIp: req.ip,
         actionType: 'CHANNEL_MEMBERSHIP_CHANGE',
         targetResource: channelId,
-        payload: { action: 'add', addedUserId: targetUserId },
+        payload: { action: 'add', addedUserId: targetUser.id, addedUsername: targetUser.username },
       });
     }
 

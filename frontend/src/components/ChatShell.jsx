@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { createSocket } from '../ws/socket.js';
 import * as workspacesApi from '../api/workspaces.js';
 import * as organizationsApi from '../api/organizations.js';
+import * as notificationsApi from '../api/notifications.js';
 import { PERMISSIONS, hasSystemPermission } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
@@ -15,6 +16,7 @@ import BrowseWorkspacesPanel from './BrowseWorkspacesPanel.jsx';
 import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import OrgManagementPanel from './OrgManagementPanel.jsx';
 import SystemAdminPanel from './SystemAdminPanel.jsx';
+import NotificationPanel from './NotificationPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -41,6 +43,8 @@ const styles = {
     border: '1px solid var(--border)',
     fontSize: 'var(--text-sm)',
     color: 'var(--text-1)',
+    textAlign: 'left',
+    cursor: 'pointer',
   },
   mentionToastAuthor: { fontWeight: 700 },
 };
@@ -67,6 +71,8 @@ export default function ChatShell() {
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
+  const [notificationSummary, setNotificationSummary] = useState({ unreadCount: 0, byWorkspace: [], byChannel: [] });
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [organizations, setOrganizations] = useState([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(null);
   const [createOrgOpen, setCreateOrgOpen] = useState(false);
@@ -152,7 +158,20 @@ export default function ChatShell() {
     // top of what's already on screen.
     socket.on('mention', (frame) => {
       const toastId = crypto.randomUUID();
-      setMentionToasts((prev) => [...prev, { id: toastId, mentionedBy: frame.mentionedBy, content: frame.message.content }]);
+      notificationsApi.getNotificationSummary().then(setNotificationSummary).catch(() => {});
+      setMentionToasts((prev) => [
+        ...prev,
+        {
+          id: toastId,
+          notificationId: frame.notificationId,
+          mentionedBy: frame.mentionedBy,
+          content: frame.message.content,
+          channelId: frame.channelId,
+          workspaceId: frame.workspaceId,
+          messageId: frame.message.id,
+          parentMessage: frame.message.parentMessageId ? null : undefined,
+        },
+      ]);
       setTimeout(() => {
         setMentionToasts((prev) => prev.filter((t) => t.id !== toastId));
       }, 6000);
@@ -170,7 +189,19 @@ export default function ChatShell() {
           body: frame.message.content,
           icon: mentionIcon,
         });
-        notification.onclick = () => window.focus();
+        notification.onclick = async () => {
+          window.focus();
+          if (frame.notificationId) {
+            await notificationsApi.markMentionNotificationRead(frame.notificationId).catch(() => {});
+            notificationsApi.getNotificationSummary().then(setNotificationSummary).catch(() => {});
+          }
+          handleNavigateToMention({
+            notificationId: frame.notificationId,
+            channelId: frame.channelId,
+            workspaceId: frame.workspaceId,
+            parentMessage: null,
+          });
+        };
       }
     });
 
@@ -192,6 +223,10 @@ export default function ChatShell() {
       setOrganizations(orgs);
       if (orgs.length > 0) setSelectedOrganizationId((prev) => prev ?? orgs[0].id);
     });
+  }, []);
+
+  useEffect(() => {
+    notificationsApi.getNotificationSummary().then(setNotificationSummary).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -287,6 +322,10 @@ export default function ChatShell() {
     selectChannel(channelId);
   }
 
+  function handleInviteToChannel(channelId, username) {
+    return workspacesApi.addChannelMember(selectedWorkspaceId, channelId, username);
+  }
+
   function handleSend(content) {
     const clientNonce = crypto.randomUUID();
     const optimistic = {
@@ -306,9 +345,9 @@ export default function ChatShell() {
     socketRef.current?.send({ type: 'message', channelId: selectedChannelId, content, clientNonce });
   }
 
-  function openThread(rootMessage) {
+  function openThread(rootMessage, channelIdOverride = selectedChannelId) {
     setThreadRoot(rootMessage);
-    workspacesApi.listMessages(selectedChannelId, { parentMessageId: rootMessage.id }).then((history) => {
+    workspacesApi.listMessages(channelIdOverride, { parentMessageId: rootMessage.id }).then((history) => {
       setThreadReplies([...history].reverse().map(toDisplayMessage));
     });
   }
@@ -352,7 +391,21 @@ export default function ChatShell() {
     }
     selectChannel(hit.channelId);
     if (hit.parentMessage) {
-      openThread(hit.parentMessage);
+      openThread(hit.parentMessage, hit.channelId);
+    }
+  }
+
+  async function handleNavigateToMention(notification) {
+    if (notification.workspaceId && notification.workspaceId !== selectedWorkspaceId) {
+      setSelectedWorkspaceId(notification.workspaceId);
+    }
+    selectChannel(notification.channelId);
+    if (notification.parentMessage) {
+      openThread(notification.parentMessage, notification.channelId);
+    }
+    if (notification.notificationId || notification.id) {
+      await notificationsApi.markMentionNotificationRead(notification.notificationId || notification.id).catch(() => {});
+      notificationsApi.getNotificationSummary().then(setNotificationSummary).catch(() => {});
     }
   }
 
@@ -379,6 +432,7 @@ export default function ChatShell() {
         onSelectChannel={selectChannel}
         onCreateChannel={handleCreateChannel}
         onJoinChannel={handleJoinChannel}
+        onInviteToChannel={handleInviteToChannel}
         onLogout={logout}
         canManageAi={canManageAi}
         onOpenAiSettings={() => setAiSettingsOpen(true)}
@@ -401,6 +455,8 @@ export default function ChatShell() {
         onTransferOwnership={handleTransferOwnership}
         onChangeVisibility={handleChangeVisibility}
         onToggleManagersCanArchive={handleToggleManagersCanArchive}
+        notificationSummary={notificationSummary}
+        onOpenNotifications={() => setNotificationsOpen(true)}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -458,12 +514,19 @@ export default function ChatShell() {
         />
       )}
       {systemAdminOpen && <SystemAdminPanel onClose={() => setSystemAdminOpen(false)} />}
+      {notificationsOpen && (
+        <NotificationPanel
+          onClose={() => setNotificationsOpen(false)}
+          onNavigate={handleNavigateToMention}
+          onSummaryChange={setNotificationSummary}
+        />
+      )}
       {mentionToasts.length > 0 && (
         <div style={styles.mentionToastContainer} role="status" aria-live="polite">
           {mentionToasts.map((t) => (
-            <div key={t.id} style={styles.mentionToast}>
+            <button key={t.id} type="button" style={styles.mentionToast} onClick={() => handleNavigateToMention(t)}>
               <span style={styles.mentionToastAuthor}>{t.mentionedBy}</span> mentioned you: {t.content}
-            </div>
+            </button>
           ))}
         </div>
       )}

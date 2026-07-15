@@ -115,13 +115,77 @@ describe('workspace + channel authorization', () => {
     const addRes = await request(app)
       .post(`/api/workspaces/${workspaceId}/channels/${privRes.body.id}/members`)
       .set(authHeader(owner.accessToken))
-      .send({ userId: member.userId });
+      .send({ username: member.username });
     expect(addRes.status).toBe(204);
 
     const listRes = await request(app)
       .get(`/api/workspaces/${workspaceId}/channels`)
       .set(authHeader(member.accessToken));
     expect(listRes.body.find((c) => c.name === 'secret')).toBeTruthy();
+  });
+
+  test('inviting an unknown username to a channel 400s', async () => {
+    const owner = await signup('owner5b');
+
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const workspaceId = wsRes.body.id;
+    const privRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'secret', type: 'PRIVATE' });
+
+    const addRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${privRes.body.id}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: 'no-such-user-anywhere' });
+    expect(addRes.status).toBe(400);
+  });
+
+  test('a channel member cannot invite a real user who isn\'t a member of the workspace', async () => {
+    const owner = await signup('owner5c');
+    const outsider = await signup('outsider5c');
+
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const workspaceId = wsRes.body.id;
+    const privRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'secret', type: 'PRIVATE' });
+
+    const addRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${privRes.body.id}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: outsider.username });
+    expect(addRes.status).toBe(400);
+
+    const isMember = await db('channel_members')
+      .where({ channel_id: privRes.body.id, user_id: outsider.userId })
+      .first();
+    expect(isMember).toBeUndefined();
+  });
+
+  test('a non-member of a private channel cannot invite anyone to it', async () => {
+    const owner = await signup('owner5d');
+    const bystander = await signup('bystander5d');
+    const target = await signup('target5d');
+
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const workspaceId = wsRes.body.id;
+    await db('workspace_members').insert({ workspace_id: workspaceId, user_id: bystander.userId, system_role: 'MEMBER' });
+    await db('workspace_members').insert({ workspace_id: workspaceId, user_id: target.userId, system_role: 'MEMBER' });
+
+    const privRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'secret', type: 'PRIVATE' });
+
+    // `bystander` is a workspace member but never joined/was added to the
+    // private channel itself — requireChannelMember must reject them.
+    const addRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${privRes.body.id}/members`)
+      .set(authHeader(bystander.accessToken))
+      .send({ username: target.username });
+    expect(addRes.status).toBe(404);
   });
 
   test('requests with no token, a malformed token, or an expired-looking token are all rejected', async () => {

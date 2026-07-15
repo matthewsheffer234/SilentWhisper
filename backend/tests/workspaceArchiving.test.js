@@ -243,7 +243,7 @@ describe('every gated write path 409s against an archived workspace', () => {
     const res = await request(app)
       .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
       .set(authHeader(owner.accessToken))
-      .send({ userId: member.userId });
+      .send({ username: member.username });
     expect(res.status).toBe(409);
   });
 

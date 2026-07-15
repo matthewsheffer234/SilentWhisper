@@ -156,6 +156,23 @@ const styles = {
     borderRadius: 6,
     flexShrink: 0,
   },
+  userMenuWrap: { position: 'relative', marginLeft: 'auto' },
+  notificationBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    padding: '0 4px',
+    borderRadius: 999,
+    background: '#c0392b',
+    color: '#fff',
+    fontSize: '10px',
+    fontWeight: 700,
+    lineHeight: '16px',
+    textAlign: 'center',
+    pointerEvents: 'none',
+  },
   archivedBadge: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginLeft: 4 },
   addButtonRow: { display: 'flex', gap: 6, marginTop: 6 },
   visibilityToggleLabel: {
@@ -217,22 +234,27 @@ function activateOnKey(handler) {
   };
 }
 
-// `showVisibilityToggle` (self-service workspace subscription,
-// FEATURE_REQUEST.md) is opt-in so the channel-creation instance of this
-// same form is unaffected — it calls `onSubmit(name)` with no second
-// argument either way, same as before this feature existed.
-function InlineCreateForm({ placeholder, onSubmit, extra, showVisibilityToggle }) {
+// `visibilityToggle` (self-service workspace subscription, FEATURE_REQUEST.md;
+// generalized for the private-channel toggle) is opt-in so a plain call site
+// with no toggle at all is unaffected — it calls `onSubmit(name)` with no
+// second argument either way, same as before either feature existed.
+// Shape: { label, onValue, offValue, defaultOn }. One shared checkbox control
+// for both call sites rather than two near-identical toggles, per this app's
+// existing consistency convention (PROJECT_PLAN.md Section 7 / FEATURE_REQUEST.md's
+// Apple HIG overhaul entry) — the same visible control should mean the same
+// thing everywhere it appears.
+function InlineCreateForm({ placeholder, onSubmit, extra, visibilityToggle }) {
   const [value, setValue] = useState('');
-  const [isPublic, setIsPublic] = useState(false);
+  const [toggleOn, setToggleOn] = useState(visibilityToggle?.defaultOn ?? false);
   return (
     <form
       style={styles.inlineForm}
       onSubmit={(e) => {
         e.preventDefault();
         if (!value.trim()) return;
-        onSubmit(value.trim(), showVisibilityToggle ? (isPublic ? 'DISCOVERABLE' : 'PRIVATE') : undefined);
+        onSubmit(value.trim(), visibilityToggle ? (toggleOn ? visibilityToggle.onValue : visibilityToggle.offValue) : undefined);
         setValue('');
-        setIsPublic(false);
+        setToggleOn(visibilityToggle?.defaultOn ?? false);
       }}
     >
       <input
@@ -241,10 +263,10 @@ function InlineCreateForm({ placeholder, onSubmit, extra, showVisibilityToggle }
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />
-      {showVisibilityToggle && (
+      {visibilityToggle && (
         <label style={styles.visibilityToggleLabel}>
-          <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
-          Discoverable
+          <input type="checkbox" checked={toggleOn} onChange={(e) => setToggleOn(e.target.checked)} />
+          {visibilityToggle.label}
         </label>
       )}
       {extra}
@@ -290,6 +312,50 @@ function InviteMemberForm({ onSubmit }) {
           <option value="MEMBER">Member</option>
           <option value="MANAGER">Manager</option>
         </select>
+        <button type="submit" style={styles.inviteSubmit}>Add</button>
+      </form>
+      {status && (
+        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
+          {status.message}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Private-channel invite workflow — cloned from InviteMemberForm's shape,
+// minus the role select (channel membership carries no role, unlike
+// workspace membership). Only ever rendered for a PRIVATE channel the caller
+// already belongs to (see the channel row below) — a public channel's
+// self-service "Join" pill already covers the public case, so this control
+// only needs to exist for the one case self-join can't handle.
+function InviteToChannelForm({ onSubmit }) {
+  const [username, setUsername] = useState('');
+  const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    setStatus(null);
+    try {
+      await onSubmit(trimmed);
+      setStatus({ type: 'success', message: `Added ${trimmed} to the channel` });
+      setUsername('');
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to add member' });
+    }
+  }
+
+  return (
+    <div>
+      <form style={styles.inlineForm} onSubmit={handleSubmit}>
+        <input
+          style={styles.inlineInput}
+          placeholder="Username to add to channel"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
         <button type="submit" style={styles.inviteSubmit}>Add</button>
       </form>
       {status && (
@@ -417,6 +483,7 @@ export default function WorkspaceSidebar({
   onSelectChannel,
   onCreateChannel,
   onJoinChannel,
+  onInviteToChannel,
   onLogout,
   canManageAi,
   onOpenAiSettings,
@@ -439,12 +506,15 @@ export default function WorkspaceSidebar({
   onTransferOwnership,
   onChangeVisibility,
   onToggleManagersCanArchive,
+  notificationSummary,
+  onOpenNotifications,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [inviteFormWorkspaceId, setInviteFormWorkspaceId] = useState(null);
   const [inviteLinkFormWorkspaceId, setInviteLinkFormWorkspaceId] = useState(null);
   const [transferFormWorkspaceId, setTransferFormWorkspaceId] = useState(null);
+  const [inviteChannelFormId, setInviteChannelFormId] = useState(null);
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
 
@@ -483,6 +553,11 @@ export default function WorkspaceSidebar({
   ];
 
   const userMenuItems = [
+    {
+      key: 'mention-notifications',
+      label: `Mentions${notificationSummary?.unreadCount ? ` (${notificationSummary.unreadCount})` : ''}`,
+      onSelect: onOpenNotifications,
+    },
     ...(notif.supported
       ? [
           {
@@ -515,15 +590,22 @@ export default function WorkspaceSidebar({
       <div style={styles.userRow}>
         <span style={styles.username}>{user?.username}</span>
         <PresenceBadge status={presence[user?.id] ?? 'online'} />
-        <Menu
-          ariaLabel="User menu"
-          items={userMenuItems}
-          renderTrigger={(triggerProps) => (
-            <button type="button" {...triggerProps} style={styles.userMenuTrigger} aria-label="User menu">
-              ⌄
-            </button>
+        <div style={styles.userMenuWrap}>
+          <Menu
+            ariaLabel="User menu"
+            items={userMenuItems}
+            renderTrigger={(triggerProps) => (
+              <button type="button" {...triggerProps} style={styles.userMenuTrigger} aria-label="User menu">
+                ⌄
+              </button>
+            )}
+          />
+          {notificationSummary?.unreadCount > 0 && (
+            <span style={styles.notificationBadge}>
+              {notificationSummary.unreadCount > 9 ? '9+' : notificationSummary.unreadCount}
+            </span>
           )}
-        />
+        </div>
       </div>
 
       <SearchBar onNavigate={onNavigateToSearchResult} />
@@ -698,7 +780,7 @@ export default function WorkspaceSidebar({
         {showNewWorkspace ? (
           <InlineCreateForm
             placeholder="Workspace name"
-            showVisibilityToggle
+            visibilityToggle={{ label: 'Discoverable', onValue: 'DISCOVERABLE', offValue: 'PRIVATE', defaultOn: false }}
             onSubmit={(name, visibility) => {
               onCreateWorkspace(name, visibility);
               setShowNewWorkspace(false);
@@ -729,37 +811,77 @@ export default function WorkspaceSidebar({
               Channels
               {isSelectedWorkspaceArchived && <span style={styles.archivedBadge}>(archived — read only)</span>}
             </div>
-            {channels.map((ch) => (
-              <div
-                key={ch.id}
-                className="sl-row"
-                role="button"
-                tabIndex={0}
-                style={{ ...styles.row, ...(ch.id === selectedChannelId ? styles.rowActive : {}) }}
-                onClick={() => onSelectChannel(ch.id)}
-                onKeyDown={activateOnKey(() => onSelectChannel(ch.id))}
-              >
-                <span>{ch.type === 'PRIVATE' ? '🔒' : '#'} {ch.name}</span>
-                {!ch.isMember && !isSelectedWorkspaceArchived && (
-                  <button
-                    type="button"
-                    style={styles.joinPill}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onJoinChannel(ch.id);
-                    }}
+            {channels.map((ch) => {
+              // Invite only makes sense for a PRIVATE channel the caller
+              // already belongs to: a PUBLIC channel is already reachable via
+              // the self-service "Join" pill above, and requireChannelMember
+              // (backend/src/authz/membershipService.js) rejects the add-
+              // member call from anyone who isn't already a member anyway, so
+              // there's no point offering the control to a non-member.
+              const canInviteToChannel = ch.isMember && ch.type === 'PRIVATE' && !isSelectedWorkspaceArchived;
+              return (
+                <div key={ch.id}>
+                  <div
+                    className="sl-row"
+                    role="button"
+                    tabIndex={0}
+                    style={{ ...styles.row, ...(ch.id === selectedChannelId ? styles.rowActive : {}) }}
+                    onClick={() => onSelectChannel(ch.id)}
+                    onKeyDown={activateOnKey(() => onSelectChannel(ch.id))}
                   >
-                    Join
-                  </button>
-                )}
-              </div>
-            ))}
+                    <span style={{ flex: 1 }}>{ch.type === 'PRIVATE' ? '🔒' : '#'} {ch.name}</span>
+                    {!ch.isMember && !isSelectedWorkspaceArchived && (
+                      <button
+                        type="button"
+                        style={styles.joinPill}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onJoinChannel(ch.id);
+                        }}
+                      >
+                        Join
+                      </button>
+                    )}
+                    {canInviteToChannel && (
+                      <Menu
+                        ariaLabel={`${ch.name} options`}
+                        items={[
+                          {
+                            key: 'invite-to-channel',
+                            label: 'Invite to channel…',
+                            onSelect: () => setInviteChannelFormId(ch.id),
+                          },
+                        ]}
+                        renderTrigger={({ onClick, ...triggerProps }) => (
+                          <button
+                            type="button"
+                            {...triggerProps}
+                            style={styles.overflowTrigger}
+                            aria-label={`${ch.name} options`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onClick();
+                            }}
+                          >
+                            ⋯
+                          </button>
+                        )}
+                      />
+                    )}
+                  </div>
+                  {inviteChannelFormId === ch.id && (
+                    <InviteToChannelForm onSubmit={(username) => onInviteToChannel(ch.id, username)} />
+                  )}
+                </div>
+              );
+            })}
             {!isSelectedWorkspaceArchived &&
               (showNewChannel ? (
                 <InlineCreateForm
                   placeholder="Channel name"
-                  onSubmit={(name) => {
-                    onCreateChannel(name, 'PUBLIC');
+                  visibilityToggle={{ label: '🔒 Private', onValue: 'PRIVATE', offValue: 'PUBLIC', defaultOn: false }}
+                  onSubmit={(name, type) => {
+                    onCreateChannel(name, type ?? 'PUBLIC');
                     setShowNewChannel(false);
                   }}
                 />
