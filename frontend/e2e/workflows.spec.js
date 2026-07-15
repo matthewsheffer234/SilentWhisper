@@ -3,6 +3,8 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '..', 'backend', '.env') });
@@ -22,19 +24,66 @@ function uniqueUsername(label) {
   return `e2e_${label}_${Date.now()}_${Math.floor(Math.random() * 10_000)}`;
 }
 
-// Seeds a user, workspace, and channel directly over the REST API — faster
-// and more deterministic than driving signup/workspace/channel creation
-// through the UI for every test that just needs a starting point, while
-// still exercising the real backend (unlike the DB-seeding load test script,
-// this goes through the actual HTTP API).
+// Self-service signup is closed (FEATURE_REQUEST.md entry 1, slice 4) — no
+// HTTP endpoint is left for seeding to call. Seeds directly in Postgres as
+// APP_DB_USER instead, the exact precedent promoteToSystemAdmin below
+// already establishes in this file, and the same "mint a token directly
+// with the real JWT_SECRET/JWT_KEY_ID" approach scripts/load-test.mjs
+// documents (RUNBOOK.md). Password hashed once per test-run (module load),
+// not per user — every seeded user shares TEST_PASSWORD, matching how
+// backend/tests/helpers/testUsers.js's signup() does the same for the
+// backend integration suite.
+const TEST_PASSWORD = 'correct-horse-battery';
+const TEST_PASSWORD_HASH = bcrypt.hashSync(TEST_PASSWORD, 12);
+
+function signAccessToken(userId, username) {
+  return jwt.sign({ sub: userId, username }, process.env.JWT_SECRET, {
+    expiresIn: process.env.ACCESS_TOKEN_TTL || '15m',
+    keyid: process.env.JWT_KEY_ID || 'v1',
+  });
+}
+
+async function withPgClient(fn) {
+  const pgClient = new pg.Client({
+    host: process.env.PGHOST,
+    port: Number(process.env.PGPORT || 5432),
+    user: process.env.APP_DB_USER,
+    password: process.env.APP_DB_PASSWORD,
+    database: process.env.PGDATABASE,
+  });
+  await pgClient.connect();
+  try {
+    return await fn(pgClient);
+  } finally {
+    await pgClient.end();
+  }
+}
+
+// Inserts a user + earliest-org membership (the same deterministic
+// auto-enrollment rule POST /admin/users and invitation redemption use),
+// returning the new user's id.
+async function insertUser(pgClient, username) {
+  const userRes = await pgClient.query(
+    'INSERT INTO users (username, email, password_hash, display_name) VALUES ($1, $2, $3, $1) RETURNING id',
+    [username, `${username}@example.com`, TEST_PASSWORD_HASH],
+  );
+  const userId = userRes.rows[0].id;
+  const orgRes = await pgClient.query('SELECT id FROM organizations ORDER BY created_at ASC LIMIT 1');
+  await pgClient.query('INSERT INTO organization_members (organization_id, user_id, org_role) VALUES ($1, $2, $3)', [
+    orgRes.rows[0].id,
+    userId,
+    'ORG_MEMBER',
+  ]);
+  return userId;
+}
+
+// Seeds a user, workspace, and channel — the user directly in Postgres (see
+// above), the workspace/channel still over the real REST API (that behavior
+// is unaffected by the signup closure and stays real system-under-test).
 async function seedUserWithChannel(label) {
   const username = uniqueUsername(label);
-  const signupRes = await fetch(`${API_BASE}/auth/signup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, email: `${username}@example.com`, password: 'correct-horse-battery' }),
-  });
-  const { accessToken, user } = await signupRes.json();
+  const userId = await withPgClient((pgClient) => insertUser(pgClient, username));
+  const accessToken = signAccessToken(userId, username);
 
   const wsRes = await fetch(`${API_BASE}/workspaces`, {
     method: 'POST',
@@ -50,7 +99,7 @@ async function seedUserWithChannel(label) {
   });
   const channel = await chRes.json();
 
-  return { username, password: 'correct-horse-battery', accessToken, userId: user.id, workspace, channel };
+  return { username, password: TEST_PASSWORD, accessToken, userId, workspace, channel };
 }
 
 // Self-service workspace subscription (FEATURE_REQUEST.md): a workspace
@@ -100,17 +149,13 @@ async function promoteToSystemAdmin(userId) {
   }
 }
 
-// A plain signup with no workspace of their own — used as the invite
+// A plain seeded user with no workspace of their own — used as the invite
 // target for the workspace-invite tests below.
 async function seedPlainUser(label) {
   const username = uniqueUsername(label);
-  const res = await fetch(`${API_BASE}/auth/signup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, email: `${username}@example.com`, password: 'correct-horse-battery' }),
-  });
-  const { accessToken, user } = await res.json();
-  return { username, password: 'correct-horse-battery', userId: user.id, accessToken };
+  const userId = await withPgClient((pgClient) => insertUser(pgClient, username));
+  const accessToken = signAccessToken(userId, username);
+  return { username, password: TEST_PASSWORD, userId, accessToken };
 }
 
 async function sendMessage(accessToken, channelId, content) {
@@ -194,21 +239,28 @@ async function loginViaUi(page, username, password) {
 }
 
 test.describe('core messaging workflow', () => {
-  test('signup, workspace, channel, message, thread reply, and session restore across reload', async ({ page }) => {
+  // Self-service signup is closed (FEATURE_REQUEST.md entry 1, slice 4) —
+  // exercises the already-shipped InviteRedemptionPage.jsx end-to-end
+  // instead, no new UI needed. The rest of the test body (workspace,
+  // channel, message, thread reply, reload/session-restore) is otherwise
+  // unchanged: the invited account lands as a plain workspace MEMBER with an
+  // org membership (via the invitation's own auto-enrollment), which is all
+  // POST /workspaces needs to create its own new workspace next.
+  test('invite redemption, workspace, channel, message, thread reply, and session restore across reload', async ({ page }) => {
     const consoleErrors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
     });
 
+    const inviter = await seedUserWithChannel('coreinviter');
     const username = uniqueUsername('core');
+    const invitation = await createWorkspaceInvitationApi(inviter.accessToken, inviter.workspace.id, `${username}@example.com`);
 
-    await page.goto('/');
-    await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
-    await page.click('text=Sign up');
-    await page.fill('#username', username);
-    await page.fill('#email', `${username}@example.com`);
-    await page.fill('#password', 'correct-horse-battery');
-    await page.click('button:has-text("Sign Up")');
+    await page.goto(`/invite/${invitation.token}`);
+    await expect(page.getByText(inviter.username, { exact: true })).toBeVisible({ timeout: 15_000 });
+    await page.fill('#invite-username', username);
+    await page.fill('#invite-password', 'correct-horse-battery');
+    await page.click('button:has-text("Accept invitation")');
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
 
     await page.click('text=+ New workspace');
@@ -502,9 +554,11 @@ test.describe('admin surfaces', () => {
     await page.click('button:has-text("Admin Tools")');
     await page.click('[role="menuitem"]:has-text("Audit Log")');
     await page.waitForSelector('text=Audit Log', { timeout: 10_000 });
-    // The signup + workspace + channel creation above already produced
-    // AUTH_SIGNUP/WORKSPACE_CREATED/CHANNEL_CREATED rows.
-    await expect(page.locator('text=AUTH_SIGNUP').first()).toBeVisible({ timeout: 10_000 });
+    // Seeding is now a direct DB insert (FEATURE_REQUEST.md entry 1, slice 4
+    // — self-service signup is closed) and produces no audit row of its
+    // own; the workspace + channel creation above still goes over the real
+    // API and still produces genuine WORKSPACE_CREATED/CHANNEL_CREATED rows.
+    await expect(page.locator('text=WORKSPACE_CREATED').first()).toBeVisible({ timeout: 10_000 });
 
     await page.click('button:has-text("Verify Integrity")');
     await expect(page.locator('text=/Log Integrity Verified/')).toBeVisible({ timeout: 10_000 });
@@ -771,20 +825,48 @@ test.describe('change password', () => {
 });
 
 test.describe('admin user management', () => {
-  test('an admin can add a user, promote them to manager, and reset their password — all through the panel', async ({ page }) => {
+  // Rewritten for FEATURE_REQUEST.md entry 1, slice 4: a plain workspace
+  // owner can no longer create accounts at all (the deleted AddUserForm) —
+  // the actor is promoted to system admin first, and account creation now
+  // drives the new SystemAdminPanel. The created account has no workspace
+  // tie yet (system-admin creation is workspace-agnostic), so it's added to
+  // the admin's workspace via the sidebar's existing "Invite member…" form
+  // (direct-add of an existing user by username) before the rest of the
+  // original flow — promote to manager, reset password, sign in as the
+  // promoted account — continues unchanged through UserManagementPanel.
+  test('a system admin creates an account via System Admin, adds it to a workspace, promotes it to manager, and resets its password', async ({
+    page,
+  }) => {
     const admin = await seedUserWithChannel('usermgmt');
+    await promoteToSystemAdmin(admin.userId);
     await loginViaUi(page, admin.username, admin.password);
+
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const newUsername = `mgmt_created_${Date.now()}`;
+    await page.fill('#sysadmin-new-username', newUsername);
+    await page.fill('#sysadmin-new-email', `${newUsername}@example.com`);
+    await page.fill('#sysadmin-new-password', 'correct-horse-battery');
+    await page.click('button:has-text("Create account")');
+    await expect(page.locator(`text=Created ${newUsername}`)).toBeVisible({ timeout: 10_000 });
+    // .first() — SystemAdminPanel's accounts table shows both username and
+    // email columns, and the email (`${newUsername}@example.com`)
+    // substring-matches the username too; a real ambiguity found while
+    // writing this test, not a product bug.
+    await expect(page.locator(`td:has-text("${newUsername}")`).first()).toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close system admin"]');
+
+    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
+    await page.click('text=Invite member…');
+    await page.fill('input[placeholder="Username to invite"]', newUsername);
+    await page.click('button:has-text("Add")');
+    await expect(page.locator(`text=Added ${newUsername} to the workspace`)).toBeVisible({ timeout: 10_000 });
 
     await page.click('button:has-text("Admin Tools")');
     await page.click('[role="menuitem"]:has-text("Manage Users")');
     await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
-
-    const newUsername = `mgmt_created_${Date.now()}`;
-    await page.fill('#new-user-username', newUsername);
-    await page.fill('#new-user-email', `${newUsername}@example.com`);
-    await page.fill('#new-user-password', 'correct-horse-battery');
-    await page.click('button:has-text("Add user")');
-    await expect(page.locator(`text=Created ${newUsername}`)).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(`td:has-text("${newUsername}")`)).toBeVisible({ timeout: 10_000 });
 
     await page.selectOption(`select[aria-label="Role for ${newUsername}"]`, 'MANAGER');
@@ -808,11 +890,15 @@ test.describe('admin user management', () => {
     await page.fill('#password', 'a-brand-new-password');
     await page.click('button:has-text("Sign In")');
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
-    // The role promotion took effect: this account is now an ADMIN and
+    // The role promotion took effect: this account is now a MANAGER and
     // sees the same admin-only controls the original admin does — the
-    // "Admin Tools" trigger itself (canManageAi-gated), not a bare button
-    // for each individual tool.
+    // "Admin Tools" trigger itself (canManageAi-gated via requireSystemPermission's
+    // OWNER/MANAGER-of-any-workspace fallback), not a bare button for each
+    // individual tool. It must not see "System Admin" though — that item is
+    // gated on isSystemAdmin specifically, which this account never held.
     await expect(page.locator('button:has-text("Admin Tools")')).toBeVisible({ timeout: 10_000 });
+    await page.click('button:has-text("Admin Tools")');
+    await expect(page.locator('[role="menuitem"]:has-text("System Admin")')).not.toBeVisible();
   });
 });
 
@@ -845,6 +931,154 @@ test.describe('workspace archive/unarchive', () => {
     await archivedRow.locator('button:has-text("Unarchive")').click();
     await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('button:has-text("+ New channel")')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// New (FEATURE_REQUEST.md entry 1, slice 4).
+test.describe('workspace ownership transfer', () => {
+  test('the owner transfers ownership via the overflow menu; the old owner becomes a manager', async ({ page }) => {
+    const owner = await seedUserWithChannel('transfer');
+    const target = await seedPlainUser('transfertarget');
+    await inviteToWorkspace(owner.accessToken, owner.workspace.id, target.username);
+
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await page.click('text=Transfer ownership…');
+    await page.fill("input[placeholder=\"New owner's username\"]", target.username);
+    await page.click('button:has-text("Transfer")');
+    await expect(page.locator(`text=Ownership transferred to ${target.username}`)).toBeVisible({ timeout: 10_000 });
+
+    // The old owner is now a MANAGER, not OWNER — Transfer ownership… no
+    // longer appears in their own overflow menu for this workspace.
+    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await expect(page.locator('text=Transfer ownership…')).not.toBeVisible();
+  });
+});
+
+// New (FEATURE_REQUEST.md entry 1, slice 4).
+test.describe('workspace visibility change', () => {
+  test('the owner toggles visibility via the overflow menu label', async ({ page }) => {
+    const owner = await seedUserWithChannel('visibility');
+    await loginViaUi(page, owner.username, owner.password);
+
+    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await expect(page.locator('text=Make discoverable')).toBeVisible({ timeout: 5_000 });
+    await page.click('text=Make discoverable');
+
+    // The menu closes on selection (Menu.jsx's existing behavior) — reopen
+    // to confirm the label flipped, proving the change actually landed.
+    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await expect(page.locator('text=Make private')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// New (FEATURE_REQUEST.md entry 1, slice 4): managers_can_archive has
+// existed in the schema since slice 1 but had no setter or enforcement
+// until this slice.
+test.describe('managers_can_archive delegation', () => {
+  test('a manager cannot archive by default; the owner delegates it via the checkbox, and the manager can then archive', async ({
+    page,
+    context,
+  }) => {
+    const owner = await seedUserWithChannel('archdelegate');
+    const manager = await seedPlainUser('archdelegatemanager');
+    await inviteToWorkspace(owner.accessToken, owner.workspace.id, manager.username);
+    // Direct promotion via the API — the UI path for this is already
+    // covered by the "admin user management" test above.
+    await fetch(`${API_BASE}/workspaces/${owner.workspace.id}/members/${manager.userId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${owner.accessToken}` },
+      body: JSON.stringify({ role: 'MANAGER' }),
+    });
+
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await expect(page.locator('[role="menuitemcheckbox"]:has-text("Managers can archive")')).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+    await page.click('text=Managers can archive');
+    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await expect(page.locator('[role="menuitemcheckbox"]:has-text("Managers can archive")')).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Sign out")');
+
+    // A second browser context for the manager, logged in via a fresh page
+    // in the same context — avoids racing the owner's own session/cookies.
+    const managerPage = await context.newPage();
+    await loginViaUi(managerPage, manager.username, manager.password);
+    await managerPage.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await managerPage.click('text=Archive workspace');
+    await expect(managerPage.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await managerPage.close();
+  });
+});
+
+// New (FEATURE_REQUEST.md entry 1, slice 4): DELETE /:workspaceId/members/:userId.
+test.describe('workspace member removal', () => {
+  test('an admin removes a member via the roster\'s Remove button', async ({ page }) => {
+    const admin = await seedUserWithChannel('removemember');
+    const member = await seedPlainUser('removemembertarget');
+    await inviteToWorkspace(admin.accessToken, admin.workspace.id, member.username);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("Manage Users")');
+    await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
+    await expect(page.locator(`td:has-text("${member.username}")`)).toBeVisible({ timeout: 10_000 });
+
+    const memberRow = page.locator('tr', { has: page.locator(`td:has-text("${member.username}")`) });
+    await memberRow.locator('button:has-text("Remove")').click();
+    await expect(page.locator(`td:has-text("${member.username}")`)).not.toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// New (FEATURE_REQUEST.md entry 1, slice 4): system-admin-only account
+// disable/enable, via SystemAdminPanel.
+test.describe('system admin: disable/enable accounts', () => {
+  test('disabling an account blocks its next login; enabling restores it', async ({ page }) => {
+    const admin = await seedUserWithChannel('disableflow');
+    await promoteToSystemAdmin(admin.userId);
+    const target = await seedPlainUser('disableflowtarget');
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${target.username}")`) });
+    await expect(targetRow).toBeVisible({ timeout: 10_000 });
+    await targetRow.locator('button:has-text("Disable")').click();
+    await expect(targetRow.locator('button:has-text("Enable")')).toBeVisible({ timeout: 10_000 });
+
+    await page.click('button[aria-label="Close system admin"]');
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Sign out")');
+
+    await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
+    await page.fill('#username', target.username);
+    await page.fill('#password', target.password);
+    await page.click('button:has-text("Sign In")');
+    await expect(page.locator('text=Invalid username or password')).toBeVisible({ timeout: 10_000 });
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+    await targetRow.locator('button:has-text("Enable")').click();
+    await expect(targetRow.locator('button:has-text("Disable")')).toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close system admin"]');
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Sign out")');
+
+    await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
+    await page.fill('#username', target.username);
+    await page.fill('#password', target.password);
+    await page.click('button:has-text("Sign In")');
+    await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
   });
 });
 
@@ -984,7 +1218,10 @@ test.describe('menus (Apple HIG overhaul: pull-down buttons + progressive disclo
 
     await page.click('button:has-text("Admin Tools")');
     await page.click('[role="menuitem"]:has-text("Audit Log")');
-    await expect(page.locator('text=AUTH_SIGNUP').first()).toBeVisible({ timeout: 10_000 });
+    // Seeding is now a direct DB insert and produces no audit row of its own
+    // (FEATURE_REQUEST.md entry 1, slice 4) — the workspace creation in
+    // seedUserWithChannel still goes over the real API.
+    await expect(page.locator('text=WORKSPACE_CREATED').first()).toBeVisible({ timeout: 10_000 });
     await page.click('button[aria-label="Close audit log"]');
 
     await page.click('button:has-text("Admin Tools")');

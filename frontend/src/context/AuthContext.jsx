@@ -50,12 +50,6 @@ export function AuthProvider({ children }) {
     setStatus('authenticated');
   }, []);
 
-  const signup = useCallback(async (details) => {
-    const newUser = await authApi.signup(details);
-    setUser(newUser);
-    setStatus('authenticated');
-  }, []);
-
   const logout = useCallback(async () => {
     await authApi.logout();
     setUser(null);
@@ -84,8 +78,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, status, login, signup, logout, changePassword, completeAuth }),
-    [user, status, login, signup, logout, changePassword, completeAuth],
+    () => ({ user, status, login, logout, changePassword, completeAuth }),
+    [user, status, login, logout, changePassword, completeAuth],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

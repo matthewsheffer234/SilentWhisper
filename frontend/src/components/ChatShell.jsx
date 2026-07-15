@@ -14,6 +14,7 @@ import UserManagementPanel from './UserManagementPanel.jsx';
 import BrowseWorkspacesPanel from './BrowseWorkspacesPanel.jsx';
 import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import OrgManagementPanel from './OrgManagementPanel.jsx';
+import SystemAdminPanel from './SystemAdminPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -70,6 +71,7 @@ export default function ChatShell() {
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(null);
   const [createOrgOpen, setCreateOrgOpen] = useState(false);
   const [orgManagementOpen, setOrgManagementOpen] = useState(false);
+  const [systemAdminOpen, setSystemAdminOpen] = useState(false);
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -260,6 +262,25 @@ export default function ChatShell() {
     setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, archivedAt: null } : ws)));
   }
 
+  // Transfer flips two members' roles (the caller's own row included) —
+  // simplest to just refetch rather than hand-rolling a local patch that
+  // also has to update the caller's own role in the list.
+  async function handleTransferOwnership(workspaceId, username) {
+    await workspacesApi.transferWorkspaceOwnership(workspaceId, username);
+    const ws = await workspacesApi.listWorkspaces();
+    setWorkspaces(ws);
+  }
+
+  async function handleChangeVisibility(workspaceId, visibility) {
+    await workspacesApi.changeWorkspaceVisibility(workspaceId, visibility);
+    setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, visibility } : ws)));
+  }
+
+  async function handleToggleManagersCanArchive(workspaceId, managersCanArchive) {
+    await workspacesApi.updateWorkspaceSettings(workspaceId, { managersCanArchive });
+    setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, managersCanArchive } : ws)));
+  }
+
   async function handleJoinChannel(channelId) {
     await workspacesApi.joinChannel(selectedWorkspaceId, channelId);
     setChannels((prev) => prev.map((c) => (c.id === channelId ? { ...c, isMember: true } : c)));
@@ -376,6 +397,10 @@ export default function ChatShell() {
         isSystemAdmin={Boolean(user?.isSystemAdmin)}
         onOpenCreateOrganization={() => setCreateOrgOpen(true)}
         onOpenOrgManagement={() => setOrgManagementOpen(true)}
+        onOpenSystemAdmin={() => setSystemAdminOpen(true)}
+        onTransferOwnership={handleTransferOwnership}
+        onChangeVisibility={handleChangeVisibility}
+        onToggleManagersCanArchive={handleToggleManagersCanArchive}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -432,6 +457,7 @@ export default function ChatShell() {
           onClose={() => setOrgManagementOpen(false)}
         />
       )}
+      {systemAdminOpen && <SystemAdminPanel onClose={() => setSystemAdminOpen(false)} />}
       {mentionToasts.length > 0 && (
         <div style={styles.mentionToastContainer} role="status" aria-live="polite">
           {mentionToasts.map((t) => (

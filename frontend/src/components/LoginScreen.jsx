@@ -46,13 +46,6 @@ const styles = {
     fontWeight: 600,
     cursor: 'pointer',
   },
-  toggle: {
-    marginTop: 18,
-    fontSize: 'var(--text-sm)',
-    color: 'var(--text-3)',
-    textAlign: 'center',
-  },
-  toggleLink: { color: 'var(--brg)', cursor: 'pointer', fontWeight: 600, background: 'none', border: 'none', font: 'inherit' },
   error: {
     background: 'var(--error-bg)',
     border: '1px solid var(--error-border)',
@@ -64,11 +57,13 @@ const styles = {
   },
 };
 
+// Self-service signup is closed (FEATURE_REQUEST.md entry 1, slice 4): every
+// account now originates from a system admin (scripts/create-first-admin.mjs,
+// the SystemAdminPanel) or from redeeming an invitation
+// (InviteRedemptionPage.jsx) — login-only, no mode toggle.
 export default function LoginScreen() {
-  const { login, signup } = useAuth();
-  const [mode, setMode] = useState('login');
+  const { login } = useAuth();
   const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -78,11 +73,7 @@ export default function LoginScreen() {
     setError(null);
     setSubmitting(true);
     try {
-      if (mode === 'login') {
-        await login({ username, password });
-      } else {
-        await signup({ username, email, password });
-      }
+      await login({ username, password });
     } catch (err) {
       setError(err.message || 'Something went wrong');
     } finally {
@@ -94,7 +85,7 @@ export default function LoginScreen() {
     <div id="main" tabIndex={-1} style={styles.outer}>
       <div className="sl-card" style={styles.card}>
         <h1 style={styles.title}>Silent Whisper</h1>
-        <p style={styles.subtitle}>{mode === 'login' ? 'Sign in to your workspace' : 'Create an account'}</p>
+        <p style={styles.subtitle}>Sign in to your workspace</p>
 
         {error && <div style={styles.error}>{error}</div>}
 
@@ -111,21 +102,6 @@ export default function LoginScreen() {
             />
           </div>
 
-          {mode === 'signup' && (
-            <div style={styles.field}>
-              <label style={styles.label} htmlFor="email">Email</label>
-              <input
-                id="email"
-                type="email"
-                style={styles.input}
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoComplete="email"
-                required
-              />
-            </div>
-          )}
-
           <div style={styles.field}>
             <label style={styles.label} htmlFor="password">Password</label>
             <input
@@ -134,29 +110,15 @@ export default function LoginScreen() {
               style={styles.input}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              autoComplete="current-password"
               required
             />
           </div>
 
           <button type="submit" style={styles.button} disabled={submitting}>
-            {submitting ? 'Please wait…' : mode === 'login' ? 'Sign In' : 'Sign Up'}
+            {submitting ? 'Please wait…' : 'Sign In'}
           </button>
         </form>
-
-        <div style={styles.toggle}>
-          {mode === 'login' ? (
-            <>
-              Don&apos;t have an account?{' '}
-              <button type="button" style={styles.toggleLink} onClick={() => setMode('signup')}>Sign up</button>
-            </>
-          ) : (
-            <>
-              Already have an account?{' '}
-              <button type="button" style={styles.toggleLink} onClick={() => setMode('login')}>Sign in</button>
-            </>
-          )}
-        </div>
       </div>
     </div>
   );

@@ -38,7 +38,7 @@ docker compose run --rm ollama-pull-model
 
 | Service | Local URL | Notes |
 |---|---|---|
-| Frontend (Vite dev server) | http://localhost:3101 | full chat UI — login/signup, workspaces, channels, threads |
+| Frontend (Vite dev server) | http://localhost:3101 | full chat UI — login, workspaces, channels, threads (self-service signup is closed) |
 | Backend health | http://localhost:8101/health | `{"status":"ok","db":"ok","uptimeSeconds":N}` |
 | Backend REST API | http://localhost:8101/api | see API Reference below |
 | Backend WebSocket | ws://localhost:8101/ws | authenticate-frame handshake — see WebSocket Protocol below |
@@ -189,13 +189,21 @@ Skip this if you don't need Summarize/Extract Tasks/Search locally — the backe
 
 ### 4. Create the first user
 
+Self-service signup is closed (`FEATURE_REQUEST.md` entry 1, slice 4, `PROJECT_PLAN.md` Section 11) — every account now originates from a system admin or an invitation, so the very first account on a fresh install has to be created out-of-band:
+
 ```bash
-curl -s -c cookies.txt -X POST http://localhost:8101/api/auth/signup \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","email":"alice@example.com","password":"correct-horse-battery"}'
+cd scripts && node create-first-admin.mjs alice alice@example.com correct-horse-battery
 ```
 
-Returns `{"accessToken": "...", "user": {...}}` and sets a `refresh_token` cookie (saved to `cookies.txt` above by curl's `-c` flag). Password policy: 10+ characters, not on the common-password deny-list (`backend/src/auth/passwordPolicy.js`).
+Creates a system-admin account directly in Postgres (no HTTP round trip — self-service signup no longer exists to call). Password policy: 10+ characters, not on the common-password deny-list (`backend/src/auth/passwordPolicy.js`). Log in normally afterward to get an access token + refresh cookie:
+
+```bash
+curl -s -c cookies.txt -X POST http://localhost:8101/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"correct-horse-battery"}'
+```
+
+From there, use `POST /api/admin/users` (system-admin only) to create further bare accounts, or `POST /api/workspaces/:workspaceId/invitations`/`POST /api/organizations/:orgId/invitations` to invite people who don't have an account yet — see the API Reference below.
 
 ## API Reference
 
@@ -203,8 +211,11 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/auth/signup` | `{username, email, password}` → `{accessToken, user}` + refresh cookie |
-| POST | `/api/auth/login` | `{username, password}` → `{accessToken, user}` + refresh cookie |
+| POST | `/api/auth/login` | `{username, password}` → `{accessToken, user}` + refresh cookie — self-service signup no longer exists; see "Create the first user" above and `/api/admin/users`/`/api/*/invitations` below |
+| POST | `/api/admin/users` | system-admin only. `{username, email, password, organizationId?}` → creates a bare account, no workspace tie |
+| GET | `/api/admin/users` | system-admin only. Every account, with `status`/`isSystemAdmin` |
+| POST | `/api/admin/users/:userId/disable` \| `/enable` | system-admin only |
+| GET | `/api/workspaces/admin/all` | system-admin only. Every workspace regardless of membership, across every organization |
 | POST | `/api/auth/refresh` | reads refresh cookie, rotates it → `{accessToken}` + new refresh cookie |
 | POST | `/api/auth/logout` | reads refresh cookie, revokes it → `204` |
 | GET | `/api/auth/me` | requires a bearer token → `{user}` — added in Phase 3 so the frontend can restore a session after a bare `/refresh` (which only returns a token, not the user) |
@@ -534,21 +545,23 @@ npx playwright install chromium                  # first time only, downloads th
 npm run test:e2e
 ```
 
-Drives the real stack in headless Chromium (`frontend/e2e/workflows.spec.js`) — signup/workspace/channel/message/thread/session-restore, AI summarize + extract-tasks and semantic search against a real Ollama instance, the admin AI Settings and Audit Log dashboards, keyboard/accessibility checks (skip link, keyboard-only workspace/channel selection, focus rings), and virtual scrolling under a seeded 50-message history. Not mocked anywhere — this is the same kind of verification every phase's manual Playwright scripts already did, just committed and re-runnable instead of thrown away.
+Drives the real stack in headless Chromium (`frontend/e2e/workflows.spec.js`) — invitation redemption/workspace/channel/message/thread/session-restore, AI summarize + extract-tasks and semantic search against a real Ollama instance, the admin AI Settings/Audit Log/System Admin dashboards, account disable/enable, workspace ownership transfer/visibility change/`managers_can_archive` delegation, keyboard/accessibility checks (skip link, keyboard-only workspace/channel selection, focus rings), and virtual scrolling under a seeded 50-message history. Not mocked anywhere — this is the same kind of verification every phase's manual Playwright scripts already did, just committed and re-runnable instead of thrown away.
 
 **Defaults to `https://whisper.silentlattice.dev`, not `localhost:3101`** (`playwright.config.js`). This isn't arbitrary: `VITE_API_URL`/`VITE_WS_URL` are baked into the frontend bundle at build time (see Frontend Development above), and in this environment that's normally the public domain. Running the tests against bare `localhost:3101` while the bundle talks to a different origin makes every API call cross-origin — and the refresh-token cookie is `SameSite=Strict` (Section 3), so a cross-site request never sends it, breaking session-restore-on-reload in a way that has nothing to do with the app being broken. Override both `E2E_BASE_URL` and `E2E_API_BASE` together if the frontend was instead built pointing at a same-origin local backend.
 
-**Mind the signup rate limiter while iterating.** A full run signs up 24 new users as of the Basic Markdown formatting entry (`signupIpLimiter`: 10/hour/IP — Section 3) — well over the ceiling from one clean backend start, not just at it. A single `npx playwright test` run of the whole file will 429 partway through unless the limiter is reset between batches (`docker compose restart backend` clears the in-process limiter state; acceptable in this dev/test environment, never do this to route around the limiter against real traffic) or the run is split into three signup-budget-safe batches (~8 signups each), restarting the backend between each:
+**Mind the login rate limiter while iterating.** As of the enterprise authorization model's slice 4 (`FEATURE_REQUEST.md` entry 1, `PROJECT_PLAN.md` Section 11), self-service signup is closed — `seedUserWithChannel`/`seedPlainUser` seed directly in Postgres instead of calling `/auth/signup`, so `signupIpLimiter` (10/hour/IP) is barely touched by a full run anymore (only the couple of tests that redeem a real invitation over `POST /invitations/:token/accept`, which still shares that limiter, brush against it). The live constraint shifted instead to **`loginIpLimiter`** (20/15min/IP — Section 3): nearly every test calls `loginViaUi` at least once, and several call it twice (a sign-out-then-log-back-in flow), so a full ~37-test run comfortably exceeds 20 login attempts from one IP partway through. A single `npx playwright test` run of the whole file will 429 on `POST /auth/login` partway through unless the limiter is reset between batches (`docker compose restart backend` clears the in-process limiter state; acceptable in this dev/test environment, never do this to route around the limiter against real traffic):
 
 ```bash
-npx playwright test -g "core messaging workflow|AI features|admin surfaces|workspace invite|markdown formatting"
+npx playwright test -g "core messaging workflow|markdown formatting|bubble layout|mention autocomplete|admin surfaces|workspace invite|workspace discovery|accessibility"
 docker compose restart backend
-npx playwright test -g "accessibility|mentions|change password|admin user management"
+npx playwright test -g "mentions|change password|admin user management|workspace archive/unarchive|workspace ownership transfer|workspace visibility change|managers_can_archive|workspace member removal|system admin: disable"
 docker compose restart backend
-npx playwright test -g "workspace archive/unarchive|semantic search|Apple HIG overhaul|virtual scrolling"
+npx playwright test -g "Apple HIG overhaul|virtual scrolling|theme toggle|organizations \(FEATURE_REQUEST|workspace token invitations|invitation redemption"
+docker compose restart backend
+npx playwright test -g "real Ollama inference"
 ```
 
-Watch for substring overlap between `-g` patterns and *other* describe/test titles when picking batch filters — `-g` matches anywhere in the full test title, not just the describe block you intend; e.g. a bare `"change password"` pattern also matches the `menus` describe block's `selecting "Change Password" from the user menu...` test, silently pulling an extra signup into that batch. Re-running the suite repeatedly while debugging burns the same budget from real test traffic, not an attack — every subsequent signup 429s with `"Too many attempts"`. Tests that only need an *existing* user (not a fresh signup) can log in instead, which has a much higher budget (`loginIpLimiter`: 20/15min). If the suite keeps growing, prefer adding new tests that reuse an already-seeded user over ones that call `seedUserWithChannel`/`seedPlainUser` again.
+Watch for substring overlap between `-g` patterns and *other* describe/test titles when picking batch filters — `-g` matches anywhere in the full test title, not just the describe block you intend; e.g. a bare `"change password"` pattern also matches the `menus` describe block's `selecting "Change Password" from the user menu...` test, silently pulling an extra login into that batch. Re-running the suite repeatedly while debugging burns the same budget from real test traffic, not an attack — every subsequent login attempt 429s with `"Too many attempts"` regardless of username. Invitation emails used in a test must be derived from that test's own unique username (not a hardcoded literal) — this stack has no per-test data reset, so a hardcoded invitee email collides with a previous run's leftover account on the second run.
 
 A real, non-hypothetical example of what this suite catches that nothing else would: bulk-seeding many messages via a tight loop of REST `POST`s hit the very message-send rate limit Section 3 requires (correctly) — the fix was seeding test data directly in Postgres (same pattern as `scripts/load-test.mjs`), not weakening the limiter. See `workflows.spec.js`'s virtual-scrolling test for the pattern.
 
@@ -608,9 +621,9 @@ docker compose run --rm --build migrate
 - Confirm `CORS_ORIGIN` (root `.env`) matches the frontend's actual origin (`http://localhost:3101` by default) — a mismatch causes the browser to block the response even though the backend answered.
 - Confirm `VITE_API_URL` was correct **at the time the frontend image was built** — it's baked in at build time, so changing `.env` alone doesn't help; rebuild.
 
-### `429 Too many attempts` while manually testing signup/login
+### `429 Too many attempts` while manually testing login/invitations
 
-Expected, not a bug — `backend/src/auth/rateLimit.js` caps signup at 10/hour per IP and login at 20/15min per IP + 10/15min per username. If you're exploring the API by hand and hit this, wait out the window or temporarily raise the limits in that file (never disable them outright, and never in a way that ships to production).
+Expected, not a bug — `backend/src/auth/rateLimit.js` caps login at 20/15min per IP + 10/15min per username, and invitation-acceptance (`POST /invitations/:token/accept`, the only remaining account-creation path that shares `signupIpLimiter`) at 10/hour per IP. If you're exploring the API by hand and hit this, wait out the window or temporarily raise the limits in that file (never disable them outright, and never in a way that ships to production).
 
 ### Composer stays disabled after selecting a channel
 

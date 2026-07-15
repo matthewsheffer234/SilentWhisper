@@ -57,8 +57,8 @@ describe('GET /channels/:channelId/members', () => {
   });
 
   test('a non-member gets 404, never a 403 (Section 3, existence-hiding)', async () => {
-    const owner = await signup(app, 'msearchowner0');
-    const outsider = await signup(app, 'msearchoutsider0');
+    const owner = await signup('msearchowner0');
+    const outsider = await signup('msearchoutsider0');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
 
@@ -67,7 +67,7 @@ describe('GET /channels/:channelId/members', () => {
   });
 
   test('a nonexistent channel id also 404s, indistinguishable from a real channel the caller cannot see', async () => {
-    const user = await signup(app, 'msearchuser0');
+    const user = await signup('msearchuser0');
     const res = await request(app)
       .get('/api/channels/00000000-0000-0000-0000-000000000000/members')
       .set(authHeader(user.accessToken));
@@ -75,19 +75,19 @@ describe('GET /channels/:channelId/members', () => {
   });
 
   test('a malformed channelId 400s', async () => {
-    const user = await signup(app, 'msearchuser1');
+    const user = await signup('msearchuser1');
     const res = await request(app).get('/api/channels/not-a-uuid/members').set(authHeader(user.accessToken));
     expect(res.status).toBe(400);
   });
 
   test('prefix matching is case-insensitive and resolves partial usernames, excludes the caller, and omits with no query returns alphabetically', async () => {
-    const owner = await signup(app, 'msearchowner1');
+    const owner = await signup('msearchowner1');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
 
-    const alice = await signup(app, 'alicesmith');
-    const albert = await signup(app, 'albertjones');
-    const bob = await signup(app, 'bobwhite');
+    const alice = await signup('alicesmith');
+    const albert = await signup('albertjones');
+    const bob = await signup('bobwhite');
     for (const u of [alice, albert, bob]) {
       // eslint-disable-next-line no-await-in-loop
       await addToChannel(owner, workspaceId, channelId, u);
@@ -110,12 +110,12 @@ describe('GET /channels/:channelId/members', () => {
   });
 
   test('results are capped at the configured limit', async () => {
-    const owner = await signup(app, 'msearchowner2');
+    const owner = await signup('msearchowner2');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
     for (let i = 0; i < 10; i += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const u = await signup(app, `capuser${i}`);
+      const u = await signup(`capuser${i}`);
       // eslint-disable-next-line no-await-in-loop
       await addToChannel(owner, workspaceId, channelId, u);
     }

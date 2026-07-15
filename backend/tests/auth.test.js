@@ -2,7 +2,8 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { authHeader } from './helpers/testUsers.js';
+import { signup, authHeader } from './helpers/testUsers.js';
+import { revokeAllRefreshTokensForUser } from '../src/auth/refreshTokens.js';
 
 function extractCookie(res, name) {
   const setCookie = res.headers['set-cookie'] || [];
@@ -19,82 +20,31 @@ afterAll(async () => {
   await destroyResetDbConnection();
 });
 
-describe('POST /api/auth/signup', () => {
-  test('creates a user and issues an access token + refresh cookie', async () => {
+// POST /api/auth/signup no longer exists (FEATURE_REQUEST.md entry 1, slice
+// 4: self-service signup is closed) — every account now originates from
+// scripts/create-first-admin.mjs, POST /api/admin/users, or invitation
+// redemption. See adminUsers.test.js for account-creation coverage.
+describe('POST /api/auth/signup (removed, slice 4)', () => {
+  // Not a 404: unmatched /api/* paths fall through past authRouter (no
+  // route left there) to the next bare-/api-mounted router with a route
+  // table of its own, whose unconditional requireAuth middleware fires
+  // before any sub-route match is even attempted — pre-existing routing
+  // structure, not new to this slice. Either way, the route is gone: no
+  // account is created, and an unauthenticated caller is blocked either way.
+  test('the route no longer exists — falls through to a 401, not a 201', async () => {
     const res = await request(app)
       .post('/api/auth/signup')
-      .send({ username: 'alice', email: 'alice@example.com', password: 'correct-horse-battery' });
+      .send({ username: 'nobody', email: 'nobody@example.com', password: 'correct-horse-battery' });
+    expect(res.status).toBe(401);
 
-    expect(res.status).toBe(201);
-    expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.user).toMatchObject({ username: 'alice', email: 'alice@example.com', isSystemAdmin: false });
-
-    const cookie = extractCookie(res, 'refresh_token');
-    expect(cookie).toBeTruthy();
-    expect(res.headers['set-cookie'][0]).toMatch(/HttpOnly/i);
-    expect(res.headers['set-cookie'][0]).toMatch(/SameSite=Strict/i);
-
-    const row = await db('audit_logs').where({ action_type: 'AUTH_SIGNUP' }).first();
-    expect(row).toBeTruthy();
-  });
-
-  // FEATURE_REQUEST.md entry 1, slice 2: signup stays open, so every fresh
-  // account still needs an organization_members row for POST /workspaces'
-  // org-aware default-to-sole-org logic to have something to resolve
-  // against.
-  test('enrolls the new user into the earliest-created organization as ORG_MEMBER', async () => {
-    const earliestOrg = await db('organizations').orderBy('created_at', 'asc').first('id');
-
-    const res = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'enrollee', email: 'enrollee@example.com', password: 'correct-horse-battery' });
-    expect(res.status).toBe(201);
-
-    const memberships = await db('organization_members').where({ user_id: res.body.user.id });
-    expect(memberships).toHaveLength(1);
-    expect(memberships[0]).toMatchObject({ organization_id: earliestOrg.id, org_role: 'ORG_MEMBER' });
-  });
-
-  test('rejects a password shorter than the minimum length', async () => {
-    const res = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'bob', email: 'bob@example.com', password: 'short' });
-    expect(res.status).toBe(400);
-  });
-
-  test('rejects a common password even if long enough', async () => {
-    const res = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'carol', email: 'carol@example.com', password: 'password123' });
-    expect(res.status).toBe(400);
-  });
-
-  test('rejects a duplicate username or email with the same generic message either way', async () => {
-    await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'dave', email: 'dave@example.com', password: 'correct-horse-battery' });
-
-    const duplicateUsername = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'dave', email: 'someone-else@example.com', password: 'correct-horse-battery' });
-    const duplicateEmail = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'someone-else', email: 'dave@example.com', password: 'correct-horse-battery' });
-
-    expect(duplicateUsername.status).toBe(409);
-    expect(duplicateEmail.status).toBe(409);
-    // Same message regardless of which field actually collided — an
-    // attacker can't use this endpoint to enumerate which usernames/emails
-    // already exist by comparing error text.
-    expect(duplicateUsername.body.error).toBe(duplicateEmail.body.error);
+    const user = await db('users').where({ username: 'nobody' }).first();
+    expect(user).toBeUndefined();
   });
 });
 
 describe('POST /api/auth/login', () => {
   beforeEach(async () => {
-    await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'erin', email: 'erin@example.com', password: 'correct-horse-battery' });
+    await signup('erin');
   });
 
   test('succeeds with correct credentials and audits AUTH_LOGIN', async () => {
@@ -136,11 +86,41 @@ describe('POST /api/auth/login', () => {
   });
 });
 
+// New (FEATURE_REQUEST.md entry 1, slice 4): account lifecycle enforcement.
+describe('Account status: disabled users', () => {
+  test('login rejects a DISABLED user with the same generic message as a wrong password', async () => {
+    const user = await signup('disableduser0');
+    await db('users').where({ id: user.userId }).update({ status: 'DISABLED' });
+
+    const res = await request(app).post('/api/auth/login').send({ username: 'disableduser0', password: 'correct-horse-battery' });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Invalid username or password');
+
+    const row = await db('audit_logs').where({ action_type: 'AUTH_LOGIN_FAILURE' }).orderBy('id', 'desc').first();
+    expect(row.payload).toMatchObject({ reason: 'disabled' });
+  });
+
+  // Pins decision 12 (SLICE_4_PLAN.md): no code change needed in
+  // POST /refresh itself — disabling a user already revokes every
+  // outstanding refresh token (the same call admin.js's disable route
+  // makes), so the existing reuse-detection branch already 401s.
+  test('refresh 401s after disable, with no route code change needed', async () => {
+    const user = await signup('disableduser1');
+    const loginRes = await request(app).post('/api/auth/login').send({ username: 'disableduser1', password: 'correct-horse-battery' });
+    const cookie = extractCookie(loginRes, 'refresh_token');
+
+    await db('users').where({ id: user.userId }).update({ status: 'DISABLED' });
+    await revokeAllRefreshTokensForUser(db, user.userId);
+
+    const refreshRes = await request(app).post('/api/auth/refresh').set('Cookie', [`refresh_token=${cookie}`]);
+    expect(refreshRes.status).toBe(401);
+  });
+});
+
 describe('POST /api/auth/refresh', () => {
   async function signupAndGetCookie() {
-    const res = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'frank', email: 'frank@example.com', password: 'correct-horse-battery' });
+    await signup('frank');
+    const res = await request(app).post('/api/auth/login').send({ username: 'frank', password: 'correct-horse-battery' });
     return extractCookie(res, 'refresh_token');
   }
 
@@ -199,10 +179,9 @@ describe('POST /api/auth/refresh', () => {
 
 describe('POST /api/auth/logout', () => {
   test('revokes the refresh token so it can no longer be used', async () => {
-    const signupRes = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'grace', email: 'grace@example.com', password: 'correct-horse-battery' });
-    const cookie = extractCookie(signupRes, 'refresh_token');
+    await signup('grace');
+    const loginRes = await request(app).post('/api/auth/login').send({ username: 'grace', password: 'correct-horse-battery' });
+    const cookie = extractCookie(loginRes, 'refresh_token');
 
     const logoutRes = await request(app).post('/api/auth/logout').set('Cookie', [`refresh_token=${cookie}`]);
     expect(logoutRes.status).toBe(204);
@@ -217,10 +196,9 @@ describe('POST /api/auth/logout', () => {
 
 describe('POST /api/auth/change-password', () => {
   async function signupUser(username) {
-    const res = await request(app)
-      .post('/api/auth/signup')
-      .send({ username, email: `${username}@example.com`, password: 'correct-horse-battery' });
-    return { accessToken: res.body.accessToken, refreshCookie: extractCookie(res, 'refresh_token'), userId: res.body.user.id };
+    const seeded = await signup(username);
+    const loginRes = await request(app).post('/api/auth/login').send({ username, password: 'correct-horse-battery' });
+    return { accessToken: loginRes.body.accessToken, refreshCookie: extractCookie(loginRes, 'refresh_token'), userId: seeded.userId };
   }
 
   test('rejects a wrong currentPassword with 401 and does not change the password', async () => {
@@ -304,22 +282,18 @@ describe('POST /api/auth/change-password', () => {
 
 describe('GET /api/auth/me', () => {
   test('returns the current user for a valid access token', async () => {
-    const signupRes = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'henry', email: 'henry@example.com', password: 'correct-horse-battery' });
+    const henry = await signup('henry');
 
-    const res = await request(app).get('/api/auth/me').set(authHeader(signupRes.body.accessToken));
+    const res = await request(app).get('/api/auth/me').set(authHeader(henry.accessToken));
     expect(res.status).toBe(200);
     expect(res.body.user).toMatchObject({ username: 'henry', email: 'henry@example.com', isSystemAdmin: false });
   });
 
   test('reflects is_system_admin: true once a user is promoted', async () => {
-    const signupRes = await request(app)
-      .post('/api/auth/signup')
-      .send({ username: 'iris', email: 'iris@example.com', password: 'correct-horse-battery' });
+    const iris = await signup('iris');
     await db('users').where({ username: 'iris' }).update({ is_system_admin: true });
 
-    const res = await request(app).get('/api/auth/me').set(authHeader(signupRes.body.accessToken));
+    const res = await request(app).get('/api/auth/me').set(authHeader(iris.accessToken));
     expect(res.status).toBe(200);
     expect(res.body.user.isSystemAdmin).toBe(true);
   });

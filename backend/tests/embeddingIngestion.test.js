@@ -83,7 +83,7 @@ async function createChannelAsMember(owner) {
 
 describe('embedding job ingestion', () => {
   test('sending a message via REST enqueues a pending embedding_jobs row', async () => {
-    const owner = await signup(app, 'ingestrest0');
+    const owner = await signup('ingestrest0');
     const { channelId } = await createChannelAsMember(owner);
 
     const res = await request(app)
@@ -99,7 +99,7 @@ describe('embedding job ingestion', () => {
   });
 
   test('sending a message via WebSocket also enqueues a pending embedding_jobs row', async () => {
-    const owner = await signup(app, 'ingestws0');
+    const owner = await signup('ingestws0');
     const { channelId } = await createChannelAsMember(owner);
 
     const ws = await openAndTrack();
@@ -116,7 +116,7 @@ describe('embedding job ingestion', () => {
   });
 
   test('a duplicate enqueue for the same message is a no-op, not a duplicate row', async () => {
-    const owner = await signup(app, 'ingestdup0');
+    const owner = await signup('ingestdup0');
     const { channelId } = await createChannelAsMember(owner);
 
     const res = await request(app)

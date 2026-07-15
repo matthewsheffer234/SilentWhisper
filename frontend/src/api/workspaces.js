@@ -32,13 +32,22 @@ export const subscribeToWorkspace = (workspaceId) =>
 export const listWorkspaceMembers = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/members`);
 export const changeWorkspaceMemberRole = (workspaceId, userId, role) =>
   apiFetch(`/workspaces/${workspaceId}/members/${userId}`, { method: 'PATCH', body: { role } });
-export const createWorkspaceUser = (workspaceId, { username, email, password, role }) =>
-  apiFetch(`/workspaces/${workspaceId}/users`, { method: 'POST', body: { username, email, password, role } });
+export const removeWorkspaceMember = (workspaceId, userId) =>
+  apiFetch(`/workspaces/${workspaceId}/members/${userId}`, { method: 'DELETE' });
 export const resetWorkspaceMemberPassword = (workspaceId, userId, newPassword) =>
   apiFetch(`/workspaces/${workspaceId}/members/${userId}/reset-password`, { method: 'POST', body: { newPassword } });
 
 export const archiveWorkspace = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/archive`, { method: 'POST' });
 export const unarchiveWorkspace = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/unarchive`, { method: 'POST' });
+
+// New (FEATURE_REQUEST.md entry 1, slice 4).
+export const listAllWorkspacesAdmin = () => apiFetch('/workspaces/admin/all');
+export const transferWorkspaceOwnership = (workspaceId, username) =>
+  apiFetch(`/workspaces/${workspaceId}/transfer-ownership`, { method: 'POST', body: { username } });
+export const changeWorkspaceVisibility = (workspaceId, visibility) =>
+  apiFetch(`/workspaces/${workspaceId}/visibility`, { method: 'POST', body: { visibility } });
+export const updateWorkspaceSettings = (workspaceId, { managersCanArchive }) =>
+  apiFetch(`/workspaces/${workspaceId}/settings`, { method: 'POST', body: { managersCanArchive } });
 
 export const listChannels = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/channels`);
 export const createChannel = (workspaceId, name, type) =>

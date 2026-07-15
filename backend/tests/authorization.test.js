@@ -15,7 +15,7 @@ afterAll(async () => {
 
 describe('workspace + channel authorization', () => {
   test('creating a workspace makes the creator its OWNER', async () => {
-    const owner = await signup(app, 'owner1');
+    const owner = await signup('owner1');
     const res = await request(app)
       .post('/api/workspaces')
       .set(authHeader(owner.accessToken))
@@ -26,8 +26,8 @@ describe('workspace + channel authorization', () => {
   });
 
   test('a non-member gets 404 (not 403) for a workspace they cannot see', async () => {
-    const owner = await signup(app, 'owner2');
-    const outsider = await signup(app, 'outsider1');
+    const owner = await signup('owner2');
+    const outsider = await signup('outsider1');
 
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
@@ -41,8 +41,8 @@ describe('workspace + channel authorization', () => {
   });
 
   test('a private channel is not listed to a workspace member who has not been added to it', async () => {
-    const owner = await signup(app, 'owner3');
-    const member = await signup(app, 'member3');
+    const owner = await signup('owner3');
+    const member = await signup('member3');
 
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
@@ -72,8 +72,8 @@ describe('workspace + channel authorization', () => {
   });
 
   test('any workspace member can self-join a public channel, but not a private one', async () => {
-    const owner = await signup(app, 'owner4');
-    const member = await signup(app, 'member4');
+    const owner = await signup('owner4');
+    const member = await signup('member4');
 
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
@@ -100,8 +100,8 @@ describe('workspace + channel authorization', () => {
   });
 
   test('an existing channel member can add another workspace member to a private channel', async () => {
-    const owner = await signup(app, 'owner5');
-    const member = await signup(app, 'member5');
+    const owner = await signup('owner5');
+    const member = await signup('member5');
 
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
@@ -135,8 +135,8 @@ describe('workspace + channel authorization', () => {
 
 describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   test('a workspace ADMIN can add an existing user by username, defaulting to MEMBER', async () => {
-    const owner = await signup(app, 'inviteowner1');
-    const invitee = await signup(app, 'invitee1');
+    const owner = await signup('inviteowner1');
+    const invitee = await signup('invitee1');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
 
@@ -153,8 +153,8 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   });
 
   test('an OWNER can invite someone directly as MANAGER too', async () => {
-    const owner = await signup(app, 'inviteowner2');
-    await signup(app, 'invitee2');
+    const owner = await signup('inviteowner2');
+    await signup('invitee2');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
 
     const res = await request(app)
@@ -166,9 +166,9 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   });
 
   test('a non-admin workspace member cannot invite anyone (403, not the channel-add rule)', async () => {
-    const owner = await signup(app, 'inviteowner3');
-    const member = await signup(app, 'invitemember3');
-    const target = await signup(app, 'invitee3');
+    const owner = await signup('inviteowner3');
+    const member = await signup('invitemember3');
+    const target = await signup('invitee3');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
     await db('workspace_members').insert({ workspace_id: workspaceId, user_id: member.userId, system_role: 'MEMBER' });
@@ -182,9 +182,9 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   });
 
   test('a non-member (including a stranger) gets 404, not 403 or 400, for a workspace they cannot see', async () => {
-    const owner = await signup(app, 'inviteowner4');
-    const outsider = await signup(app, 'inviteoutsider4');
-    await signup(app, 'invitee4');
+    const owner = await signup('inviteowner4');
+    const outsider = await signup('inviteoutsider4');
+    await signup('invitee4');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
 
     const res = await request(app)
@@ -195,7 +195,7 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   });
 
   test('rejects an unknown username with 400', async () => {
-    const owner = await signup(app, 'inviteowner5');
+    const owner = await signup('inviteowner5');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
 
     const res = await request(app)
@@ -206,8 +206,8 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   });
 
   test('rejects re-inviting an existing member with 409', async () => {
-    const owner = await signup(app, 'inviteowner6');
-    await signup(app, 'invitee6');
+    const owner = await signup('inviteowner6');
+    await signup('invitee6');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
 
@@ -224,8 +224,8 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   });
 
   test('rejects an invalid role value with 400', async () => {
-    const owner = await signup(app, 'inviteowner7');
-    await signup(app, 'invitee7');
+    const owner = await signup('inviteowner7');
+    await signup('invitee7');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
 
     const res = await request(app)
@@ -239,8 +239,8 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   // assignable — there is no transfer-ownership endpoint yet
   // (FEATURE_REQUEST.md entry 1, slice 1).
   test('rejects role: OWNER with 400 — OWNER is not directly assignable', async () => {
-    const owner = await signup(app, 'inviteowner9');
-    await signup(app, 'invitee9');
+    const owner = await signup('inviteowner9');
+    await signup('invitee9');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
 
     const res = await request(app)
@@ -251,8 +251,8 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
   });
 
   test('a successful invite is audited as WORKSPACE_MEMBERSHIP_CHANGE', async () => {
-    const owner = await signup(app, 'inviteowner8');
-    const invitee = await signup(app, 'invitee8');
+    const owner = await signup('inviteowner8');
+    const invitee = await signup('invitee8');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
     const workspaceId = wsRes.body.id;
 
@@ -271,8 +271,8 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
 
 describe('direct messages', () => {
   test('starting a DM twice between the same two users reuses the same channel', async () => {
-    const a = await signup(app, 'dmuser1');
-    const b = await signup(app, 'dmuser2');
+    const a = await signup('dmuser1');
+    const b = await signup('dmuser2');
 
     const first = await request(app)
       .post('/api/direct-messages')
@@ -289,9 +289,9 @@ describe('direct messages', () => {
   });
 
   test('a third party cannot read a DM they are not part of', async () => {
-    const a = await signup(app, 'dmuser3');
-    const b = await signup(app, 'dmuser4');
-    const outsider = await signup(app, 'dmuser5');
+    const a = await signup('dmuser3');
+    const b = await signup('dmuser4');
+    const outsider = await signup('dmuser5');
 
     const dm = await request(app)
       .post('/api/direct-messages')

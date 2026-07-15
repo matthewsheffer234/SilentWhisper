@@ -6,6 +6,7 @@ import { db, checkDbConnection } from './db.js';
 import { securityHeaders, corsMiddleware } from './middleware/security.js';
 import { errorHandler } from './errors.js';
 import { authRouter } from './routes/auth.js';
+import { adminRouter } from './routes/admin.js';
 import { workspacesRouter } from './routes/workspaces.js';
 import { organizationsRouter } from './routes/organizations.js';
 import { invitationsRouter } from './routes/invitations.js';
@@ -46,6 +47,7 @@ app.get('/health', async (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api/admin', adminRouter);
 app.use('/api/workspaces', workspacesRouter);
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/invitations', invitationsRouter);

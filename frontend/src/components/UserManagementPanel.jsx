@@ -2,23 +2,28 @@ import { useEffect, useState } from 'react';
 import {
   listWorkspaceMembers,
   changeWorkspaceMemberRole,
-  createWorkspaceUser,
+  removeWorkspaceMember,
   resetWorkspaceMemberPassword,
   listWorkspaceInvitations,
 } from '../api/workspaces.js';
 import { revokeInvitation } from '../api/invitations.js';
 import { PERMISSIONS, hasPermission } from '../authz/permissions.js';
 
-// FEATURE_REQUEST.md: admin dashboard for user provisioning, role
-// assignment, and password reset. Every action here is workspace-scoped
-// (unlike the workspace-agnostic AiSettingsPanel/AuditDashboard), so this
-// panel needs its own workspace selector — limited to workspaces the
-// current user administers, the same set isSelectedWorkspaceAdmin already
-// checks against for the sidebar's InviteMemberForm. All server calls
-// redundantly re-check authorization server-side (requireWorkspaceAdmin) —
-// this panel only ever being rendered for an admin is a UI convenience,
-// never the actual enforcement boundary, same as AiSettingsPanel already
-// documents.
+// FEATURE_REQUEST.md: admin dashboard for role assignment, member removal,
+// and password reset. Every action here is workspace-scoped (unlike the
+// workspace-agnostic AiSettingsPanel/AuditDashboard), so this panel needs
+// its own workspace selector — limited to workspaces the current user
+// administers, the same set isSelectedWorkspaceAdmin already checks against
+// for the sidebar's InviteMemberForm. All server calls redundantly re-check
+// authorization server-side (requireWorkspacePermission) — this panel only
+// ever being rendered for an admin is a UI convenience, never the actual
+// enforcement boundary, same as AiSettingsPanel already documents.
+//
+// Direct account provisioning (AddUserForm) is removed as of
+// FEATURE_REQUEST.md entry 1, slice 4: a plain workspace OWNER/MANAGER can
+// no longer create accounts at all — only a system admin can, via
+// SystemAdminPanel.jsx — this panel falls back to inviting (below) for
+// people who don't have an account yet.
 
 const styles = {
   backdrop: {
@@ -189,70 +194,6 @@ function ResetPasswordRow({ member, onReset }) {
   );
 }
 
-function AddUserForm({ onSubmit }) {
-  const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [role, setRole] = useState('MEMBER');
-  const [status, setStatus] = useState(null);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setStatus(null);
-    try {
-      await onSubmit({ username, email, password, role });
-      setStatus({ type: 'success', message: `Created ${username} — share the password with them out of band.` });
-      setUsername('');
-      setEmail('');
-      setPassword('');
-      setRole('MEMBER');
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message || 'Failed to create user' });
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div style={styles.row}>
-        <div style={{ ...styles.field, flex: 1 }}>
-          <label style={styles.label} htmlFor="new-user-username">Username</label>
-          <input id="new-user-username" style={styles.input} value={username} onChange={(e) => setUsername(e.target.value)} required />
-        </div>
-        <div style={{ ...styles.field, flex: 1 }}>
-          <label style={styles.label} htmlFor="new-user-email">Email</label>
-          <input id="new-user-email" type="email" style={styles.input} value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </div>
-      </div>
-      <div style={styles.row}>
-        <div style={{ ...styles.field, flex: 1 }}>
-          <label style={styles.label} htmlFor="new-user-password">Initial password</label>
-          <input
-            id="new-user-password"
-            type="password"
-            style={styles.input}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
-        <div style={{ ...styles.field, flex: 1 }}>
-          <label style={styles.label} htmlFor="new-user-role">Role</label>
-          <select id="new-user-role" style={styles.select} value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="MEMBER">Member</option>
-            <option value="MANAGER">Manager</option>
-          </select>
-        </div>
-      </div>
-      <button type="submit" style={styles.submitButton}>Add user</button>
-      {status && (
-        <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: status.type === 'error' ? '#c0392b' : 'var(--brg)' }}>
-          {status.message}
-        </div>
-      )}
-    </form>
-  );
-}
-
 export default function UserManagementPanel({ workspaces, onClose }) {
   const adminWorkspaces = workspaces.filter((ws) => hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS));
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(adminWorkspaces[0]?.id ?? null);
@@ -298,9 +239,13 @@ export default function UserManagementPanel({ workspaces, onClose }) {
     }
   }
 
-  async function handleAddUser(details) {
-    await createWorkspaceUser(selectedWorkspaceId, details);
-    loadMembers(selectedWorkspaceId);
+  async function handleRemove(userId) {
+    try {
+      await removeWorkspaceMember(selectedWorkspaceId, userId);
+      loadMembers(selectedWorkspaceId);
+    } catch (err) {
+      setError(err.message || 'Failed to remove member');
+    }
   }
 
   async function handleResetPassword(userId, newPassword) {
@@ -314,7 +259,10 @@ export default function UserManagementPanel({ workspaces, onClose }) {
           <span style={styles.title}>Manage Users</span>
           <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close manage users">×</button>
         </div>
-        <div style={styles.subtitle}>Assign roles, add users, and reset passwords for a workspace you administer.</div>
+        <div style={styles.subtitle}>
+          Assign roles, remove members, and reset passwords for a workspace you administer. To add someone new, create an
+          invite link below or, for a brand-new account, ask a system admin.
+        </div>
 
         <div style={styles.field}>
           <label style={styles.label} htmlFor="manage-users-workspace">Workspace</label>
@@ -344,6 +292,7 @@ export default function UserManagementPanel({ workspaces, onClose }) {
                 <th style={styles.th}>Username</th>
                 <th style={styles.th}>Role</th>
                 <th style={styles.th}></th>
+                <th style={styles.th}></th>
               </tr>
             </thead>
             <tbody>
@@ -363,6 +312,11 @@ export default function UserManagementPanel({ workspaces, onClose }) {
                   </td>
                   <td style={styles.td}>
                     <ResetPasswordRow member={m} onReset={handleResetPassword} />
+                  </td>
+                  <td style={styles.td}>
+                    <button type="button" style={styles.rowButton} onClick={() => handleRemove(m.userId)}>
+                      Remove
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -397,9 +351,6 @@ export default function UserManagementPanel({ workspaces, onClose }) {
             </tbody>
           </table>
         )}
-
-        <div style={styles.sectionTitle}>Add a user</div>
-        <AddUserForm onSubmit={handleAddUser} />
       </div>
     </div>
   );

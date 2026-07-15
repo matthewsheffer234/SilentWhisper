@@ -61,8 +61,8 @@ async function addMember(workspaceId, channelId, user) {
 
 describe('extractMentionedUserIds (unit)', () => {
   test('resolves a real channel-member username', async () => {
-    const owner = await signup(app, 'mentowner0');
-    const member = await signup(app, 'mentmember0');
+    const owner = await signup('mentowner0');
+    const member = await signup('mentmember0');
     const { workspaceId, channelId } = await createChannelAsMember(owner);
     await addMember(workspaceId, channelId, member);
 
@@ -75,7 +75,7 @@ describe('extractMentionedUserIds (unit)', () => {
   });
 
   test('ignores a nonexistent username', async () => {
-    const owner = await signup(app, 'mentowner1');
+    const owner = await signup('mentowner1');
     const { channelId } = await createChannelAsMember(owner);
 
     const ids = await extractMentionedUserIds(db, {
@@ -87,8 +87,8 @@ describe('extractMentionedUserIds (unit)', () => {
   });
 
   test('ignores a real user who is not a member of this channel', async () => {
-    const owner = await signup(app, 'mentowner2');
-    await signup(app, 'mentoutsider2');
+    const owner = await signup('mentowner2');
+    await signup('mentoutsider2');
     const { channelId } = await createChannelAsMember(owner);
 
     const ids = await extractMentionedUserIds(db, {
@@ -100,8 +100,8 @@ describe('extractMentionedUserIds (unit)', () => {
   });
 
   test('dedupes repeated mentions of the same username', async () => {
-    const owner = await signup(app, 'mentowner3');
-    const member = await signup(app, 'mentmember3');
+    const owner = await signup('mentowner3');
+    const member = await signup('mentmember3');
     const { workspaceId, channelId } = await createChannelAsMember(owner);
     await addMember(workspaceId, channelId, member);
 
@@ -116,14 +116,14 @@ describe('extractMentionedUserIds (unit)', () => {
   test(
     'caps at 20 distinct usernames from a message containing more',
     async () => {
-      const owner = await signup(app, 'mentowner4');
+      const owner = await signup('mentowner4');
       const { workspaceId, channelId } = await createChannelAsMember(owner);
 
       const usernames = [];
       for (let i = 0; i < 25; i += 1) {
         const username = `mentflood${i}`;
         // eslint-disable-next-line no-await-in-loop
-        const member = await signup(app, username);
+        const member = await signup(username);
         // eslint-disable-next-line no-await-in-loop
         await addMember(workspaceId, channelId, member);
         usernames.push(username);
@@ -137,7 +137,7 @@ describe('extractMentionedUserIds (unit)', () => {
   );
 
   test("excludes the sender's own username", async () => {
-    const owner = await signup(app, 'mentowner5');
+    const owner = await signup('mentowner5');
     const { channelId } = await createChannelAsMember(owner);
 
     const ids = await extractMentionedUserIds(db, {
@@ -151,8 +151,8 @@ describe('extractMentionedUserIds (unit)', () => {
 
 describe('mention delivery (integration)', () => {
   test('mentioning a channel member over REST delivers a mention frame, even without having joined the room', async () => {
-    const owner = await signup(app, 'mentrest0');
-    const member = await signup(app, 'mentrestmember0');
+    const owner = await signup('mentrest0');
+    const member = await signup('mentrestmember0');
     const { workspaceId, channelId } = await createChannelAsMember(owner);
     await addMember(workspaceId, channelId, member);
 
@@ -175,8 +175,8 @@ describe('mention delivery (integration)', () => {
   });
 
   test('mentioning a channel member over WS delivers a mention frame', async () => {
-    const owner = await signup(app, 'mentws0');
-    const member = await signup(app, 'mentwsmember0');
+    const owner = await signup('mentws0');
+    const member = await signup('mentwsmember0');
     const { workspaceId, channelId } = await createChannelAsMember(owner);
     await addMember(workspaceId, channelId, member);
 
@@ -200,8 +200,8 @@ describe('mention delivery (integration)', () => {
   });
 
   test('a non-member mention produces no frame', async () => {
-    const owner = await signup(app, 'mentnonmember0');
-    const outsider = await signup(app, 'mentnonmemberoutsider0');
+    const owner = await signup('mentnonmember0');
+    const outsider = await signup('mentnonmemberoutsider0');
     const { channelId } = await createChannelAsMember(owner);
 
     const outsiderWs = await openAndTrack();
@@ -217,8 +217,8 @@ describe('mention delivery (integration)', () => {
   });
 
   test('a user with two open connections gets the mention frame on both', async () => {
-    const owner = await signup(app, 'mentmulti0');
-    const member = await signup(app, 'mentmultimember0');
+    const owner = await signup('mentmulti0');
+    const member = await signup('mentmultimember0');
     const { workspaceId, channelId } = await createChannelAsMember(owner);
     await addMember(workspaceId, channelId, member);
 
@@ -241,7 +241,7 @@ describe('mention delivery (integration)', () => {
   });
 
   test('mentioning the sender themselves does not self-notify', async () => {
-    const owner = await signup(app, 'mentself0');
+    const owner = await signup('mentself0');
     const { channelId } = await createChannelAsMember(owner);
 
     const ownerWs = await openAndTrack();

@@ -90,8 +90,8 @@ describe('POST /api/search/semantic authorization', () => {
   });
 
   test('a non-member of the specified channelId gets 404, not 403', async () => {
-    const owner = await signup(app, 'searchowner0');
-    const outsider = await signup(app, 'searchoutsider0');
+    const owner = await signup('searchowner0');
+    const outsider = await signup('searchoutsider0');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
 
@@ -104,8 +104,8 @@ describe('POST /api/search/semantic authorization', () => {
   });
 
   test('a non-member of the specified workspaceId gets 404, not 403', async () => {
-    const owner = await signup(app, 'searchowner1');
-    const outsider = await signup(app, 'searchoutsider1');
+    const owner = await signup('searchowner1');
+    const outsider = await signup('searchoutsider1');
     const workspaceId = await createWorkspace(owner);
 
     mockEmbedFetch(spike(0));
@@ -117,7 +117,7 @@ describe('POST /api/search/semantic authorization', () => {
   });
 
   test('malformed query, limit, and channelId are all rejected with 400', async () => {
-    const user = await signup(app, 'searchvalid0');
+    const user = await signup('searchvalid0');
 
     const empty = await request(app).post('/api/search/semantic').set(authHeader(user.accessToken)).send({ query: '' });
     expect(empty.status).toBe(400);
@@ -138,8 +138,8 @@ describe('POST /api/search/semantic authorization', () => {
 
 describe('POST /api/search/semantic results', () => {
   test('a global query (no scope) never returns a hit from a channel the caller is not in', async () => {
-    const alice = await signup(app, 'searchalice0');
-    const bob = await signup(app, 'searchbob0');
+    const alice = await signup('searchalice0');
+    const bob = await signup('searchbob0');
 
     const aliceWs = await createWorkspace(alice);
     const aliceChannel = await createChannel(alice, aliceWs);
@@ -163,7 +163,7 @@ describe('POST /api/search/semantic results', () => {
   });
 
   test('results are ordered by similarity, most similar first', async () => {
-    const user = await signup(app, 'searchorder0');
+    const user = await signup('searchorder0');
     const workspaceId = await createWorkspace(user);
     const channelId = await createChannel(user, workspaceId);
 
@@ -184,7 +184,7 @@ describe('POST /api/search/semantic results', () => {
   });
 
   test('a thread-reply hit includes parentMessage', async () => {
-    const user = await signup(app, 'searchthread0');
+    const user = await signup('searchthread0');
     const workspaceId = await createWorkspace(user);
     const channelId = await createChannel(user, workspaceId);
 
@@ -204,7 +204,7 @@ describe('POST /api/search/semantic results', () => {
   });
 
   test('audits the search with query length and result count, never the raw query text', async () => {
-    const user = await signup(app, 'searchaudit0');
+    const user = await signup('searchaudit0');
     const workspaceId = await createWorkspace(user);
     const channelId = await createChannel(user, workspaceId);
     const messageId = await sendMessage(user, channelId, 'auditable content');
@@ -227,7 +227,7 @@ describe('POST /api/search/semantic results', () => {
 
   test('returns 503 and audits nothing when the provider is disabled', async () => {
     const { validateSettingsPatch, updateSettings } = await import('../src/llm/settingsService.js');
-    const user = await signup(app, 'searchdisabled0');
+    const user = await signup('searchdisabled0');
     await updateSettings(db, validateSettingsPatch({ provider: 'disabled' }), user.userId);
 
     const res = await request(app).post('/api/search/semantic').set(authHeader(user.accessToken)).send({ query: 'hi' });

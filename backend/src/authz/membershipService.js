@@ -1,5 +1,5 @@
 import { ForbiddenError, NotFoundError, ConflictError } from '../errors.js';
-import { WORKSPACE_ROLE_PERMISSIONS, ORG_ROLE_PERMISSIONS } from './permissions.js';
+import { PERMISSIONS, WORKSPACE_ROLE_PERMISSIONS, ORG_ROLE_PERMISSIONS } from './permissions.js';
 
 // The one shared authorization module used by every REST handler now, and
 // by WebSocket room-join/reconnect handling starting Phase 3 (PROJECT_PLAN.md
@@ -64,6 +64,18 @@ export async function requireWorkspacePermission(db, userId, workspaceId, permis
   if (!granted) {
     throw new ForbiddenError('Insufficient workspace privileges');
   }
+
+  // managers_can_archive (FEATURE_REQUEST.md entry 1, slice 4): the schema
+  // column has existed since slice 1 but was never read until now. OWNER's
+  // archive access is unconditional; a MANAGER's is delegated per-workspace
+  // via POST /:workspaceId/settings (WORKSPACE_MANAGE_SETTINGS, owner-only).
+  if (role === 'MANAGER' && permission === PERMISSIONS.WORKSPACE_ARCHIVE) {
+    const workspace = await db('workspaces').where({ id: workspaceId }).first('managers_can_archive');
+    if (!workspace?.managers_can_archive) {
+      throw new ForbiddenError('Archiving is not delegated to managers for this workspace');
+    }
+  }
+
   return { role, viaSystemAdminOverride: false };
 }
 

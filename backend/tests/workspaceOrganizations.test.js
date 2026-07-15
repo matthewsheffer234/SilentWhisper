@@ -2,7 +2,8 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { signup, authHeader } from './helpers/testUsers.js';
+import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
+import { createOrg } from './helpers/fixtures.js';
 
 // FEATURE_REQUEST.md entry 1 (Enterprise authorization model), slice 2:
 // POST /workspaces and GET /workspaces/discoverable become org-aware, with
@@ -18,18 +19,9 @@ afterAll(async () => {
   await destroyResetDbConnection();
 });
 
-async function makeSystemAdmin(userId) {
-  await db('users').where({ id: userId }).update({ is_system_admin: true });
-}
-
-async function createOrg(sysAdmin, name) {
-  const res = await request(app).post('/api/organizations').set(authHeader(sysAdmin.accessToken)).send({ name });
-  return res.body;
-}
-
 describe('POST /api/workspaces organizationId resolution', () => {
   test('omitted, caller in exactly one org -> unchanged 201 (today\'s no-op default)', async () => {
-    const user = await signup(app, 'wsorg0');
+    const user = await signup('wsorg0');
     const res = await request(app).post('/api/workspaces').set(authHeader(user.accessToken)).send({ name: 'W' });
     expect(res.status).toBe(201);
 
@@ -39,9 +31,8 @@ describe('POST /api/workspaces organizationId resolution', () => {
   });
 
   test('explicit organizationId the caller belongs to -> 201, workspace lands in that org', async () => {
-    const admin = await signup(app, 'wsorg1');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin, 'WS Org Explicit');
+    const admin = await seedSystemAdmin('wsorg1');
+    const org = await createOrg(admin.accessToken, 'WS Org Explicit');
 
     const res = await request(app)
       .post('/api/workspaces')
@@ -54,11 +45,10 @@ describe('POST /api/workspaces organizationId resolution', () => {
   });
 
   test('explicit organizationId the caller does not belong to -> 404', async () => {
-    const admin = await signup(app, 'wsorg2');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin, 'WS Org Not Mine');
+    const admin = await seedSystemAdmin('wsorg2');
+    const org = await createOrg(admin.accessToken, 'WS Org Not Mine');
 
-    const outsider = await signup(app, 'wsorgoutsider2');
+    const outsider = await signup('wsorgoutsider2');
     const res = await request(app)
       .post('/api/workspaces')
       .set(authHeader(outsider.accessToken))
@@ -67,9 +57,8 @@ describe('POST /api/workspaces organizationId resolution', () => {
   });
 
   test('caller belongs to two orgs, organizationId omitted -> 400 ambiguity', async () => {
-    const admin = await signup(app, 'wsorg3');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin, 'WS Org Second');
+    const admin = await seedSystemAdmin('wsorg3');
+    const org = await createOrg(admin.accessToken, 'WS Org Second');
     // admin is now ORG_ADMIN of both the earliest-created org (via signup
     // auto-enrollment) and this new one (via org creation) — two memberships.
 
@@ -81,7 +70,7 @@ describe('POST /api/workspaces organizationId resolution', () => {
 
 describe('GET /api/workspaces organizationId field and filter (slice 3)', () => {
   test('each workspace row includes its own organizationId', async () => {
-    const user = await signup(app, 'wsorgfield0');
+    const user = await signup('wsorgfield0');
     const createRes = await request(app).post('/api/workspaces').set(authHeader(user.accessToken)).send({ name: 'Field WS' });
 
     const res = await request(app).get('/api/workspaces').set(authHeader(user.accessToken));
@@ -92,10 +81,9 @@ describe('GET /api/workspaces organizationId field and filter (slice 3)', () => 
   });
 
   test('?organizationId= filters to only that org\'s workspaces', async () => {
-    const admin = await signup(app, 'wsorgfilter0');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('wsorgfilter0');
     const earliestOrg = await db('organizations').orderBy('created_at', 'asc').first('id');
-    const orgB = await createOrg(admin, 'Filter Org B');
+    const orgB = await createOrg(admin.accessToken, 'Filter Org B');
 
     // admin now belongs to 2 orgs (default + orgB), so organizationId must be
     // explicit for both — otherwise POST /workspaces 400s on ambiguity.
@@ -125,11 +113,10 @@ describe('GET /api/workspaces organizationId field and filter (slice 3)', () => 
   });
 
   test('?organizationId= for an org the caller has no relationship to returns an empty array, not an error', async () => {
-    const admin = await signup(app, 'wsorgfilter1');
-    await makeSystemAdmin(admin.userId);
-    const orgB = await createOrg(admin, 'Filter Org C');
+    const admin = await seedSystemAdmin('wsorgfilter1');
+    const orgB = await createOrg(admin.accessToken, 'Filter Org C');
 
-    const outsider = await signup(app, 'wsorgfilteroutsider1');
+    const outsider = await signup('wsorgfilteroutsider1');
     const outsiderWs = await request(app).post('/api/workspaces').set(authHeader(outsider.accessToken)).send({ name: 'Outsider WS' });
     expect(outsiderWs.status).toBe(201);
 
@@ -147,9 +134,8 @@ describe('GET /api/workspaces organizationId field and filter (slice 3)', () => 
 
 describe('GET /api/workspaces/discoverable organization scoping', () => {
   test('a second org\'s DISCOVERABLE workspace does not leak into the first org\'s list', async () => {
-    const admin = await signup(app, 'wsdisc0');
-    await makeSystemAdmin(admin.userId);
-    const orgB = await createOrg(admin, 'Org B Discoverable');
+    const admin = await seedSystemAdmin('wsdisc0');
+    const orgB = await createOrg(admin.accessToken, 'Org B Discoverable');
 
     // A workspace explicitly created in org B, discoverable.
     const wsB = await request(app)
@@ -159,16 +145,15 @@ describe('GET /api/workspaces/discoverable organization scoping', () => {
     expect(wsB.status).toBe(201);
 
     // A caller who only belongs to the earliest (default) org.
-    const seeker = await signup(app, 'wsdiscseeker0');
+    const seeker = await signup('wsdiscseeker0');
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
     expect(res.status).toBe(200);
     expect(res.body.map((w) => w.id)).not.toContain(wsB.body.id);
   });
 
   test('explicit organizationId scopes the discoverable list to that org', async () => {
-    const admin = await signup(app, 'wsdisc1');
-    await makeSystemAdmin(admin.userId);
-    const orgB = await createOrg(admin, 'Org B Explicit Discoverable');
+    const admin = await seedSystemAdmin('wsdisc1');
+    const orgB = await createOrg(admin.accessToken, 'Org B Explicit Discoverable');
     const wsB = await request(app)
       .post('/api/workspaces')
       .set(authHeader(admin.accessToken))
@@ -177,7 +162,7 @@ describe('GET /api/workspaces/discoverable organization scoping', () => {
     // A different member of org B, not the workspace's own creator/owner —
     // GET /discoverable excludes workspaces the caller already belongs to,
     // so checking with the creator's own token would always exclude it.
-    const orgBMember = await signup(app, 'wsdiscorgbmember1');
+    const orgBMember = await signup('wsdiscorgbmember1');
     await request(app).post(`/api/organizations/${orgB.id}/members`).set(authHeader(admin.accessToken)).send({ username: 'wsdiscorgbmember1' });
 
     const res = await request(app)
@@ -189,11 +174,10 @@ describe('GET /api/workspaces/discoverable organization scoping', () => {
   });
 
   test('explicit organizationId the caller is not a member of 404s', async () => {
-    const admin = await signup(app, 'wsdisc2');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin, 'Org Not Mine Discoverable');
+    const admin = await seedSystemAdmin('wsdisc2');
+    const org = await createOrg(admin.accessToken, 'Org Not Mine Discoverable');
 
-    const outsider = await signup(app, 'wsdiscoutsider2');
+    const outsider = await signup('wsdiscoutsider2');
     const res = await request(app)
       .get('/api/workspaces/discoverable')
       .query({ organizationId: org.id })

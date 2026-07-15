@@ -19,7 +19,9 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.22.0",
     "vite": "^6.0.7",
     "vitest": "^4.1.10"

@@ -70,7 +70,7 @@ describe('authenticate handshake', () => {
   });
 
   test('accepts a valid access token', async () => {
-    const user = await signup(app, 'wsuser1');
+    const user = await signup('wsuser1');
     const ws = await openAndTrack();
     sendFrame(ws, { type: 'authenticate', accessToken: user.accessToken });
     const authedMsg = await waitForMessage(ws, (e) => e.type === 'authenticated');
@@ -79,7 +79,7 @@ describe('authenticate handshake', () => {
   });
 
   test('supports re-authenticating the same identity on an already-open connection', async () => {
-    const user = await signup(app, 'wsuser2');
+    const user = await signup('wsuser2');
     const ws = await openAndTrack();
     sendFrame(ws, { type: 'authenticate', accessToken: user.accessToken });
     await waitForMessage(ws, (e) => e.type === 'authenticated');
@@ -90,8 +90,8 @@ describe('authenticate handshake', () => {
   });
 
   test('rejects re-authenticating as a different user on the same connection', async () => {
-    const userA = await signup(app, 'wsuser3');
-    const userB = await signup(app, 'wsuser4');
+    const userA = await signup('wsuser3');
+    const userB = await signup('wsuser4');
     const ws = await openAndTrack();
     sendFrame(ws, { type: 'authenticate', accessToken: userA.accessToken });
     await waitForMessage(ws, (e) => e.type === 'authenticated');
@@ -103,7 +103,7 @@ describe('authenticate handshake', () => {
   });
 
   test('enforces the max concurrent connections per user', async () => {
-    const user = await signup(app, 'wsuser5');
+    const user = await signup('wsuser5');
     for (let i = 0; i < config.ws.maxConnectionsPerUser; i += 1) {
       // eslint-disable-next-line no-await-in-loop
       const ws = await openAndTrack();
@@ -122,7 +122,7 @@ describe('authenticate handshake', () => {
 
 describe('room join authorization', () => {
   test('joining a channel you are a member of succeeds', async () => {
-    const owner = await signup(app, 'wsowner1');
+    const owner = await signup('wsowner1');
     const { channelId } = await createChannelAsMember(owner);
 
     const ws = await openAndTrack();
@@ -135,8 +135,8 @@ describe('room join authorization', () => {
   });
 
   test('joining a channel you are not a member of is denied without revealing whether it exists', async () => {
-    const owner = await signup(app, 'wsowner2');
-    const outsider = await signup(app, 'wsoutsider1');
+    const owner = await signup('wsowner2');
+    const outsider = await signup('wsoutsider1');
     const { channelId } = await createChannelAsMember(owner, { type: 'PRIVATE' });
 
     const ws = await openAndTrack();
@@ -155,8 +155,8 @@ describe('room join authorization', () => {
   });
 
   test('re-validates membership on every reconnect rather than trusting a prior session', async () => {
-    const owner = await signup(app, 'wsowner3');
-    const member = await signup(app, 'wsmember1');
+    const owner = await signup('wsowner3');
+    const member = await signup('wsmember1');
     const { workspaceId, channelId } = await createChannelAsMember(owner, { type: 'PRIVATE' });
 
     // First connection: member is not yet added, join is denied.
@@ -189,14 +189,14 @@ describe('room join authorization', () => {
 
 describe('message delivery', () => {
   test('a message sent by one joined client is broadcast to another joined client, but not to a non-joined one', async () => {
-    const owner = await signup(app, 'wssender1');
+    const owner = await signup('wssender1');
     const { workspaceId, channelId } = await createChannelAsMember(owner, { type: 'PUBLIC' });
-    const receiver = await signup(app, 'wsreceiver1');
+    const receiver = await signup('wsreceiver1');
     await db('workspace_members').insert({ workspace_id: workspaceId, user_id: receiver.userId, system_role: 'MEMBER' });
     await request(app)
       .post(`/api/workspaces/${workspaceId}/channels/${channelId}/join`)
       .set(authHeader(receiver.accessToken));
-    const outsider = await signup(app, 'wsoutsider2');
+    const outsider = await signup('wsoutsider2');
 
     const senderWs = await openAndTrack();
     sendFrame(senderWs, { type: 'authenticate', accessToken: owner.accessToken });
@@ -227,7 +227,7 @@ describe('message delivery', () => {
   });
 
   test('a REST-sent message is also broadcast to WS-joined clients', async () => {
-    const owner = await signup(app, 'wssender2');
+    const owner = await signup('wssender2');
     const { channelId } = await createChannelAsMember(owner, { type: 'PUBLIC' });
 
     const ws = await openAndTrack();
@@ -250,7 +250,7 @@ describe('message delivery', () => {
   });
 
   test('a message sent over the socket echoes back the clientNonce for optimistic-send reconciliation', async () => {
-    const owner = await signup(app, 'wssender4');
+    const owner = await signup('wssender4');
     const { channelId } = await createChannelAsMember(owner, { type: 'PUBLIC' });
 
     const ws = await openAndTrack();
@@ -266,7 +266,7 @@ describe('message delivery', () => {
   });
 
   test('sending to a channel you have not joined over the socket is rejected', async () => {
-    const owner = await signup(app, 'wssender3');
+    const owner = await signup('wssender3');
     const { channelId } = await createChannelAsMember(owner, { type: 'PUBLIC' });
 
     const ws = await openAndTrack();
@@ -282,8 +282,8 @@ describe('message delivery', () => {
 
 describe('presence', () => {
   test('another user authenticating broadcasts an online presence update to already-connected clients', async () => {
-    const userA = await signup(app, 'wspresence1');
-    const userB = await signup(app, 'wspresence2');
+    const userA = await signup('wspresence1');
+    const userB = await signup('wspresence2');
 
     const wsA = await openAndTrack();
     sendFrame(wsA, { type: 'authenticate', accessToken: userA.accessToken });
@@ -308,8 +308,8 @@ describe('presence', () => {
   });
 
   test('disconnecting broadcasts an offline presence update', async () => {
-    const userA = await signup(app, 'wspresence3');
-    const userB = await signup(app, 'wspresence4');
+    const userA = await signup('wspresence3');
+    const userB = await signup('wspresence4');
 
     const wsA = await openAndTrack();
     sendFrame(wsA, { type: 'authenticate', accessToken: userA.accessToken });
@@ -333,7 +333,7 @@ describe('presence', () => {
 
 describe('message rate limiting', () => {
   test('exceeding the per-user message window rate is rejected', async () => {
-    const owner = await signup(app, 'wsratelimit1');
+    const owner = await signup('wsratelimit1');
     const { channelId } = await createChannelAsMember(owner);
 
     const ws = await openAndTrack();

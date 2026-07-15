@@ -39,7 +39,7 @@ afterAll(async () => {
 });
 
 async function createMessage(username) {
-  const owner = await signup(app, username);
+  const owner = await signup(username);
   const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
   const chRes = await request(app)
     .post(`/api/workspaces/${wsRes.body.id}/channels`)

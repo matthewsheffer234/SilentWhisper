@@ -3,7 +3,6 @@ import bcrypt from 'bcryptjs';
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { appendAuditEvent, ANONYMOUS_ACTOR_ID } from '../audit/auditService.js';
-import { assertUsername, assertEmail } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { signAccessToken } from '../auth/jwt.js';
 import {
@@ -13,9 +12,9 @@ import {
   revokeAllRefreshTokensForUser,
   RefreshReuseDetectedError,
 } from '../auth/refreshTokens.js';
-import { loginIpLimiter, loginUsernameLimiter, signupIpLimiter, changePasswordLimiter } from '../auth/rateLimit.js';
+import { loginIpLimiter, loginUsernameLimiter, changePasswordLimiter } from '../auth/rateLimit.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { ConflictError, UnauthorizedError, ValidationError } from '../errors.js';
+import { UnauthorizedError, ValidationError } from '../errors.js';
 
 export const authRouter = Router();
 
@@ -46,66 +45,13 @@ function clearRefreshCookie(res) {
   res.clearCookie(REFRESH_COOKIE_NAME, REFRESH_COOKIE_OPTIONS);
 }
 
-authRouter.post('/signup', signupIpLimiter, async (req, res, next) => {
-  try {
-    const { username, email, password } = req.body || {};
-    assertUsername(username);
-    assertEmail(email);
-    const passwordError = assertValidPassword(password);
-    if (passwordError) throw new ValidationError(passwordError);
-
-    const existing = await db('users')
-      .where({ username })
-      .orWhere({ email })
-      .first();
-    if (existing) {
-      // Deliberately generic — doesn't reveal which field collided, to avoid
-      // making this an account-enumeration oracle.
-      throw new ConflictError('Username or email already in use');
-    }
-
-    const passwordHash = await bcrypt.hash(password, config.auth.bcryptSaltRounds);
-    // display_name (migration 0011, FEATURE_REQUEST.md entry 1) defaults to
-    // username at creation time, same as the migration's own backfill for
-    // pre-existing accounts — independently editable later, but nothing in
-    // slice 1 exposes an edit path yet.
-    //
-    // Transactional as of slice 2: self-service signup stays open (invitations
-    // are an *additional* account-creation path, not a replacement), so every
-    // fresh signup still needs an organization_members row — otherwise
-    // POST /workspaces' org-aware default-to-sole-org logic has nothing to
-    // resolve against and a brand-new user could never create a workspace.
-    // Enrolled into the earliest-created organization (deterministic,
-    // matches migration 0012's own backfill rule for pre-existing users), as
-    // a plain ORG_MEMBER.
-    const user = await db.transaction(async (trx) => {
-      const [u] = await trx('users')
-        .insert({ username, email, password_hash: passwordHash, display_name: username })
-        .returning(['id', 'username', 'email', 'is_system_admin']);
-      const defaultOrg = await trx('organizations').orderBy('created_at', 'asc').first('id');
-      await trx('organization_members').insert({ organization_id: defaultOrg.id, user_id: u.id, org_role: 'ORG_MEMBER' });
-      return u;
-    });
-
-    const accessToken = signAccessToken({ userId: user.id, username: user.username });
-    const refreshToken = await issueRefreshToken(db, user.id);
-    setRefreshCookie(res, refreshToken);
-
-    await appendAuditEvent(db, {
-      actorId: user.id,
-      actorIp: req.ip,
-      actionType: 'AUTH_SIGNUP',
-      targetResource: user.username,
-    });
-
-    res.status(201).json({
-      accessToken,
-      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+// Self-service signup is closed (FEATURE_REQUEST.md entry 1, slice 4): every
+// account now originates from a system admin (scripts/create-first-admin.mjs,
+// POST /api/admin/users) or from redeeming an invitation
+// (POST /api/invitations/:token/accept, which shares this file's
+// setRefreshCookie and issues the same response shape signup used to).
+// AUTH_SIGNUP is left as a dead-but-historical audit action type — existing
+// rows keep it, nothing new writes it.
 
 // Lets the frontend restore a session after a page reload: it can silently
 // call /refresh to get a fresh access token from the httpOnly cookie, but
@@ -150,6 +96,24 @@ authRouter.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res,
         actorIp: req.ip,
         actionType: 'AUTH_LOGIN_FAILURE',
         targetResource: username,
+      });
+      throw new UnauthorizedError('Invalid username or password');
+    }
+
+    // Account lifecycle (FEATURE_REQUEST.md entry 1, slice 4): a disabled
+    // user's outstanding refresh tokens are already revoked at disable-time
+    // (revokeAllRefreshTokensForUser in admin.js), so POST /refresh already
+    // rejects them via the existing reuse-detection branch with no code
+    // change needed there — this is the only genuine gap. Identical generic
+    // message to a wrong-password attempt; never leaks that the account
+    // exists but is disabled.
+    if (user.status === 'DISABLED') {
+      await appendAuditEvent(db, {
+        actorId: user.id,
+        actorIp: req.ip,
+        actionType: 'AUTH_LOGIN_FAILURE',
+        targetResource: username,
+        payload: { reason: 'disabled' },
       });
       throw new UnauthorizedError('Invalid username or password');
     }

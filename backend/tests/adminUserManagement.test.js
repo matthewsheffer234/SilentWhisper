@@ -34,8 +34,8 @@ async function addMember(owner, workspaceId, username, role) {
 
 describe('GET /api/workspaces/:workspaceId/members', () => {
   test('an admin sees the full roster with roles', async () => {
-    const admin = await signup(app, 'wsadmin0');
-    const member = await signup(app, 'wsmember0');
+    const admin = await signup('wsadmin0');
+    const member = await signup('wsmember0');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'wsmember0');
 
@@ -50,8 +50,8 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
   });
 
   test('a plain member gets 403', async () => {
-    const admin = await signup(app, 'wsadmin1');
-    const member = await signup(app, 'wsmember1');
+    const admin = await signup('wsadmin1');
+    const member = await signup('wsmember1');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'wsmember1');
 
@@ -60,8 +60,8 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
   });
 
   test('a non-member gets 404, not 403 (existence-hiding)', async () => {
-    const admin = await signup(app, 'wsadmin2');
-    const outsider = await signup(app, 'wsoutsider2');
+    const admin = await signup('wsadmin2');
+    const outsider = await signup('wsoutsider2');
     const workspaceId = await createWorkspace(admin);
 
     const res = await request(app).get(`/api/workspaces/${workspaceId}/members`).set(authHeader(outsider.accessToken));
@@ -71,8 +71,8 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
 
 describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
   test('an owner can promote a member to MANAGER', async () => {
-    const admin = await signup(app, 'roleadmin0');
-    const member = await signup(app, 'rolemember0');
+    const admin = await signup('roleadmin0');
+    const member = await signup('rolemember0');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'rolemember0');
 
@@ -88,8 +88,8 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
   });
 
   test('demoting a manager succeeds', async () => {
-    const admin = await signup(app, 'roleadmin1');
-    const manager = await signup(app, 'rolemember1');
+    const admin = await signup('roleadmin1');
+    const manager = await signup('rolemember1');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'rolemember1', 'MANAGER');
 
@@ -105,7 +105,7 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
   // reassignable through this endpoint at all — the check is a flat
   // equality, not a count, and applies even if other MANAGERs exist.
   test("changing the workspace owner's own role directly is rejected with 409", async () => {
-    const admin = await signup(app, 'roleadmin2');
+    const admin = await signup('roleadmin2');
     const workspaceId = await createWorkspace(admin);
 
     const res = await request(app)
@@ -116,8 +116,8 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
   });
 
   test('a plain member gets 403', async () => {
-    const admin = await signup(app, 'roleadmin3');
-    const member = await signup(app, 'rolemember3');
+    const admin = await signup('roleadmin3');
+    const member = await signup('rolemember3');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'rolemember3');
 
@@ -129,9 +129,9 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
   });
 
   test("an admin of workspace A gets 404 against a user in workspace B they don't administer", async () => {
-    const adminA = await signup(app, 'roleadminA');
-    const adminB = await signup(app, 'roleadminB');
-    const memberB = await signup(app, 'rolememberB');
+    const adminA = await signup('roleadminA');
+    const adminB = await signup('roleadminB');
+    const memberB = await signup('rolememberB');
     const workspaceA = await createWorkspace(adminA, 'A');
     const workspaceB = await createWorkspace(adminB, 'B');
     await addMember(adminB, workspaceB, 'rolememberB');
@@ -144,7 +144,7 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
   });
 
   test('an invalid role value 400s', async () => {
-    const admin = await signup(app, 'roleadmin4');
+    const admin = await signup('roleadmin4');
     const workspaceId = await createWorkspace(admin);
 
     const res = await request(app)
@@ -155,8 +155,8 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
   });
 
   test('role: OWNER is rejected with 400 — not an assignable role value', async () => {
-    const admin = await signup(app, 'roleadmin5');
-    const member = await signup(app, 'rolemember5');
+    const admin = await signup('roleadmin5');
+    const member = await signup('rolemember5');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'rolemember5');
 
@@ -166,103 +166,56 @@ describe('PATCH /api/workspaces/:workspaceId/members/:userId', () => {
       .send({ role: 'OWNER' });
     expect(res.status).toBe(400);
   });
-});
 
-describe('POST /api/workspaces/:workspaceId/users', () => {
-  test('an admin creates a new account that lands as a MEMBER by default and can log in', async () => {
-    const admin = await signup(app, 'createadmin0');
-    const workspaceId = await createWorkspace(admin);
-
-    const res = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(admin.accessToken))
-      .send({ username: 'newperson0', email: 'newperson0@example.com', password: 'correct-horse-battery' });
-    expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ username: 'newperson0', email: 'newperson0@example.com', role: 'MEMBER' });
-    expect(res.body.accessToken).toBeUndefined();
-
-    const loginRes = await request(app).post('/api/auth/login').send({ username: 'newperson0', password: 'correct-horse-battery' });
-    expect(loginRes.status).toBe(200);
-
-    const membership = await db('workspace_members').where({ workspace_id: workspaceId, user_id: res.body.userId }).first();
-    expect(membership.system_role).toBe('MEMBER');
-
-    const row = await db('audit_logs').where({ action_type: 'USER_ACCOUNT_CREATED' }).first();
-    expect(row.payload).toMatchObject({ username: 'newperson0', workspaceId, role: 'MEMBER' });
-  });
-
-  test('an admin can create a new account directly as MANAGER', async () => {
-    const admin = await signup(app, 'createadmin1');
-    const workspaceId = await createWorkspace(admin);
+  // New (FEATURE_REQUEST.md entry 1, slice 4): the WORKSPACE_MANAGE_MEMBERS/
+  // WORKSPACE_MANAGE_MANAGERS split. A MANAGER holds only
+  // WORKSPACE_MANAGE_MEMBERS, so promoting someone to MANAGER — which
+  // requires WORKSPACE_MANAGE_MANAGERS — is now 403 for a MANAGER, a real
+  // tightening versus pre-slice-4 behavior (a MANAGER could do this before).
+  test('a manager (holding only WORKSPACE_MANAGE_MEMBERS) gets 403 promoting a member to MANAGER', async () => {
+    const owner = await signup('mgrsplitowner0');
+    const manager = await signup('mgrsplitmanager0');
+    const member = await signup('mgrsplitmember0');
+    const workspaceId = await createWorkspace(owner);
+    await addMember(owner, workspaceId, 'mgrsplitmanager0', 'MANAGER');
+    await addMember(owner, workspaceId, 'mgrsplitmember0');
 
     const res = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(admin.accessToken))
-      .send({ username: 'newperson1', email: 'newperson1@example.com', password: 'correct-horse-battery', role: 'MANAGER' });
-    expect(res.status).toBe(201);
-
-    const membership = await db('workspace_members').where({ workspace_id: workspaceId, user_id: res.body.userId }).first();
-    expect(membership.system_role).toBe('MANAGER');
-  });
-
-  test('a duplicate username or email 409s with the same generic message signup uses', async () => {
-    const admin = await signup(app, 'createadmin2');
-    const workspaceId = await createWorkspace(admin);
-
-    const dupUsername = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(admin.accessToken))
-      .send({ username: 'createadmin2', email: 'unique@example.com', password: 'correct-horse-battery' });
-    expect(dupUsername.status).toBe(409);
-
-    const dupEmail = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(admin.accessToken))
-      .send({ username: 'someoneelse', email: 'createadmin2@example.com', password: 'correct-horse-battery' });
-    expect(dupEmail.status).toBe(409);
-    expect(dupUsername.body.error).toBe(dupEmail.body.error);
-  });
-
-  test('a password failing the policy 400s', async () => {
-    const admin = await signup(app, 'createadmin3');
-    const workspaceId = await createWorkspace(admin);
-
-    const res = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(admin.accessToken))
-      .send({ username: 'newperson3', email: 'newperson3@example.com', password: 'short' });
-    expect(res.status).toBe(400);
-  });
-
-  test('role: OWNER is rejected with 400 — not an assignable role value', async () => {
-    const admin = await signup(app, 'createadmin5');
-    const workspaceId = await createWorkspace(admin);
-
-    const res = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(admin.accessToken))
-      .send({ username: 'newperson5', email: 'newperson5@example.com', password: 'correct-horse-battery', role: 'OWNER' });
-    expect(res.status).toBe(400);
-  });
-
-  test('a plain member gets 403', async () => {
-    const admin = await signup(app, 'createadmin4');
-    const member = await signup(app, 'creatememb4');
-    const workspaceId = await createWorkspace(admin);
-    await addMember(admin, workspaceId, 'creatememb4');
-
-    const res = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(member.accessToken))
-      .send({ username: 'newperson4', email: 'newperson4@example.com', password: 'correct-horse-battery' });
+      .patch(`/api/workspaces/${workspaceId}/members/${member.userId}`)
+      .set(authHeader(manager.accessToken))
+      .send({ role: 'MANAGER' });
     expect(res.status).toBe(403);
+  });
+
+  // The mirror image: promoting someone to MANAGER, or demoting an existing
+  // MANAGER, still requires WORKSPACE_MANAGE_MEMBERS as a floor too — a
+  // MANAGER promoting a plain MEMBER's own role change that doesn't touch
+  // the MANAGER tier still works fine, proving the split is genuinely
+  // MANAGER-tier-scoped, not a blanket narrowing of everything MANAGER used
+  // to be able to do.
+  test('a manager can still demote a MEMBER-tier role change unaffected by the MANAGER split', async () => {
+    const owner = await signup('mgrsplitowner1');
+    const manager = await signup('mgrsplitmanager1');
+    const member = await signup('mgrsplitmember1');
+    const workspaceId = await createWorkspace(owner);
+    await addMember(owner, workspaceId, 'mgrsplitmanager1', 'MANAGER');
+    await addMember(owner, workspaceId, 'mgrsplitmember1');
+
+    // A no-op MEMBER -> MEMBER role change: touches neither the caller's
+    // nor the target's MANAGER tier, so WORKSPACE_MANAGE_MEMBERS alone
+    // suffices.
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/members/${member.userId}`)
+      .set(authHeader(manager.accessToken))
+      .send({ role: 'MEMBER' });
+    expect(res.status).toBe(200);
   });
 });
 
 describe('POST /api/workspaces/:workspaceId/members/:userId/reset-password', () => {
   test("an admin resets another member's password: old fails, new works, and the target is logged out everywhere", async () => {
-    const admin = await signup(app, 'resetadmin0');
-    const member = await signup(app, 'resetmember0');
+    const admin = await signup('resetadmin0');
+    const member = await signup('resetmember0');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'resetmember0');
 
@@ -289,8 +242,8 @@ describe('POST /api/workspaces/:workspaceId/members/:userId/reset-password', () 
   });
 
   test('resetting a non-member of the workspace 404s', async () => {
-    const admin = await signup(app, 'resetadmin1');
-    const outsider = await signup(app, 'resetoutsider1');
+    const admin = await signup('resetadmin1');
+    const outsider = await signup('resetoutsider1');
     const workspaceId = await createWorkspace(admin);
 
     const res = await request(app)
@@ -301,7 +254,7 @@ describe('POST /api/workspaces/:workspaceId/members/:userId/reset-password', () 
   });
 
   test("resetting the caller's own id 400s, pointing at the self-service flow", async () => {
-    const admin = await signup(app, 'resetadmin2');
+    const admin = await signup('resetadmin2');
     const workspaceId = await createWorkspace(admin);
 
     const res = await request(app)
@@ -313,8 +266,8 @@ describe('POST /api/workspaces/:workspaceId/members/:userId/reset-password', () 
   });
 
   test('a password failing the policy 400s', async () => {
-    const admin = await signup(app, 'resetadmin3');
-    const member = await signup(app, 'resetmember3');
+    const admin = await signup('resetadmin3');
+    const member = await signup('resetmember3');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'resetmember3');
 
@@ -326,9 +279,9 @@ describe('POST /api/workspaces/:workspaceId/members/:userId/reset-password', () 
   });
 
   test('a plain member gets 403', async () => {
-    const admin = await signup(app, 'resetadmin4');
-    const memberA = await signup(app, 'resetmemberA4');
-    const memberB = await signup(app, 'resetmemberB4');
+    const admin = await signup('resetadmin4');
+    const memberA = await signup('resetmemberA4');
+    const memberB = await signup('resetmemberB4');
     const workspaceId = await createWorkspace(admin);
     await addMember(admin, workspaceId, 'resetmemberA4');
     await addMember(admin, workspaceId, 'resetmemberB4');

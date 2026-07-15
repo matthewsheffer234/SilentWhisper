@@ -2,7 +2,7 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { signup, authHeader } from './helpers/testUsers.js';
+import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 
 // FEATURE_REQUEST.md entry 1 (Enterprise authorization model), slice 2.
 
@@ -15,10 +15,10 @@ afterAll(async () => {
   await destroyResetDbConnection();
 });
 
-async function makeSystemAdmin(userId) {
-  await db('users').where({ id: userId }).update({ is_system_admin: true });
-}
-
+// Kept local (not promoted to fixtures.js): this file tests organization
+// creation itself, so it needs the full supertest response (status *and*
+// body), unlike invitations.test.js/workspaceOrganizations.test.js, which
+// only use createOrg as setup and share fixtures.js's body-only version.
 async function createOrg(sysAdmin, name = 'Acme Org') {
   const res = await request(app).post('/api/organizations').set(authHeader(sysAdmin.accessToken)).send({ name });
   return res;
@@ -26,8 +26,7 @@ async function createOrg(sysAdmin, name = 'Acme Org') {
 
 describe('POST /api/organizations', () => {
   test('a system admin can create an organization and is auto-enrolled as ORG_ADMIN', async () => {
-    const admin = await signup(app, 'orgcreator0');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orgcreator0');
 
     const res = await createOrg(admin, 'Org A');
     expect(res.status).toBe(201);
@@ -41,7 +40,7 @@ describe('POST /api/organizations', () => {
   });
 
   test('a non-system-admin gets 403', async () => {
-    const user = await signup(app, 'orgcreator1');
+    const user = await signup('orgcreator1');
     const res = await createOrg(user, 'Org B');
     expect(res.status).toBe(403);
   });
@@ -49,14 +48,13 @@ describe('POST /api/organizations', () => {
 
 describe('GET /api/organizations', () => {
   test('a plain (non-system-admin) user sees only their own orgs, with role', async () => {
-    const admin = await signup(app, 'orglist0');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orglist0');
     const orgRes = await createOrg(admin, 'Org List Test');
 
     // A non-system-admin so the response exercises the join-based "caller's
     // own orgs" branch, not the system-admin-sees-all branch (which
     // deliberately reports role: null for every row).
-    const member = await signup(app, 'orglistmember0');
+    const member = await signup('orglistmember0');
     await request(app).post(`/api/organizations/${orgRes.body.id}/members`).set(authHeader(admin.accessToken)).send({ username: 'orglistmember0', role: 'ORG_ADMIN' });
 
     const res = await request(app).get('/api/organizations').set(authHeader(member.accessToken));
@@ -71,12 +69,10 @@ describe('GET /api/organizations', () => {
   });
 
   test('a system admin sees every org, including ones they do not belong to', async () => {
-    const admin = await signup(app, 'orglist1');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orglist1');
     const orgRes = await createOrg(admin, 'Org List Test 2');
 
-    const outsider = await signup(app, 'orglistoutsider1');
-    await makeSystemAdmin(outsider.userId);
+    const outsider = await seedSystemAdmin('orglistoutsider1');
 
     const res = await request(app).get('/api/organizations').set(authHeader(outsider.accessToken));
     expect(res.status).toBe(200);
@@ -86,12 +82,11 @@ describe('GET /api/organizations', () => {
 
 describe('org membership routes', () => {
   test('roster/add/role-change/remove work for an ORG_ADMIN, and existence-hiding applies', async () => {
-    const admin = await signup(app, 'orgmember0');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orgmember0');
     const orgRes = await createOrg(admin, 'Org Membership Test');
     const orgId = orgRes.body.id;
 
-    const target = await signup(app, 'orgmembertarget0');
+    const target = await signup('orgmembertarget0');
     const addRes = await request(app)
       .post(`/api/organizations/${orgId}/members`)
       .set(authHeader(admin.accessToken))
@@ -122,17 +117,16 @@ describe('org membership routes', () => {
   });
 
   test('a non-member gets 404 for a real org, not 403', async () => {
-    const admin = await signup(app, 'orgmember1');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orgmember1');
     const orgRes = await createOrg(admin, 'Org Hidden Test');
 
-    const outsider = await signup(app, 'orgoutsider1');
+    const outsider = await signup('orgoutsider1');
     const res = await request(app).get(`/api/organizations/${orgRes.body.id}/members`).set(authHeader(outsider.accessToken));
     expect(res.status).toBe(404);
   });
 
   test('a nonexistent org 404s the same way', async () => {
-    const user = await signup(app, 'orgmember2');
+    const user = await signup('orgmember2');
     const res = await request(app)
       .get('/api/organizations/00000000-0000-0000-0000-000000000000/members')
       .set(authHeader(user.accessToken));
@@ -140,12 +134,11 @@ describe('org membership routes', () => {
   });
 
   test('a plain ORG_MEMBER gets 403 on membership-management routes', async () => {
-    const admin = await signup(app, 'orgmember3');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orgmember3');
     const orgRes = await createOrg(admin, 'Org Member 403 Test');
     const orgId = orgRes.body.id;
 
-    const member = await signup(app, 'orgplainmember3');
+    const member = await signup('orgplainmember3');
     await request(app)
       .post(`/api/organizations/${orgId}/members`)
       .set(authHeader(admin.accessToken))
@@ -162,12 +155,11 @@ describe('org membership routes', () => {
   // membership are independent — removing someone from an org must not
   // touch their workspace_members rows.
   test('removing someone from an org does not cascade to their workspace memberships', async () => {
-    const admin = await signup(app, 'orgcascade0');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orgcascade0');
     const orgRes = await createOrg(admin, 'Org Cascade Test');
     const orgId = orgRes.body.id;
 
-    const member = await signup(app, 'orgcascademember0');
+    const member = await signup('orgcascademember0');
     await request(app)
       .post(`/api/organizations/${orgId}/members`)
       .set(authHeader(admin.accessToken))
@@ -189,8 +181,7 @@ describe('org membership routes', () => {
   // FEATURE_REQUEST.md entry 1's locked-in decision: no "≥1 admin"
   // invariant for orgs, unlike the workspace OWNER guarantee.
   test('removing the last ORG_ADMIN succeeds — no invariant blocks it', async () => {
-    const admin = await signup(app, 'orglastadmin0');
-    await makeSystemAdmin(admin.userId);
+    const admin = await seedSystemAdmin('orglastadmin0');
     const orgRes = await createOrg(admin, 'Org Last Admin Test');
     const orgId = orgRes.body.id;
 

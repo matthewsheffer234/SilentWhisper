@@ -301,6 +301,48 @@ function InviteMemberForm({ onSubmit }) {
   );
 }
 
+// New (FEATURE_REQUEST.md entry 1, slice 4) — cloned from InviteMemberForm's
+// shape: a username input, not a userId, since a human typing into this
+// form knows a username, matching POST /:workspaceId/transfer-ownership's
+// own precedent.
+function TransferOwnershipForm({ onSubmit }) {
+  const [username, setUsername] = useState('');
+  const [status, setStatus] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    setStatus(null);
+    try {
+      await onSubmit(trimmed);
+      setStatus({ type: 'success', message: `Ownership transferred to ${trimmed}` });
+      setUsername('');
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to transfer ownership' });
+    }
+  }
+
+  return (
+    <div>
+      <form style={styles.inlineForm} onSubmit={handleSubmit}>
+        <input
+          style={styles.inlineInput}
+          placeholder="New owner's username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <button type="submit" style={styles.inviteSubmit}>Transfer</button>
+      </form>
+      {status && (
+        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
+          {status.message}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Token-based invitation (FEATURE_REQUEST.md entry 1, slice 3) — for people
 // who don't have an account yet, coexists with InviteMemberForm above
 // (direct-add of an existing user), doesn't replace it. No email infra
@@ -393,11 +435,16 @@ export default function WorkspaceSidebar({
   isSystemAdmin,
   onOpenCreateOrganization,
   onOpenOrgManagement,
+  onOpenSystemAdmin,
+  onTransferOwnership,
+  onChangeVisibility,
+  onToggleManagersCanArchive,
 }) {
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [inviteFormWorkspaceId, setInviteFormWorkspaceId] = useState(null);
   const [inviteLinkFormWorkspaceId, setInviteLinkFormWorkspaceId] = useState(null);
+  const [transferFormWorkspaceId, setTransferFormWorkspaceId] = useState(null);
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
 
@@ -489,6 +536,14 @@ export default function WorkspaceSidebar({
               { key: 'ai-settings', label: 'AI Settings', onSelect: onOpenAiSettings },
               { key: 'audit-log', label: 'Audit Log', onSelect: onOpenAuditLog },
               { key: 'manage-users', label: 'Manage Users', onSelect: onOpenUserManagement },
+              // System Admin (FEATURE_REQUEST.md entry 1, slice 4): gated on
+              // the plain isSystemAdmin prop, not canManageAi — a
+              // workspace-admin-but-not-system-admin (this whole menu's own
+              // canManageAi gate) must never see this item, since account
+              // creation/disable and cross-org oversight are system-admin-only.
+              ...(isSystemAdmin
+                ? [{ key: 'system-admin', label: 'System Admin', separatorBefore: true, onSelect: onOpenSystemAdmin }]
+                : []),
             ]}
             renderTrigger={(triggerProps) => (
               <button type="button" {...triggerProps} style={styles.aiSettingsButton}>
@@ -518,6 +573,14 @@ export default function WorkspaceSidebar({
         {activeWorkspaces.map((ws) => {
           const canInvite = hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
           const canArchive = hasPermission(ws.role, PERMISSIONS.WORKSPACE_ARCHIVE);
+          // Owner-only block (FEATURE_REQUEST.md entry 1, slice 4): all
+          // three permissions here are OWNER-only, so checking one is
+          // effectively one gate for the whole block — kept as three
+          // separate checks anyway so a future narrowing of any one of them
+          // doesn't silently widen the others.
+          const canTransferOwnership = hasPermission(ws.role, PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP);
+          const canChangeVisibility = hasPermission(ws.role, PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY);
+          const canManageSettings = hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_SETTINGS);
           const workspaceMenuItems = [
             ...(canInvite
               ? [
@@ -527,6 +590,35 @@ export default function WorkspaceSidebar({
               : []),
             ...(canArchive
               ? [{ key: 'archive', label: 'Archive workspace', separatorBefore: canInvite, onSelect: () => onArchiveWorkspace(ws.id) }]
+              : []),
+            ...(canTransferOwnership
+              ? [
+                  {
+                    key: 'transfer-ownership',
+                    label: 'Transfer ownership…',
+                    separatorBefore: canInvite || canArchive,
+                    onSelect: () => setTransferFormWorkspaceId(ws.id),
+                  },
+                ]
+              : []),
+            ...(canChangeVisibility
+              ? [
+                  {
+                    key: 'change-visibility',
+                    label: ws.visibility === 'DISCOVERABLE' ? 'Make private' : 'Make discoverable',
+                    onSelect: () => onChangeVisibility(ws.id, ws.visibility === 'DISCOVERABLE' ? 'PRIVATE' : 'DISCOVERABLE'),
+                  },
+                ]
+              : []),
+            ...(canManageSettings
+              ? [
+                  {
+                    key: 'managers-can-archive',
+                    label: 'Managers can archive',
+                    checked: Boolean(ws.managersCanArchive),
+                    onSelect: () => onToggleManagersCanArchive(ws.id, !ws.managersCanArchive),
+                  },
+                ]
               : []),
           ];
           return (
@@ -566,6 +658,9 @@ export default function WorkspaceSidebar({
               )}
               {inviteLinkFormWorkspaceId === ws.id && (
                 <InviteLinkForm onSubmit={(email, role) => onCreateInviteLink(ws.id, email, role)} />
+              )}
+              {transferFormWorkspaceId === ws.id && (
+                <TransferOwnershipForm onSubmit={(username) => onTransferOwnership(ws.id, username)} />
               )}
             </div>
           );

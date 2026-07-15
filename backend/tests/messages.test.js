@@ -27,7 +27,7 @@ async function createChannel(owner) {
 
 describe('message author display', () => {
   test('both the history list and a fresh send include the sender username', async () => {
-    const owner = await signup(app, 'msgowner0');
+    const owner = await signup('msgowner0');
     const channelId = await createChannel(owner);
 
     const sendRes = await request(app)
@@ -45,7 +45,7 @@ describe('message author display', () => {
 
 describe('message pagination', () => {
   test('returns newest-first and respects the limit', async () => {
-    const owner = await signup(app, 'msgowner1');
+    const owner = await signup('msgowner1');
     const channelId = await createChannel(owner);
 
     for (let i = 0; i < 5; i += 1) {
@@ -67,7 +67,7 @@ describe('message pagination', () => {
   });
 
   test('the before cursor paginates correctly with no duplicates or gaps', async () => {
-    const owner = await signup(app, 'msgowner2');
+    const owner = await signup('msgowner2');
     const channelId = await createChannel(owner);
 
     for (let i = 0; i < 5; i += 1) {
@@ -91,7 +91,7 @@ describe('message pagination', () => {
   });
 
   test('rejects a limit outside 1-100', async () => {
-    const owner = await signup(app, 'msgowner3');
+    const owner = await signup('msgowner3');
     const channelId = await createChannel(owner);
     const res = await request(app)
       .get(`/api/channels/${channelId}/messages?limit=500`)
@@ -100,7 +100,7 @@ describe('message pagination', () => {
   });
 
   test('thread replies are fetched separately from the main feed via parentMessageId', async () => {
-    const owner = await signup(app, 'msgowner4');
+    const owner = await signup('msgowner4');
     const channelId = await createChannel(owner);
 
     const root = await request(app)
@@ -129,7 +129,7 @@ describe('message pagination', () => {
 
 describe('message length limits', () => {
   test('rejects an empty message', async () => {
-    const owner = await signup(app, 'msgowner5');
+    const owner = await signup('msgowner5');
     const channelId = await createChannel(owner);
     const res = await request(app)
       .post(`/api/channels/${channelId}/messages`)
@@ -139,7 +139,7 @@ describe('message length limits', () => {
   });
 
   test('rejects a message over the server-side max length', async () => {
-    const owner = await signup(app, 'msgowner6');
+    const owner = await signup('msgowner6');
     const channelId = await createChannel(owner);
     const res = await request(app)
       .post(`/api/channels/${channelId}/messages`)
@@ -149,7 +149,7 @@ describe('message length limits', () => {
   });
 
   test('accepts a message at exactly the max length', async () => {
-    const owner = await signup(app, 'msgowner7');
+    const owner = await signup('msgowner7');
     const channelId = await createChannel(owner);
     const res = await request(app)
       .post(`/api/channels/${channelId}/messages`)
@@ -159,7 +159,7 @@ describe('message length limits', () => {
   });
 
   test('rejects a parentMessageId from a different channel', async () => {
-    const owner = await signup(app, 'msgowner8');
+    const owner = await signup('msgowner8');
     const channelId1 = await createChannel(owner);
     const channelId2 = await createChannel(owner);
 
@@ -178,7 +178,7 @@ describe('message length limits', () => {
 
 describe('REST send rate limiting (Section 3, Rate Limiting & Abuse Prevention)', () => {
   test('a single user flooding the REST endpoint eventually gets 429, not an unbounded flood', async () => {
-    const owner = await signup(app, 'msgratelimited0');
+    const owner = await signup('msgratelimited0');
     const channelId = await createChannel(owner);
 
     const statuses = [];
@@ -196,8 +196,8 @@ describe('REST send rate limiting (Section 3, Rate Limiting & Abuse Prevention)'
   });
 
   test('the limit is shared across users — one user hitting it does not affect another', async () => {
-    const userA = await signup(app, 'msgratelimited1');
-    const userB = await signup(app, 'msgratelimited2');
+    const userA = await signup('msgratelimited1');
+    const userB = await signup('msgratelimited2');
     const channelId = await createChannel(userA);
     // userB needs to be a member of the same channel to send to it.
     await db('channel_members').insert({ channel_id: channelId, user_id: userB.userId });

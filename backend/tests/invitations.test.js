@@ -2,7 +2,8 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { signup, authHeader } from './helpers/testUsers.js';
+import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
+import { createOrg } from './helpers/fixtures.js';
 
 // FEATURE_REQUEST.md entry 1 (Enterprise authorization model), slice 2.
 
@@ -15,15 +16,6 @@ afterAll(async () => {
   await destroyResetDbConnection();
 });
 
-async function makeSystemAdmin(userId) {
-  await db('users').where({ id: userId }).update({ is_system_admin: true });
-}
-
-async function createOrg(sysAdmin, name = 'Invite Org') {
-  const res = await request(app).post('/api/organizations').set(authHeader(sysAdmin.accessToken)).send({ name });
-  return res.body;
-}
-
 async function createWorkspace(owner, name = 'Invite Workspace') {
   const res = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name });
   return res.body;
@@ -31,9 +23,8 @@ async function createWorkspace(owner, name = 'Invite Workspace') {
 
 describe('POST /api/organizations/:orgId/invitations', () => {
   test('an ORG_ADMIN can create an invitation and gets a raw token back once', async () => {
-    const admin = await signup(app, 'orginviter0');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin);
+    const admin = await seedSystemAdmin('orginviter0');
+    const org = await createOrg(admin.accessToken);
 
     const res = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
@@ -49,11 +40,10 @@ describe('POST /api/organizations/:orgId/invitations', () => {
   });
 
   test('a plain ORG_MEMBER cannot create an invitation', async () => {
-    const admin = await signup(app, 'orginviter1');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin);
+    const admin = await seedSystemAdmin('orginviter1');
+    const org = await createOrg(admin.accessToken);
 
-    const member = await signup(app, 'orginvitermember1');
+    const member = await signup('orginvitermember1');
     await request(app).post(`/api/organizations/${org.id}/members`).set(authHeader(admin.accessToken)).send({ username: 'orginvitermember1' });
 
     const res = await request(app)
@@ -66,7 +56,7 @@ describe('POST /api/organizations/:orgId/invitations', () => {
 
 describe('POST /api/workspaces/:workspaceId/invitations', () => {
   test('a workspace OWNER can create an invitation, OWNER role is rejected as invited_role', async () => {
-    const owner = await signup(app, 'wsinviter0');
+    const owner = await signup('wsinviter0');
     const ws = await createWorkspace(owner);
 
     const res = await request(app)
@@ -84,9 +74,9 @@ describe('POST /api/workspaces/:workspaceId/invitations', () => {
   });
 
   test('a plain workspace MEMBER cannot create an invitation', async () => {
-    const owner = await signup(app, 'wsinviter1');
+    const owner = await signup('wsinviter1');
     const ws = await createWorkspace(owner);
-    const member = await signup(app, 'wsinvitermember1');
+    const member = await signup('wsinvitermember1');
     await request(app).post(`/api/workspaces/${ws.id}/members`).set(authHeader(owner.accessToken)).send({ username: 'wsinvitermember1' });
 
     const res = await request(app)
@@ -99,9 +89,8 @@ describe('POST /api/workspaces/:workspaceId/invitations', () => {
 
 describe('GET /api/organizations/:orgId/invitations', () => {
   test('lists only PENDING, non-expired invitations for that org', async () => {
-    const admin = await signup(app, 'orginvitelist0');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin);
+    const admin = await seedSystemAdmin('orginvitelist0');
+    const org = await createOrg(admin.accessToken);
 
     const pending = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
@@ -139,11 +128,10 @@ describe('GET /api/organizations/:orgId/invitations', () => {
   });
 
   test('a non-member gets 404 for a real org, not 403', async () => {
-    const admin = await signup(app, 'orginvitelist1');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin);
+    const admin = await seedSystemAdmin('orginvitelist1');
+    const org = await createOrg(admin.accessToken);
 
-    const outsider = await signup(app, 'orginvitelistoutsider1');
+    const outsider = await signup('orginvitelistoutsider1');
     const res = await request(app).get(`/api/organizations/${org.id}/invitations`).set(authHeader(outsider.accessToken));
     expect(res.status).toBe(404);
   });
@@ -151,7 +139,7 @@ describe('GET /api/organizations/:orgId/invitations', () => {
 
 describe('GET /api/workspaces/:workspaceId/invitations', () => {
   test('lists only PENDING, non-expired invitations for that workspace', async () => {
-    const owner = await signup(app, 'wsinvitelist0');
+    const owner = await signup('wsinvitelist0');
     const ws = await createWorkspace(owner);
 
     const pending = await request(app)
@@ -176,9 +164,9 @@ describe('GET /api/workspaces/:workspaceId/invitations', () => {
   });
 
   test('a plain member without WORKSPACE_MANAGE_MEMBERS gets 403', async () => {
-    const owner = await signup(app, 'wsinvitelist1');
+    const owner = await signup('wsinvitelist1');
     const ws = await createWorkspace(owner);
-    const member = await signup(app, 'wsinvitelistmember1');
+    const member = await signup('wsinvitelistmember1');
     await request(app).post(`/api/workspaces/${ws.id}/members`).set(authHeader(owner.accessToken)).send({ username: 'wsinvitelistmember1' });
 
     const res = await request(app).get(`/api/workspaces/${ws.id}/invitations`).set(authHeader(member.accessToken));
@@ -188,7 +176,7 @@ describe('GET /api/workspaces/:workspaceId/invitations', () => {
 
 describe('GET /api/invitations/:token', () => {
   test('a valid pending invitation shows context', async () => {
-    const owner = await signup(app, 'wsinvitepreview0');
+    const owner = await signup('wsinvitepreview0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -211,7 +199,7 @@ describe('GET /api/invitations/:token', () => {
   });
 
   test('an expired invitation 404s the same way as a made-up token', async () => {
-    const owner = await signup(app, 'wsinvitepreview1');
+    const owner = await signup('wsinvitepreview1');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -227,7 +215,7 @@ describe('GET /api/invitations/:token', () => {
 
 describe('POST /api/invitations/:token/accept', () => {
   test('creates an account, attaches the invited-role membership, and logs in atomically', async () => {
-    const owner = await signup(app, 'wsaccept0');
+    const owner = await signup('wsaccept0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -259,9 +247,8 @@ describe('POST /api/invitations/:token/accept', () => {
   });
 
   test('an org-scoped invitation attaches org membership directly, no double org row', async () => {
-    const admin = await signup(app, 'orgaccept0');
-    await makeSystemAdmin(admin.userId);
-    const org = await createOrg(admin);
+    const admin = await seedSystemAdmin('orgaccept0');
+    const org = await createOrg(admin.accessToken);
     const createRes = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(admin.accessToken))
@@ -278,8 +265,8 @@ describe('POST /api/invitations/:token/accept', () => {
   });
 
   test('an email/username collision 409s', async () => {
-    await signup(app, 'collideduser0');
-    const owner = await signup(app, 'wsacceptcollide0');
+    await signup('collideduser0');
+    const owner = await signup('wsacceptcollide0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -293,7 +280,7 @@ describe('POST /api/invitations/:token/accept', () => {
   });
 
   test('accepting the same token twice 404s the second time', async () => {
-    const owner = await signup(app, 'wsacceptreuse0');
+    const owner = await signup('wsacceptreuse0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -312,7 +299,7 @@ describe('POST /api/invitations/:token/accept', () => {
   });
 
   test('an expired token 404s at accept time too', async () => {
-    const owner = await signup(app, 'wsacceptexpired0');
+    const owner = await signup('wsacceptexpired0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -329,7 +316,7 @@ describe('POST /api/invitations/:token/accept', () => {
 
 describe('POST /api/invitations/:id/revoke', () => {
   test('the inviter can revoke a pending invitation, and it can no longer be accepted', async () => {
-    const owner = await signup(app, 'wsrevoke0');
+    const owner = await signup('wsrevoke0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -346,9 +333,9 @@ describe('POST /api/invitations/:id/revoke', () => {
   });
 
   test('an unrelated workspace member (not the inviter, no manage-members permission) cannot revoke', async () => {
-    const owner = await signup(app, 'wsrevoke1');
+    const owner = await signup('wsrevoke1');
     const ws = await createWorkspace(owner);
-    const otherMember = await signup(app, 'wsrevokemember1');
+    const otherMember = await signup('wsrevokemember1');
     await request(app).post(`/api/workspaces/${ws.id}/members`).set(authHeader(owner.accessToken)).send({ username: 'wsrevokemember1' });
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
@@ -360,9 +347,9 @@ describe('POST /api/invitations/:id/revoke', () => {
   });
 
   test('a total outsider (not even a workspace member) gets 404, not 403', async () => {
-    const owner = await signup(app, 'wsrevoke1b');
+    const owner = await signup('wsrevoke1b');
     const ws = await createWorkspace(owner);
-    const outsider = await signup(app, 'wsrevokeoutsider1b');
+    const outsider = await signup('wsrevokeoutsider1b');
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
@@ -373,7 +360,7 @@ describe('POST /api/invitations/:id/revoke', () => {
   });
 
   test('revoking an already-accepted invitation is an idempotent no-op 204, not a re-revocation error', async () => {
-    const owner = await signup(app, 'wsrevoke2');
+    const owner = await signup('wsrevoke2');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)

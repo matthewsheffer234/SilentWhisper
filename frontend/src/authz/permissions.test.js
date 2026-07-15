@@ -11,9 +11,26 @@ describe('hasPermission', () => {
     expect(hasPermission('OWNER', PERMISSIONS.WORKSPACE_ARCHIVE)).toBe(true);
   });
 
-  test('MANAGER holds the same permissions as OWNER', () => {
+  // FEATURE_REQUEST.md entry 1, slice 4: OWNER holds every slice-4
+  // permission, including the three new OWNER-only ones.
+  test('OWNER holds every slice-4 permission', () => {
+    expect(hasPermission('OWNER', PERMISSIONS.WORKSPACE_MANAGE_MANAGERS)).toBe(true);
+    expect(hasPermission('OWNER', PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP)).toBe(true);
+    expect(hasPermission('OWNER', PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY)).toBe(true);
+    expect(hasPermission('OWNER', PERMISSIONS.WORKSPACE_MANAGE_SETTINGS)).toBe(true);
+  });
+
+  test('MANAGER holds WORKSPACE_MANAGE_MEMBERS and WORKSPACE_ARCHIVE', () => {
     expect(hasPermission('MANAGER', PERMISSIONS.WORKSPACE_MANAGE_MEMBERS)).toBe(true);
     expect(hasPermission('MANAGER', PERMISSIONS.WORKSPACE_ARCHIVE)).toBe(true);
+  });
+
+  // Slice 4 tightening: a MANAGER no longer holds everything OWNER does.
+  test('MANAGER holds none of the four new slice-4 OWNER-only permissions', () => {
+    expect(hasPermission('MANAGER', PERMISSIONS.WORKSPACE_MANAGE_MANAGERS)).toBe(false);
+    expect(hasPermission('MANAGER', PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP)).toBe(false);
+    expect(hasPermission('MANAGER', PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY)).toBe(false);
+    expect(hasPermission('MANAGER', PERMISSIONS.WORKSPACE_MANAGE_SETTINGS)).toBe(false);
   });
 
   test('MEMBER holds neither', () => {

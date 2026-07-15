@@ -1,41 +1,63 @@
 // Permission catalog for the enterprise authorization model
-// (FEATURE_REQUEST.md entry 1). Slice 2 adds org-scoped permissions
-// (ORG_INVITE, ORG_MANAGE_MEMBERS) alongside slice 1's workspace/system
-// ones — still not the full future catalog (e.g. no WORKSPACE_TRANSFER_
-// OWNERSHIP/WORKSPACE_CHANGE_VISIBILITY yet), just what this slice's routes
-// actually consume.
+// (FEATURE_REQUEST.md entry 1). Slice 4 adds the remaining
+// workspace-scoped permissions (managers-tier split, ownership transfer,
+// visibility change, settings) — see SLICE_4_PLAN.md §4.1. USERS_*/
+// ORGS_VIEW_ALL/WORKSPACES_VIEW_ALL/SYSTEM_ADMIN_STATUS_CHANGE are
+// deliberately not added: every route they'd nominally back is gated by a
+// direct isSystemAdminUser check (admin.js, GET /workspaces/admin/all), so
+// none of them would ever be checked through this map — adding them would
+// be exactly the unused-abstraction pattern this file otherwise avoids.
 
 export const PERMISSIONS = {
-  // Invite, roster, role-change, reset-password, admin-create-user, and
-  // (slice 2) workspace-invitation creation — see WORKSPACE_ROLE_PERMISSIONS
-  // below for why invitation-creation doesn't get its own permission yet.
+  // Invite, roster, reset-password, and any role-change/removal/invitation
+  // that only ever touches a plain MEMBER — see WORKSPACE_MANAGE_MANAGERS
+  // below for the MANAGER-tier split (slice 4).
   WORKSPACE_MANAGE_MEMBERS: 'WORKSPACE_MANAGE_MEMBERS',
+  // New, slice 4: any action that assigns, revokes, or removes a
+  // MANAGER-tier membership (role-change to/from MANAGER, removing a
+  // MANAGER). OWNER holds both this and WORKSPACE_MANAGE_MEMBERS; MANAGER
+  // holds only WORKSPACE_MANAGE_MEMBERS — a real tightening versus slices
+  // 1-3, where a MANAGER could already do all of this.
+  WORKSPACE_MANAGE_MANAGERS: 'WORKSPACE_MANAGE_MANAGERS',
   // Archive and unarchive.
   WORKSPACE_ARCHIVE: 'WORKSPACE_ARCHIVE',
+  // New, slice 4: OWNER only.
+  WORKSPACE_TRANSFER_OWNERSHIP: 'WORKSPACE_TRANSFER_OWNERSHIP',
+  // New, slice 4: OWNER only.
+  WORKSPACE_CHANGE_VISIBILITY: 'WORKSPACE_CHANGE_VISIBILITY',
+  // New, slice 4 (gap-fill): OWNER only. Consumed only by
+  // POST /:workspaceId/settings, the only setter for managers_can_archive.
+  WORKSPACE_MANAGE_SETTINGS: 'WORKSPACE_MANAGE_SETTINGS',
   AI_SETTINGS_MANAGE: 'AI_SETTINGS_MANAGE',
   AUDIT_VIEW: 'AUDIT_VIEW',
-  // New, slice 2:
   ORG_INVITE: 'ORG_INVITE',
   ORG_MANAGE_MEMBERS: 'ORG_MANAGE_MEMBERS',
 };
 
-// OWNER and MANAGER both get everything in slice 1 — no manager-restriction
-// feature lands yet. workspaces.managers_can_archive exists in the schema
-// (migration 0011) but is deliberately not read here; wiring it into
-// WORKSPACE_ARCHIVE so it can narrow a MANAGER's access is later-slice
-// archive-endpoint work, not this slice's.
+// managers_can_archive (schema column since migration 0011) narrows a
+// MANAGER's WORKSPACE_ARCHIVE grant further still, at check time in
+// membershipService.js's requireWorkspacePermission — not expressible as a
+// static map entry since it's a per-workspace toggle, not a fixed role
+// grant. OWNER's archive access stays unconditional.
 export const WORKSPACE_ROLE_PERMISSIONS = {
-  OWNER: [PERMISSIONS.WORKSPACE_MANAGE_MEMBERS, PERMISSIONS.WORKSPACE_ARCHIVE],
+  OWNER: [
+    PERMISSIONS.WORKSPACE_MANAGE_MEMBERS,
+    PERMISSIONS.WORKSPACE_MANAGE_MANAGERS,
+    PERMISSIONS.WORKSPACE_ARCHIVE,
+    PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP,
+    PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY,
+    PERMISSIONS.WORKSPACE_MANAGE_SETTINGS,
+  ],
   MANAGER: [PERMISSIONS.WORKSPACE_MANAGE_MEMBERS, PERMISSIONS.WORKSPACE_ARCHIVE],
   MEMBER: [],
 };
 
-// Workspace-invitation creation (POST /:workspaceId/invitations, slice 2)
-// is deliberately gated on WORKSPACE_MANAGE_MEMBERS rather than a new
-// WORKSPACE_INVITE permission — no route this slice or slice 1 needs "can
-// invite but not manage the roster" vs. the reverse, so a single-consumer
-// permission constant would be unused abstraction. Introduce
-// WORKSPACE_INVITE only once something actually differentiates the two.
+// Workspace-invitation creation (POST /:workspaceId/invitations) is
+// deliberately gated on WORKSPACE_MANAGE_MEMBERS rather than a new
+// WORKSPACE_INVITE permission — no route needs "can invite but not manage
+// the roster" vs. the reverse, so a single-consumer permission constant
+// would be unused abstraction. Introduce WORKSPACE_INVITE only once
+// something actually differentiates the two.
 
 // ORG_ADMIN gets both org permissions; ORG_MEMBER gets neither. Unlike
 // WORKSPACE_ROLE_PERMISSIONS, org_role only has two values (ORG_ADMIN/

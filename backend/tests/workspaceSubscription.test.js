@@ -30,7 +30,7 @@ async function createWorkspace(owner, { name = 'W', visibility } = {}) {
 
 describe('POST /api/workspaces visibility', () => {
   test('defaults to PRIVATE when omitted', async () => {
-    const owner = await signup(app, 'vizowner0');
+    const owner = await signup('vizowner0');
     const ws = await createWorkspace(owner);
     expect(ws.visibility).toBe('PRIVATE');
 
@@ -39,13 +39,13 @@ describe('POST /api/workspaces visibility', () => {
   });
 
   test('persists an explicit DISCOVERABLE visibility', async () => {
-    const owner = await signup(app, 'vizowner1');
+    const owner = await signup('vizowner1');
     const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
     expect(ws.visibility).toBe('DISCOVERABLE');
   });
 
   test('rejects an invalid visibility value', async () => {
-    const owner = await signup(app, 'vizowner2');
+    const owner = await signup('vizowner2');
     const res = await request(app)
       .post('/api/workspaces')
       .set(authHeader(owner.accessToken))
@@ -56,8 +56,8 @@ describe('POST /api/workspaces visibility', () => {
 
 describe('GET /api/workspaces/discoverable', () => {
   test('lists a DISCOVERABLE workspace the caller is not a member of', async () => {
-    const owner = await signup(app, 'discowner0');
-    const seeker = await signup(app, 'discseeker0');
+    const owner = await signup('discowner0');
+    const seeker = await signup('discseeker0');
     const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
@@ -67,8 +67,8 @@ describe('GET /api/workspaces/discoverable', () => {
   });
 
   test('excludes a PRIVATE workspace', async () => {
-    const owner = await signup(app, 'discowner1');
-    const seeker = await signup(app, 'discseeker1');
+    const owner = await signup('discowner1');
+    const seeker = await signup('discseeker1');
     const ws = await createWorkspace(owner, { visibility: 'PRIVATE' });
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
@@ -76,7 +76,7 @@ describe('GET /api/workspaces/discoverable', () => {
   });
 
   test('excludes a workspace the caller already belongs to', async () => {
-    const owner = await signup(app, 'discowner2');
+    const owner = await signup('discowner2');
     const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(owner.accessToken));
@@ -84,8 +84,8 @@ describe('GET /api/workspaces/discoverable', () => {
   });
 
   test('excludes an archived DISCOVERABLE workspace', async () => {
-    const owner = await signup(app, 'discowner3');
-    const seeker = await signup(app, 'discseeker3');
+    const owner = await signup('discowner3');
+    const seeker = await signup('discseeker3');
     const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
     await request(app).post(`/api/workspaces/${ws.id}/archive`).set(authHeader(owner.accessToken));
 
@@ -96,8 +96,8 @@ describe('GET /api/workspaces/discoverable', () => {
 
 describe('POST /api/workspaces/:workspaceId/subscribe', () => {
   test('succeeds on a DISCOVERABLE workspace and is idempotent-safe', async () => {
-    const owner = await signup(app, 'subowner0');
-    const joiner = await signup(app, 'subjoiner0');
+    const owner = await signup('subowner0');
+    const joiner = await signup('subjoiner0');
     const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
 
     const first = await request(app).post(`/api/workspaces/${ws.id}/subscribe`).set(authHeader(joiner.accessToken));
@@ -116,8 +116,8 @@ describe('POST /api/workspaces/:workspaceId/subscribe', () => {
   });
 
   test('a PRIVATE workspace 404s', async () => {
-    const owner = await signup(app, 'subowner1');
-    const joiner = await signup(app, 'subjoiner1');
+    const owner = await signup('subowner1');
+    const joiner = await signup('subjoiner1');
     const ws = await createWorkspace(owner, { visibility: 'PRIVATE' });
 
     const res = await request(app).post(`/api/workspaces/${ws.id}/subscribe`).set(authHeader(joiner.accessToken));
@@ -125,7 +125,7 @@ describe('POST /api/workspaces/:workspaceId/subscribe', () => {
   });
 
   test('a nonexistent workspace 404s indistinguishably from a PRIVATE one', async () => {
-    const joiner = await signup(app, 'subjoiner2');
+    const joiner = await signup('subjoiner2');
     const res = await request(app)
       .post('/api/workspaces/00000000-0000-0000-0000-000000000000/subscribe')
       .set(authHeader(joiner.accessToken));
@@ -133,8 +133,8 @@ describe('POST /api/workspaces/:workspaceId/subscribe', () => {
   });
 
   test('an archived DISCOVERABLE workspace 409s', async () => {
-    const owner = await signup(app, 'subowner3');
-    const joiner = await signup(app, 'subjoiner3');
+    const owner = await signup('subowner3');
+    const joiner = await signup('subjoiner3');
     const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
     await request(app).post(`/api/workspaces/${ws.id}/archive`).set(authHeader(owner.accessToken));
 

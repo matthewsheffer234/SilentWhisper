@@ -64,7 +64,7 @@ async function createChannel(owner, workspaceId, name = 'general', type = 'PUBLI
 
 describe('POST /api/workspaces/:workspaceId/archive', () => {
   test('the owner can archive, and it is idempotent', async () => {
-    const owner = await signup(app, 'archowner0');
+    const owner = await signup('archowner0');
     const workspaceId = await createWorkspace(owner);
 
     const first = await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
@@ -78,19 +78,53 @@ describe('POST /api/workspaces/:workspaceId/archive', () => {
     expect(Number(row.count)).toBe(1);
   });
 
-  test('a manager (who is not the owner) can archive', async () => {
-    const owner = await signup(app, 'archowner1');
-    const manager = await signup(app, 'archadmin1');
+  // managers_can_archive (FEATURE_REQUEST.md entry 1, slice 4): defaults to
+  // false, so a MANAGER cannot archive until the owner explicitly delegates
+  // it via POST /:workspaceId/settings — a real behavior tightening versus
+  // pre-slice-4 (a MANAGER could always archive before).
+  test('a manager (who is not the owner) cannot archive by default', async () => {
+    const owner = await signup('archowner1');
+    const manager = await signup('archadmin1');
     const workspaceId = await createWorkspace(owner);
     await addMember(owner, workspaceId, 'archadmin1', 'MANAGER');
+
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(manager.accessToken));
+    expect(res.status).toBe(403);
+  });
+
+  test('once the owner enables managers_can_archive, a manager can archive', async () => {
+    const owner = await signup('archowner1b');
+    const manager = await signup('archadmin1b');
+    const workspaceId = await createWorkspace(owner);
+    await addMember(owner, workspaceId, 'archadmin1b', 'MANAGER');
+
+    const settingsRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/settings`)
+      .set(authHeader(owner.accessToken))
+      .send({ managersCanArchive: true });
+    expect(settingsRes.status).toBe(200);
+    expect(settingsRes.body.managersCanArchive).toBe(true);
 
     const res = await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(manager.accessToken));
     expect(res.status).toBe(200);
   });
 
+  test('only the owner can toggle managers_can_archive — a manager gets 403', async () => {
+    const owner = await signup('archowner1c');
+    const manager = await signup('archadmin1c');
+    const workspaceId = await createWorkspace(owner);
+    await addMember(owner, workspaceId, 'archadmin1c', 'MANAGER');
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/settings`)
+      .set(authHeader(manager.accessToken))
+      .send({ managersCanArchive: true });
+    expect(res.status).toBe(403);
+  });
+
   test('a plain member cannot archive (403)', async () => {
-    const owner = await signup(app, 'archowner2');
-    const member = await signup(app, 'archmember2');
+    const owner = await signup('archowner2');
+    const member = await signup('archmember2');
     const workspaceId = await createWorkspace(owner);
     await addMember(owner, workspaceId, 'archmember2');
 
@@ -99,8 +133,8 @@ describe('POST /api/workspaces/:workspaceId/archive', () => {
   });
 
   test('a non-member outsider gets 404, not 403 (existence-hiding)', async () => {
-    const owner = await signup(app, 'archowner3');
-    const outsider = await signup(app, 'archoutsider3');
+    const owner = await signup('archowner3');
+    const outsider = await signup('archoutsider3');
     const workspaceId = await createWorkspace(owner);
 
     const res = await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(outsider.accessToken));
@@ -110,7 +144,7 @@ describe('POST /api/workspaces/:workspaceId/archive', () => {
 
 describe('POST /api/workspaces/:workspaceId/unarchive', () => {
   test('an admin can unarchive', async () => {
-    const owner = await signup(app, 'unarchowner0');
+    const owner = await signup('unarchowner0');
     const workspaceId = await createWorkspace(owner);
     await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
 
@@ -125,14 +159,23 @@ describe('POST /api/workspaces/:workspaceId/unarchive', () => {
   // changing the owner's own role — see adminUserManagement.test.js's
   // "cannot change the owner's role directly" coverage), so the old scenario
   // this test exercised ("an owner who isn't separately an ADMIN member")
-  // can no longer be constructed. Archive/unarchive now share one
-  // WORKSPACE_ARCHIVE gate (OWNER or MANAGER), tested below instead.
-  test('a manager (not the owner) can also unarchive', async () => {
-    const owner = await signup(app, 'unarchowner1');
-    const manager = await signup(app, 'unarchadmin1');
+  // can no longer be constructed. Archive/unarchive share one
+  // WORKSPACE_ARCHIVE gate (OWNER unconditionally, MANAGER only once
+  // managers_can_archive is enabled — slice 4), tested below.
+  test('a manager (not the owner) cannot unarchive by default, but can once managers_can_archive is enabled', async () => {
+    const owner = await signup('unarchowner1');
+    const manager = await signup('unarchadmin1');
     const workspaceId = await createWorkspace(owner);
     await addMember(owner, workspaceId, 'unarchadmin1', 'MANAGER');
     await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
+
+    const deniedRes = await request(app).post(`/api/workspaces/${workspaceId}/unarchive`).set(authHeader(manager.accessToken));
+    expect(deniedRes.status).toBe(403);
+
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/settings`)
+      .set(authHeader(owner.accessToken))
+      .send({ managersCanArchive: true });
 
     const res = await request(app).post(`/api/workspaces/${workspaceId}/unarchive`).set(authHeader(manager.accessToken));
     expect(res.status).toBe(200);
@@ -140,7 +183,7 @@ describe('POST /api/workspaces/:workspaceId/unarchive', () => {
   });
 
   test('both directions are audited with the right action discriminator', async () => {
-    const owner = await signup(app, 'unarchowner2');
+    const owner = await signup('unarchowner2');
     const workspaceId = await createWorkspace(owner);
     await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
     await request(app).post(`/api/workspaces/${workspaceId}/unarchive`).set(authHeader(owner.accessToken));
@@ -152,7 +195,7 @@ describe('POST /api/workspaces/:workspaceId/unarchive', () => {
 
 describe('every gated write path 409s against an archived workspace', () => {
   async function setupArchived() {
-    const owner = await signup(app, `arch${Date.now()}${Math.floor(Math.random() * 1000)}`);
+    const owner = await signup(`arch${Date.now()}${Math.floor(Math.random() * 1000)}`);
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
     await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
@@ -161,7 +204,7 @@ describe('every gated write path 409s against an archived workspace', () => {
 
   test('inviting a member 409s', async () => {
     const { owner, workspaceId } = await setupArchived();
-    await signup(app, `archtarget${Date.now()}`);
+    await signup(`archtarget${Date.now()}`);
     const res = await request(app)
       .post(`/api/workspaces/${workspaceId}/members`)
       .set(authHeader(owner.accessToken))
@@ -180,7 +223,7 @@ describe('every gated write path 409s against an archived workspace', () => {
 
   test('joining a channel 409s', async () => {
     const { workspaceId, channelId } = await setupArchived();
-    const member = await signup(app, `archjoiner${Date.now()}`);
+    const member = await signup(`archjoiner${Date.now()}`);
     // Membership predates the archive, added via a raw insert since the
     // invite endpoint is itself gated (tested above) — this test is about
     // the join endpoint specifically.
@@ -194,7 +237,7 @@ describe('every gated write path 409s against an archived workspace', () => {
 
   test('adding an existing workspace member to a channel 409s', async () => {
     const { owner, workspaceId, channelId } = await setupArchived();
-    const member = await signup(app, `archaddee${Date.now()}`);
+    const member = await signup(`archaddee${Date.now()}`);
     await db('workspace_members').insert({ workspace_id: workspaceId, user_id: member.userId, system_role: 'MEMBER' });
 
     const res = await request(app)
@@ -210,15 +253,6 @@ describe('every gated write path 409s against an archived workspace', () => {
       .patch(`/api/workspaces/${workspaceId}/members/${owner.userId}`)
       .set(authHeader(owner.accessToken))
       .send({ role: 'MEMBER' });
-    expect(res.status).toBe(409);
-  });
-
-  test('admin-provisioning a new user 409s', async () => {
-    const { owner, workspaceId } = await setupArchived();
-    const res = await request(app)
-      .post(`/api/workspaces/${workspaceId}/users`)
-      .set(authHeader(owner.accessToken))
-      .send({ username: `archnew${Date.now()}`, email: `archnew${Date.now()}@example.com`, password: 'correct-horse-battery' });
     expect(res.status).toBe(409);
   });
 
@@ -248,7 +282,7 @@ describe('every gated write path 409s against an archived workspace', () => {
 
 describe('read paths remain available for an archived workspace', () => {
   test('GET /workspaces reports archivedAt, and channel/history reads still work', async () => {
-    const owner = await signup(app, `archread${Date.now()}`);
+    const owner = await signup(`archread${Date.now()}`);
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
     await request(app)

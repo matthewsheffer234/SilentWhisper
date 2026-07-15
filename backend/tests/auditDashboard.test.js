@@ -82,8 +82,8 @@ describe('GET /api/audit/logs', () => {
   });
 
   test('rejects a non-admin (workspace member but not OWNER/MANAGER of any workspace)', async () => {
-    const admin = await signup(app, 'auditadmin0');
-    const member = await signup(app, 'auditmember0');
+    const admin = await signup('auditadmin0');
+    const member = await signup('auditmember0');
     const workspaceId = await createWorkspace(admin);
     await db('workspace_members').insert({ workspace_id: workspaceId, user_id: member.userId, system_role: 'MEMBER' });
 
@@ -92,9 +92,12 @@ describe('GET /api/audit/logs', () => {
   });
 
   test('an OWNER sees existing audit events, newest first, and the access itself is audited', async () => {
-    const admin = await signup(app, 'auditadmin1');
-    // signup + creating a workspace already produced AUTH_SIGNUP and
-    // WORKSPACE_CREATED audit rows.
+    const admin = await signup('auditadmin1');
+    // Seeding via signup() is a direct DB insert (FEATURE_REQUEST.md entry
+    // 1, slice 4: self-service signup is closed) and produces no audit row
+    // of its own — two workspace creations give two WORKSPACE_CREATED rows
+    // to assert ordering over.
+    await createWorkspace(admin);
     await createWorkspace(admin);
 
     const res = await request(app).get('/api/audit/logs').set(authHeader(admin.accessToken));
@@ -116,7 +119,7 @@ describe('GET /api/audit/logs', () => {
   });
 
   test('paginates with beforeId and respects limit', async () => {
-    const admin = await signup(app, 'auditadmin2');
+    const admin = await signup('auditadmin2');
     await createWorkspace(admin);
     for (let i = 0; i < 5; i += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -136,7 +139,7 @@ describe('GET /api/audit/logs', () => {
   });
 
   test('rejects an out-of-range limit', async () => {
-    const admin = await signup(app, 'auditadmin3');
+    const admin = await signup('auditadmin3');
     await createWorkspace(admin);
     const res = await request(app).get('/api/audit/logs?limit=99999').set(authHeader(admin.accessToken));
     expect(res.status).toBe(400);
@@ -145,13 +148,13 @@ describe('GET /api/audit/logs', () => {
 
 describe('POST /api/audit/verify', () => {
   test('rejects a non-admin', async () => {
-    const member = await signup(app, 'auditmember1');
+    const member = await signup('auditmember1');
     const res = await request(app).post('/api/audit/verify').set(authHeader(member.accessToken));
     expect(res.status).toBe(403);
   });
 
   test('an OWNER gets a verified result and it is audited as AUDIT_VERIFICATION_ATTEMPTED', async () => {
-    const admin = await signup(app, 'auditadmin4');
+    const admin = await signup('auditadmin4');
     await createWorkspace(admin);
 
     const res = await request(app).post('/api/audit/verify').set(authHeader(admin.accessToken));
@@ -165,9 +168,9 @@ describe('POST /api/audit/verify', () => {
   });
 
   test('reports verified: false after a row is tampered with directly in the database', async () => {
-    const admin = await signup(app, 'auditadmin5');
+    const admin = await signup('auditadmin5');
     await createWorkspace(admin);
-    const row = await db('audit_logs').where({ action_type: 'AUTH_SIGNUP' }).first();
+    const row = await db('audit_logs').where({ action_type: 'WORKSPACE_CREATED' }).first();
     await adminDb('audit_logs').where({ id: row.id }).update({ actor_ip: '9.9.9.9' });
 
     const res = await request(app).post('/api/audit/verify').set(authHeader(admin.accessToken));

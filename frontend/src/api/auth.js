@@ -1,11 +1,5 @@
 import { apiFetch, setAccessToken, API_BASE } from './client.js';
 
-export async function signup({ username, email, password }) {
-  const data = await apiFetch('/auth/signup', { method: 'POST', body: { username, email, password } });
-  setAccessToken(data.accessToken);
-  return data.user;
-}
-
 export async function login({ username, password }) {
   const data = await apiFetch('/auth/login', { method: 'POST', body: { username, password } });
   setAccessToken(data.accessToken);

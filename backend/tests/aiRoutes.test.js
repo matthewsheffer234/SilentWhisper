@@ -56,8 +56,8 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
   });
 
   test('rejects a workspace member who is not OWNER/MANAGER of any workspace', async () => {
-    const admin = await signup(app, 'aiadmin0');
-    const member = await signup(app, 'aimember0');
+    const admin = await signup('aiadmin0');
+    const member = await signup('aimember0');
     const workspaceId = await createWorkspace(admin);
     await db('workspace_members').insert({ workspace_id: workspaceId, user_id: member.userId, system_role: 'MEMBER' });
 
@@ -66,7 +66,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
   });
 
   test('allows a workspace OWNER to read settings, including health status', async () => {
-    const admin = await signup(app, 'aiadmin1');
+    const admin = await signup('aiadmin1');
     await createWorkspace(admin);
 
     const res = await request(app).get('/api/ai/settings').set(authHeader(admin.accessToken));
@@ -77,7 +77,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
   });
 
   test('a workspace OWNER can update non-secret settings, and it is audited', async () => {
-    const admin = await signup(app, 'aiadmin2');
+    const admin = await signup('aiadmin2');
     await createWorkspace(admin);
 
     const res = await request(app)
@@ -95,7 +95,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
   });
 
   test('rejects an update with an unknown field or invalid value', async () => {
-    const admin = await signup(app, 'aiadmin3');
+    const admin = await signup('aiadmin3');
     await createWorkspace(admin);
 
     const badField = await request(app)
@@ -114,8 +114,8 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
 
 describe('POST /api/channels/:channelId/ai/summarize', () => {
   test('a non-member gets 404, never a 403 (Section 3, membership existence-hiding)', async () => {
-    const owner = await signup(app, 'sumowner0');
-    const outsider = await signup(app, 'sumoutsider0');
+    const owner = await signup('sumowner0');
+    const outsider = await signup('sumoutsider0');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
 
@@ -129,7 +129,7 @@ describe('POST /api/channels/:channelId/ai/summarize', () => {
   test('a channel member gets a streamed summary, with prompt metadata headers and an audit row', async () => {
     jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ response: 'Summary: shipped the feature.' }));
 
-    const owner = await signup(app, 'sumowner1');
+    const owner = await signup('sumowner1');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
     await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'shipped the feature' });
@@ -153,7 +153,7 @@ describe('POST /api/channels/:channelId/ai/summarize', () => {
   });
 
   test('rejects summarizing an empty channel', async () => {
-    const owner = await signup(app, 'sumowner2');
+    const owner = await signup('sumowner2');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
 
@@ -165,7 +165,7 @@ describe('POST /api/channels/:channelId/ai/summarize', () => {
   });
 
   test('returns 503 and audits nothing when the provider is disabled', async () => {
-    const owner = await signup(app, 'sumowner3');
+    const owner = await signup('sumowner3');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
     await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hello' });
@@ -187,7 +187,7 @@ describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
   test('parses the root message plus its replies into the prompt and audits the extraction', async () => {
     jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ response: '- [ ] file the report' }));
 
-    const owner = await signup(app, 'taskowner0');
+    const owner = await signup('taskowner0');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
     const rootRes = await request(app)
@@ -213,8 +213,8 @@ describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
   });
 
   test('a non-member of the thread\'s channel gets 404', async () => {
-    const owner = await signup(app, 'taskowner1');
-    const outsider = await signup(app, 'taskoutsider1');
+    const owner = await signup('taskowner1');
+    const outsider = await signup('taskoutsider1');
     const workspaceId = await createWorkspace(owner);
     const channelId = await createChannel(owner, workspaceId);
     const rootRes = await request(app)
@@ -230,7 +230,7 @@ describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
   });
 
   test('a nonexistent message id gets 404', async () => {
-    const owner = await signup(app, 'taskowner2');
+    const owner = await signup('taskowner2');
     const res = await request(app)
       .post('/api/messages/00000000-0000-0000-0000-000000000000/ai/extract-tasks')
       .set(authHeader(owner.accessToken))

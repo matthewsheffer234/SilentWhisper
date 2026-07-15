@@ -5,14 +5,32 @@ import { PERMISSIONS, WORKSPACE_ROLE_PERMISSIONS } from '../src/authz/permission
 // without exercising any route.
 
 describe('WORKSPACE_ROLE_PERMISSIONS', () => {
-  test('OWNER holds every slice-1 workspace permission', () => {
+  // FEATURE_REQUEST.md entry 1, slice 4: OWNER holds every workspace
+  // permission that exists, including the three new OWNER-only ones
+  // (transfer ownership, change visibility, manage settings) and the
+  // MANAGER-tier split permission.
+  test('OWNER holds every slice-4 workspace permission', () => {
     expect(WORKSPACE_ROLE_PERMISSIONS.OWNER).toEqual(
-      expect.arrayContaining([PERMISSIONS.WORKSPACE_MANAGE_MEMBERS, PERMISSIONS.WORKSPACE_ARCHIVE]),
+      expect.arrayContaining([
+        PERMISSIONS.WORKSPACE_MANAGE_MEMBERS,
+        PERMISSIONS.WORKSPACE_MANAGE_MANAGERS,
+        PERMISSIONS.WORKSPACE_ARCHIVE,
+        PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP,
+        PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY,
+        PERMISSIONS.WORKSPACE_MANAGE_SETTINGS,
+      ]),
     );
   });
 
-  test('MANAGER holds the same permissions as OWNER in slice 1 (no manager-restriction feature yet)', () => {
-    expect(WORKSPACE_ROLE_PERMISSIONS.MANAGER).toEqual(WORKSPACE_ROLE_PERMISSIONS.OWNER);
+  // Slice 4 tightening: a MANAGER no longer holds everything OWNER does —
+  // only WORKSPACE_MANAGE_MEMBERS and WORKSPACE_ARCHIVE (the latter further
+  // narrowed at check time by managers_can_archive, tested in
+  // workspaceArchiving.test.js).
+  test('MANAGER holds only WORKSPACE_MANAGE_MEMBERS and WORKSPACE_ARCHIVE', () => {
+    expect(WORKSPACE_ROLE_PERMISSIONS.MANAGER).toEqual(
+      expect.arrayContaining([PERMISSIONS.WORKSPACE_MANAGE_MEMBERS, PERMISSIONS.WORKSPACE_ARCHIVE]),
+    );
+    expect(WORKSPACE_ROLE_PERMISSIONS.MANAGER).toHaveLength(2);
   });
 
   test('MEMBER holds no elevated permissions', () => {
