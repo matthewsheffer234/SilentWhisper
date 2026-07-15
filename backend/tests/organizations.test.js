@@ -195,3 +195,171 @@ describe('org membership routes', () => {
     expect(remaining).toHaveLength(0);
   });
 });
+
+// System Admin panel: manage organizations and existing users. Organization
+// lifecycle (rename/archive/unarchive) stays system-admin-only, same as
+// creation — never ORG_ADMIN-manageable.
+describe('PATCH /api/organizations/:orgId', () => {
+  test('a system admin can rename an organization', async () => {
+    const admin = await seedSystemAdmin('orgrename0');
+    const orgRes = await createOrg(admin, 'Old Name');
+
+    const res = await request(app)
+      .patch(`/api/organizations/${orgRes.body.id}`)
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'New Name' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: orgRes.body.id, name: 'New Name' });
+
+    const row = await db('organizations').where({ id: orgRes.body.id }).first('name');
+    expect(row.name).toBe('New Name');
+
+    const auditRow = await db('audit_logs').where({ action_type: 'ORGANIZATION_RENAMED' }).first();
+    expect(auditRow.payload).toMatchObject({ fromName: 'Old Name', toName: 'New Name' });
+  });
+
+  test('a nonexistent org 404s', async () => {
+    const admin = await seedSystemAdmin('orgrename1');
+    const res = await request(app)
+      .patch('/api/organizations/00000000-0000-0000-0000-000000000000')
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'New Name' });
+    expect(res.status).toBe(404);
+  });
+
+  // Even an ORG_ADMIN of the org itself can't rename it — org lifecycle is
+  // system-admin-only, never ORG_ADMIN-manageable.
+  test('an ORG_ADMIN (not a system admin) gets 403', async () => {
+    const admin = await seedSystemAdmin('orgrename2');
+    const orgRes = await createOrg(admin, 'Org Rename 403 Test');
+
+    const member = await signup('orgrenamemember2');
+    await request(app)
+      .post(`/api/organizations/${orgRes.body.id}/members`)
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'orgrenamemember2', role: 'ORG_ADMIN' });
+
+    const res = await request(app)
+      .patch(`/api/organizations/${orgRes.body.id}`)
+      .set(authHeader(member.accessToken))
+      .send({ name: 'Another Name' });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /api/organizations/:orgId/archive and /unarchive', () => {
+  test('archiving is idempotent and audited; unarchiving reverses it', async () => {
+    const admin = await seedSystemAdmin('orgarchive0');
+    const orgRes = await createOrg(admin, 'Org Archive Test');
+    const orgId = orgRes.body.id;
+
+    const first = await request(app).post(`/api/organizations/${orgId}/archive`).set(authHeader(admin.accessToken));
+    expect(first.status).toBe(200);
+    expect(first.body.archivedAt).toBeTruthy();
+
+    const second = await request(app).post(`/api/organizations/${orgId}/archive`).set(authHeader(admin.accessToken));
+    expect(second.status).toBe(200);
+
+    const archiveRows = await db('audit_logs').where({ action_type: 'ORGANIZATION_ARCHIVE_STATUS_CHANGE' });
+    expect(archiveRows).toHaveLength(1);
+
+    const unarchive = await request(app).post(`/api/organizations/${orgId}/unarchive`).set(authHeader(admin.accessToken));
+    expect(unarchive.status).toBe(200);
+    expect(unarchive.body.archivedAt).toBeNull();
+
+    const rows = await db('audit_logs').where({ action_type: 'ORGANIZATION_ARCHIVE_STATUS_CHANGE' }).orderBy('id', 'asc');
+    expect(rows.map((r) => r.payload.action)).toEqual(['archive', 'unarchive']);
+  });
+
+  test('a nonexistent org 404s', async () => {
+    const admin = await seedSystemAdmin('orgarchive1');
+    const res = await request(app)
+      .post('/api/organizations/00000000-0000-0000-0000-000000000000/archive')
+      .set(authHeader(admin.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('a non-system-admin gets 403', async () => {
+    const admin = await seedSystemAdmin('orgarchive2');
+    const orgRes = await createOrg(admin, 'Org Archive 403 Test');
+    const member = await signup('orgarchivemember2');
+    await request(app)
+      .post(`/api/organizations/${orgRes.body.id}/members`)
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'orgarchivemember2', role: 'ORG_ADMIN' });
+
+    const res = await request(app).post(`/api/organizations/${orgRes.body.id}/archive`).set(authHeader(member.accessToken));
+    expect(res.status).toBe(403);
+  });
+});
+
+// Mirrors workspaceArchiving.test.js's own "every gated write path 409s"
+// pattern, one level up.
+describe('every gated write path 409s against an archived organization', () => {
+  async function setupArchivedOrg(label) {
+    const admin = await seedSystemAdmin(`archorg${label}admin`);
+    const orgRes = await createOrg(admin, `Archived Org ${label}`);
+    const orgId = orgRes.body.id;
+    await request(app).post(`/api/organizations/${orgId}/archive`).set(authHeader(admin.accessToken));
+    return { admin, orgId };
+  }
+
+  test('adding a member 409s', async () => {
+    const { admin, orgId } = await setupArchivedOrg('add');
+    await signup('archorgaddtarget');
+    const res = await request(app)
+      .post(`/api/organizations/${orgId}/members`)
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'archorgaddtarget' });
+    expect(res.status).toBe(409);
+  });
+
+  test('creating an invitation 409s', async () => {
+    const { admin, orgId } = await setupArchivedOrg('invite');
+    const res = await request(app)
+      .post(`/api/organizations/${orgId}/invitations`)
+      .set(authHeader(admin.accessToken))
+      .send({ email: 'archorginvite@example.com' });
+    expect(res.status).toBe(409);
+  });
+
+  test("changing a member's role 409s", async () => {
+    const { admin, orgId } = await setupArchivedOrg('role');
+    // System admin override still grants existence, so re-fetch a real
+    // membership: the admin's own row, created at org-creation time.
+    const res = await request(app)
+      .patch(`/api/organizations/${orgId}/members/${admin.userId}`)
+      .set(authHeader(admin.accessToken))
+      .send({ role: 'ORG_MEMBER' });
+    expect(res.status).toBe(409);
+  });
+
+  test('removing a member 409s', async () => {
+    const { admin, orgId } = await setupArchivedOrg('remove');
+    const res = await request(app)
+      .delete(`/api/organizations/${orgId}/members/${admin.userId}`)
+      .set(authHeader(admin.accessToken));
+    expect(res.status).toBe(409);
+  });
+
+  test('creating a workspace targeting the archived org via explicit organizationId 409s', async () => {
+    const { admin, orgId } = await setupArchivedOrg('ws');
+    const res = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'Should Fail', organizationId: orgId });
+    expect(res.status).toBe(409);
+  });
+
+  test('rename and archive/unarchive themselves are NOT blocked by archived state', async () => {
+    const { admin, orgId } = await setupArchivedOrg('selfmanage');
+    const renameRes = await request(app)
+      .patch(`/api/organizations/${orgId}`)
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'Renamed While Archived' });
+    expect(renameRes.status).toBe(200);
+
+    const unarchiveRes = await request(app).post(`/api/organizations/${orgId}/unarchive`).set(authHeader(admin.accessToken));
+    expect(unarchiveRes.status).toBe(200);
+  });
+});

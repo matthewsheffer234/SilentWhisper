@@ -5,7 +5,7 @@ import { appendAuditEvent } from '../audit/auditService.js';
 import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, ASSIGNABLE_ORG_ROLES } from '../validation.js';
 import { invitationCreateLimiter } from '../auth/rateLimit.js';
 import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
-import { requireOrgPermission, isSystemAdminUser } from '../authz/membershipService.js';
+import { requireOrgPermission, requireOrgNotArchived, isSystemAdminUser } from '../authz/membershipService.js';
 import { PERMISSIONS } from '../authz/permissions.js';
 import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from '../errors.js';
 
@@ -59,15 +59,115 @@ organizationsRouter.get('/', async (req, res, next) => {
   try {
     const isAdmin = await isSystemAdminUser(db, req.user.id);
     const rows = isAdmin
-      ? await db('organizations').select('id', 'name', 'created_at').orderBy('created_at', 'asc')
+      ? await db('organizations').select('id', 'name', 'created_at', 'archived_at').orderBy('created_at', 'asc')
       : await db('organizations as o')
           .join('organization_members as om', function joinMembers() {
             this.on('om.organization_id', '=', 'o.id').andOn('om.user_id', '=', db.raw('?', [req.user.id]));
           })
-          .select('o.id', 'o.name', 'o.created_at', 'om.org_role')
+          .select('o.id', 'o.name', 'o.created_at', 'o.archived_at', 'om.org_role')
           .orderBy('o.created_at', 'asc');
 
-    res.json(rows.map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, role: r.org_role ?? null })));
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        createdAt: r.created_at,
+        archivedAt: r.archived_at,
+        role: r.org_role ?? null,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// System Admin panel: manage organizations and existing users. Organization
+// lifecycle (rename/archive/unarchive) stays system-admin-only — same direct
+// isSystemAdminUser gate as POST / above, not requireOrgPermission — org
+// lifecycle was never ORG_ADMIN-manageable by design, extended consistently
+// here rather than re-litigated.
+organizationsRouter.patch('/:orgId', async (req, res, next) => {
+  try {
+    if (!(await isSystemAdminUser(db, req.user.id))) {
+      throw new ForbiddenError('System admin privileges required');
+    }
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    const name = assertName(req.body?.name, 'organization name');
+
+    const org = await db('organizations').where({ id: orgId }).first('name');
+    if (!org) {
+      throw new NotFoundError('Organization not found');
+    }
+
+    await db('organizations').where({ id: orgId }).update({ name });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ORGANIZATION_RENAMED',
+      targetResource: orgId,
+      payload: { fromName: org.name, toName: name },
+    });
+
+    res.json({ id: orgId, name });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Idempotent (200 always; writes + audits only on an actual NULL -> set
+// transition) — mirrors POST /:workspaceId/archive's own convention exactly.
+organizationsRouter.post('/:orgId/archive', async (req, res, next) => {
+  try {
+    if (!(await isSystemAdminUser(db, req.user.id))) {
+      throw new ForbiddenError('System admin privileges required');
+    }
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    const org = await db('organizations').where({ id: orgId }).first('archived_at');
+    if (!org) {
+      throw new NotFoundError('Organization not found');
+    }
+
+    if (!org.archived_at) {
+      await db('organizations').where({ id: orgId }).update({ archived_at: new Date(), archived_by: req.user.id });
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'ORGANIZATION_ARCHIVE_STATUS_CHANGE',
+        targetResource: orgId,
+        payload: { action: 'archive' },
+      });
+    }
+
+    res.status(200).json({ id: orgId, archivedAt: org.archived_at ?? new Date().toISOString() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+organizationsRouter.post('/:orgId/unarchive', async (req, res, next) => {
+  try {
+    if (!(await isSystemAdminUser(db, req.user.id))) {
+      throw new ForbiddenError('System admin privileges required');
+    }
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    const org = await db('organizations').where({ id: orgId }).first('archived_at');
+    if (!org) {
+      throw new NotFoundError('Organization not found');
+    }
+
+    if (org.archived_at) {
+      await db('organizations').where({ id: orgId }).update({ archived_at: null, archived_by: null });
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'ORGANIZATION_ARCHIVE_STATUS_CHANGE',
+        targetResource: orgId,
+        payload: { action: 'unarchive' },
+      });
+    }
+
+    res.status(200).json({ id: orgId, archivedAt: null });
   } catch (err) {
     next(err);
   }
@@ -97,6 +197,7 @@ organizationsRouter.post('/:orgId/members', async (req, res, next) => {
   try {
     const orgId = assertUuid(req.params.orgId, 'orgId');
     await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+    await requireOrgNotArchived(db, orgId);
 
     const username = assertUsername(req.body?.username);
     const role = req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_ORG_ROLES, 'role') : 'ORG_MEMBER';
@@ -134,6 +235,7 @@ organizationsRouter.patch('/:orgId/members/:userId', async (req, res, next) => {
     const orgId = assertUuid(req.params.orgId, 'orgId');
     const targetUserId = assertUuid(req.params.userId, 'userId');
     await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+    await requireOrgNotArchived(db, orgId);
 
     const role = assertEnum(req.body?.role, ASSIGNABLE_ORG_ROLES, 'role');
 
@@ -179,6 +281,7 @@ organizationsRouter.delete('/:orgId/members/:userId', async (req, res, next) => 
     const orgId = assertUuid(req.params.orgId, 'orgId');
     const targetUserId = assertUuid(req.params.userId, 'userId');
     await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+    await requireOrgNotArchived(db, orgId);
 
     const targetRow = await db('organization_members as om')
       .join('users', 'users.id', 'om.user_id')
@@ -215,6 +318,7 @@ organizationsRouter.post('/:orgId/invitations', invitationCreateLimiter, async (
   try {
     const orgId = assertUuid(req.params.orgId, 'orgId');
     await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_INVITE);
+    await requireOrgNotArchived(db, orgId);
 
     const email = assertEmail(req.body?.email);
     const invitedRole =

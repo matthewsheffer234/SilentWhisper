@@ -15,6 +15,7 @@ import {
   requireWorkspaceNotArchived,
   requireChannelMember,
   requireOrgMember,
+  requireOrgNotArchived,
   getWorkspaceRole,
   getChannel,
   isChannelMember,
@@ -70,6 +71,12 @@ workspacesRouter.post('/', async (req, res, next) => {
       // a no-op until a second organization actually exists, since every
       // account today has exactly one org membership.
       const organizationId = await resolveCallerOrganization(trx, req.user.id, requestedOrgId);
+      // System Admin panel: manage organizations and existing users — an
+      // archived org shouldn't grow new workspaces. Scoped to this write
+      // path only (not resolveCallerOrganization itself, which GET
+      // /discoverable also calls — archived stays browsable, only blocked
+      // for writes, same convention workspace archiving already follows).
+      await requireOrgNotArchived(trx, organizationId);
       const [ws] = await trx('workspaces')
         .insert({ name, owner_id: req.user.id, visibility, organization_id: organizationId })
         .returning(['id', 'name', 'owner_id', 'organization_id', 'visibility', 'managers_can_archive', 'created_at']);

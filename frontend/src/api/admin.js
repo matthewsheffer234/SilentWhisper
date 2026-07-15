@@ -11,3 +11,10 @@ export const createAdminUser = ({ username, email, password, organizationId }) =
 export const listAdminUsers = () => apiFetch('/admin/users');
 export const disableUser = (userId) => apiFetch(`/admin/users/${userId}/disable`, { method: 'POST' });
 export const enableUser = (userId) => apiFetch(`/admin/users/${userId}/enable`, { method: 'POST' });
+
+// System Admin panel: manage organizations and existing users.
+export const promoteUser = (userId) => apiFetch(`/admin/users/${userId}/promote`, { method: 'POST' });
+export const demoteUser = (userId) => apiFetch(`/admin/users/${userId}/demote`, { method: 'POST' });
+export const globalResetPassword = (userId, newPassword) =>
+  apiFetch(`/admin/users/${userId}/reset-password`, { method: 'POST', body: { newPassword } });
+export const listUserOrganizations = (userId) => apiFetch(`/admin/users/${userId}/organizations`);

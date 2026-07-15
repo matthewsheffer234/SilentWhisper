@@ -215,7 +215,12 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | POST | `/api/admin/users` | system-admin only. `{username, email, password, organizationId?}` → creates a bare account, no workspace tie |
 | GET | `/api/admin/users` | system-admin only. Every account, with `status`/`isSystemAdmin` |
 | POST | `/api/admin/users/:userId/disable` \| `/enable` | system-admin only |
+| POST | `/api/admin/users/:userId/promote` \| `/demote` | system-admin only. Grants/revokes `is_system_admin`; `/demote` 400s against the caller's own account |
+| POST | `/api/admin/users/:userId/reset-password` | system-admin only. `{newPassword}` — global, works regardless of workspace membership |
+| GET | `/api/admin/users/:userId/organizations` | system-admin only. Which orgs a given user belongs to, with role |
 | GET | `/api/workspaces/admin/all` | system-admin only. Every workspace regardless of membership, across every organization |
+| PATCH | `/api/organizations/:orgId` | system-admin only. `{name}` — rename |
+| POST | `/api/organizations/:orgId/archive` \| `/unarchive` | system-admin only. Idempotent; an archived org blocks new members/invitations/workspaces but stays browsable |
 | POST | `/api/auth/refresh` | reads refresh cookie, rotates it → `{accessToken}` + new refresh cookie |
 | POST | `/api/auth/logout` | reads refresh cookie, revokes it → `204` |
 | GET | `/api/auth/me` | requires a bearer token → `{user}` — added in Phase 3 so the frontend can restore a session after a bare `/refresh` (which only returns a token, not the user) |

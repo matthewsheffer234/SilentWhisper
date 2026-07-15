@@ -1,18 +1,36 @@
-import { useEffect, useState } from 'react';
-import { createAdminUser, listAdminUsers, disableUser, enableUser } from '../api/admin.js';
+import { Fragment, useEffect, useState } from 'react';
+import {
+  createAdminUser,
+  listAdminUsers,
+  disableUser,
+  enableUser,
+  promoteUser,
+  demoteUser,
+  globalResetPassword,
+  listUserOrganizations,
+} from '../api/admin.js';
 import { listAllWorkspacesAdmin } from '../api/workspaces.js';
-import { listOrganizations } from '../api/organizations.js';
+import {
+  listOrganizations,
+  addOrgMember,
+  changeOrgMemberRole,
+  removeOrgMember,
+  renameOrganization,
+  archiveOrganization,
+  unarchiveOrganization,
+} from '../api/organizations.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
-// FEATURE_REQUEST.md entry 1 (Enterprise authorization model), slice 4.
-// Structurally cloned from UserManagementPanel.jsx/OrgManagementPanel.jsx's
-// established pattern, but workspace-agnostic — no workspace selector, since
-// every action here (account creation/disable/enable, cross-org oversight)
-// is system-wide, not scoped to any one workspace or organization. All
-// server calls redundantly re-check authorization server-side (a direct
-// isSystemAdminUser gate) — this panel only ever being rendered for a
-// system admin is a UI convenience, never the actual enforcement boundary,
-// same as every other admin panel in this app.
+// FEATURE_REQUEST.md entry 1 (Enterprise authorization model), slice 4, plus
+// the follow-up "manage organizations and existing users" pass. Structurally
+// cloned from UserManagementPanel.jsx/OrgManagementPanel.jsx's established
+// pattern, but workspace-agnostic — no workspace selector, since every
+// action here (account creation/disable/enable/promote/demote/reset,
+// cross-org oversight, org lifecycle) is system-wide, not scoped to any one
+// workspace. All server calls redundantly re-check authorization
+// server-side (a direct isSystemAdminUser gate) — this panel only ever
+// being rendered for a system admin is a UI convenience, never the actual
+// enforcement boundary, same as every other admin panel in this app.
 
 const styles = {
   backdrop: {
@@ -25,7 +43,7 @@ const styles = {
     zIndex: 50,
   },
   panel: {
-    width: 720,
+    width: 760,
     maxWidth: '94vw',
     maxHeight: '86vh',
     display: 'flex',
@@ -106,6 +124,14 @@ const styles = {
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
+  rowSelect: {
+    minHeight: 36,
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'var(--surface)',
+    color: 'var(--text-1)',
+    fontSize: 'var(--text-xs)',
+  },
   submitButton: {
     marginTop: 6,
     minHeight: 44,
@@ -118,8 +144,13 @@ const styles = {
     cursor: 'pointer',
   },
   row: { display: 'flex', gap: 12 },
+  actionRow: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '8px 0' },
   statusBadge: { fontSize: 'var(--text-xs)', fontWeight: 600 },
+  manageSection: { padding: '10px 4px' },
+  manageSectionTitle: { fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 6 },
+  inlineFormRow: { display: 'flex', gap: 6, marginTop: 6, marginBottom: 6 },
+  orgRow: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 'var(--text-sm)' },
 };
 
 function CreateAccountForm({ organizations, onSubmit }) {
@@ -128,6 +159,8 @@ function CreateAccountForm({ organizations, onSubmit }) {
   const [password, setPassword] = useState('');
   const [organizationId, setOrganizationId] = useState('');
   const [status, setStatus] = useState(null);
+
+  const availableOrgs = organizations.filter((org) => !org.archivedAt);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -184,7 +217,7 @@ function CreateAccountForm({ organizations, onSubmit }) {
             onChange={(e) => setOrganizationId(e.target.value)}
           >
             <option value="">(earliest-created org)</option>
-            {organizations.map((org) => (
+            {availableOrgs.map((org) => (
               <option key={org.id} value={org.id}>{org.name}</option>
             ))}
           </select>
@@ -200,6 +233,226 @@ function CreateAccountForm({ organizations, onSubmit }) {
   );
 }
 
+// Expandable per-user detail row (cloned from UserManagementPanel.jsx's
+// ResetPasswordRow toggle-open pattern, scaled up to cover both a global
+// password reset and organization-membership management) — rendered as an
+// extra full-width <tr> under the account row it belongs to.
+function ManageUserRow({ targetUser, organizations, onResetPassword, onAddOrg, onChangeOrgRole, onRemoveFromOrg }) {
+  const [newPassword, setNewPassword] = useState('');
+  const [resetStatus, setResetStatus] = useState(null);
+  const [userOrgs, setUserOrgs] = useState([]);
+  const [orgsLoading, setOrgsLoading] = useState(true);
+  const [orgsError, setOrgsError] = useState(null);
+  const [addOrgId, setAddOrgId] = useState('');
+  const [addOrgRole, setAddOrgRole] = useState('ORG_MEMBER');
+
+  function loadUserOrgs() {
+    setOrgsLoading(true);
+    listUserOrganizations(targetUser.userId)
+      .then(setUserOrgs)
+      .catch((err) => setOrgsError(err.message || 'Failed to load organizations'))
+      .finally(() => setOrgsLoading(false));
+  }
+
+  useEffect(() => {
+    loadUserOrgs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetUser.userId]);
+
+  async function handleResetPassword(e) {
+    e.preventDefault();
+    setResetStatus(null);
+    try {
+      await onResetPassword(targetUser.userId, newPassword);
+      setResetStatus({ type: 'success', message: 'Password reset' });
+      setNewPassword('');
+    } catch (err) {
+      setResetStatus({ type: 'error', message: err.message || 'Failed to reset password' });
+    }
+  }
+
+  async function handleAddOrg(e) {
+    e.preventDefault();
+    if (!addOrgId) return;
+    setOrgsError(null);
+    try {
+      await onAddOrg(addOrgId, targetUser.username, addOrgRole);
+      setAddOrgId('');
+      loadUserOrgs();
+    } catch (err) {
+      setOrgsError(err.message || 'Failed to add to organization');
+    }
+  }
+
+  async function handleChangeRole(orgId, role) {
+    setOrgsError(null);
+    try {
+      await onChangeOrgRole(orgId, targetUser.userId, role);
+      loadUserOrgs();
+    } catch (err) {
+      setOrgsError(err.message || 'Failed to change role');
+    }
+  }
+
+  async function handleRemove(orgId) {
+    setOrgsError(null);
+    try {
+      await onRemoveFromOrg(orgId, targetUser.userId);
+      loadUserOrgs();
+    } catch (err) {
+      setOrgsError(err.message || 'Failed to remove from organization');
+    }
+  }
+
+  const availableOrgs = organizations.filter(
+    (org) => !org.archivedAt && !userOrgs.some((uo) => uo.organizationId === org.id),
+  );
+
+  return (
+    <tr>
+      <td style={{ ...styles.td, background: 'var(--surface-alt)' }} colSpan={5}>
+        <div style={styles.manageSection}>
+          <div style={styles.manageSectionTitle}>Reset password</div>
+          <form style={styles.inlineFormRow} onSubmit={handleResetPassword}>
+            <input
+              type="password"
+              style={{ ...styles.input, flex: 1 }}
+              placeholder="New password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+            />
+            <button type="submit" style={styles.rowButton}>Reset</button>
+          </form>
+          {resetStatus && (
+            <div style={{ fontSize: 'var(--text-xs)', color: resetStatus.type === 'error' ? '#c0392b' : 'var(--brg)' }}>
+              {resetStatus.message}
+            </div>
+          )}
+
+          <div style={{ ...styles.manageSectionTitle, marginTop: 14 }}>Organizations</div>
+          {orgsError && <div style={styles.error}>{orgsError}</div>}
+          <div data-testid="manage-user-orgs">
+          {orgsLoading ? (
+            <div style={styles.empty}>Loading…</div>
+          ) : userOrgs.length === 0 ? (
+            <div style={styles.empty}>Not a member of any organization.</div>
+          ) : (
+            userOrgs.map((uo) => (
+              <div key={uo.organizationId} data-testid={`org-membership-${uo.organizationId}`} style={styles.orgRow}>
+                <span style={{ flex: 1 }}>
+                  {uo.organizationName}
+                  {uo.archivedAt ? ' (archived)' : ''}
+                </span>
+                <select
+                  style={styles.rowSelect}
+                  value={uo.role}
+                  onChange={(e) => handleChangeRole(uo.organizationId, e.target.value)}
+                  aria-label={`Role for ${targetUser.username} in ${uo.organizationName}`}
+                >
+                  <option value="ORG_MEMBER">Member</option>
+                  <option value="ORG_ADMIN">Admin</option>
+                </select>
+                <button type="button" style={styles.rowButton} onClick={() => handleRemove(uo.organizationId)}>
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+          </div>
+          <form style={styles.inlineFormRow} onSubmit={handleAddOrg}>
+            <select
+              style={{ ...styles.select, flex: 1 }}
+              value={addOrgId}
+              onChange={(e) => setAddOrgId(e.target.value)}
+              aria-label="Add to organization"
+            >
+              <option value="">Add to organization…</option>
+              {availableOrgs.map((org) => (
+                <option key={org.id} value={org.id}>{org.name}</option>
+              ))}
+            </select>
+            <select style={styles.rowSelect} value={addOrgRole} onChange={(e) => setAddOrgRole(e.target.value)} aria-label="Role">
+              <option value="ORG_MEMBER">Member</option>
+              <option value="ORG_ADMIN">Admin</option>
+            </select>
+            <button type="submit" style={styles.rowButton} disabled={!addOrgId}>Add</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// Inline-rename (cloned from ResetPasswordRow's toggle-open pattern) plus an
+// archive/unarchive toggle, one row per organization.
+function OrganizationRow({ org, onRename, onArchive, onUnarchive }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(org.name);
+  const [status, setStatus] = useState(null);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setStatus(null);
+    try {
+      await onRename(org.id, name);
+      setEditing(false);
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to rename' });
+    }
+  }
+
+  async function handleArchiveToggle() {
+    setStatus(null);
+    try {
+      if (org.archivedAt) {
+        await onUnarchive(org.id);
+      } else {
+        await onArchive(org.id);
+      }
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to update organization' });
+    }
+  }
+
+  return (
+    <tr data-testid={`org-row-${org.id}`}>
+      <td style={styles.td}>
+        {editing ? (
+          <form style={styles.inlineFormRow} onSubmit={handleSave}>
+            <input style={{ ...styles.input, flex: 1 }} value={name} onChange={(e) => setName(e.target.value)} required />
+            <button type="submit" style={styles.rowButton}>Save</button>
+            <button
+              type="button"
+              style={styles.rowButton}
+              onClick={() => {
+                setEditing(false);
+                setName(org.name);
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          org.name
+        )}
+      </td>
+      <td style={styles.td}>{org.archivedAt ? 'Archived' : ''}</td>
+      <td style={styles.td}>
+        <div style={styles.actionRow}>
+          {!editing && (
+            <button type="button" style={styles.rowButton} onClick={() => setEditing(true)}>Rename</button>
+          )}
+          <button type="button" style={styles.rowButton} onClick={handleArchiveToggle}>
+            {org.archivedAt ? 'Unarchive' : 'Archive'}
+          </button>
+        </div>
+        {status && <div style={{ fontSize: 'var(--text-xs)', color: '#c0392b', marginTop: 4 }}>{status.message}</div>}
+      </td>
+    </tr>
+  );
+}
+
 export default function SystemAdminPanel({ onClose }) {
   const { user } = useAuth();
   const [organizations, setOrganizations] = useState([]);
@@ -207,6 +460,8 @@ export default function SystemAdminPanel({ onClose }) {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [accountsError, setAccountsError] = useState(null);
   const [allWorkspaces, setAllWorkspaces] = useState([]);
+  const [managingUserId, setManagingUserId] = useState(null);
+  const [orgsError, setOrgsError] = useState(null);
 
   function loadAccounts() {
     setAccountsLoading(true);
@@ -217,8 +472,12 @@ export default function SystemAdminPanel({ onClose }) {
       .finally(() => setAccountsLoading(false));
   }
 
-  useEffect(() => {
+  function loadOrganizations() {
     listOrganizations().then(setOrganizations).catch(() => setOrganizations([]));
+  }
+
+  useEffect(() => {
+    loadOrganizations();
     loadAccounts();
     listAllWorkspacesAdmin().then(setAllWorkspaces).catch(() => setAllWorkspaces([]));
   }, []);
@@ -246,6 +505,63 @@ export default function SystemAdminPanel({ onClose }) {
     }
   }
 
+  async function handlePromote(userId) {
+    try {
+      await promoteUser(userId);
+      loadAccounts();
+    } catch (err) {
+      setAccountsError(err.message || 'Failed to promote account');
+    }
+  }
+
+  async function handleDemote(userId) {
+    try {
+      await demoteUser(userId);
+      loadAccounts();
+    } catch (err) {
+      setAccountsError(err.message || 'Failed to demote account');
+    }
+  }
+
+  function handleGlobalResetPassword(userId, newPassword) {
+    return globalResetPassword(userId, newPassword);
+  }
+
+  function handleAddUserToOrg(orgId, username, role) {
+    return addOrgMember(orgId, username, role);
+  }
+
+  function handleChangeUserOrgRole(orgId, userId, role) {
+    return changeOrgMemberRole(orgId, userId, role);
+  }
+
+  function handleRemoveUserFromOrg(orgId, userId) {
+    return removeOrgMember(orgId, userId);
+  }
+
+  async function handleRenameOrg(orgId, name) {
+    await renameOrganization(orgId, name);
+    loadOrganizations();
+  }
+
+  async function handleArchiveOrg(orgId) {
+    try {
+      await archiveOrganization(orgId);
+      loadOrganizations();
+    } catch (err) {
+      setOrgsError(err.message || 'Failed to archive organization');
+    }
+  }
+
+  async function handleUnarchiveOrg(orgId) {
+    try {
+      await unarchiveOrganization(orgId);
+      loadOrganizations();
+    } catch (err) {
+      setOrgsError(err.message || 'Failed to unarchive organization');
+    }
+  }
+
   return (
     <div style={styles.backdrop} onClick={onClose}>
       <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
@@ -253,7 +569,10 @@ export default function SystemAdminPanel({ onClose }) {
           <span style={styles.title}>System Admin</span>
           <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close system admin">×</button>
         </div>
-        <div style={styles.subtitle}>Create accounts, disable/enable access, and review every workspace across every organization.</div>
+        <div style={styles.subtitle}>
+          Create accounts, adjust privileges, reset passwords, manage organization membership, and review every workspace
+          across every organization.
+        </div>
 
         <div style={styles.sectionTitle}>Create account</div>
         <CreateAccountForm organizations={organizations} onSubmit={handleCreateAccount} />
@@ -276,36 +595,92 @@ export default function SystemAdminPanel({ onClose }) {
               </tr>
             </thead>
             <tbody>
-              {accounts.map((a) => (
-                <tr key={a.userId}>
-                  <td style={styles.td}>{a.username}</td>
-                  <td style={styles.td}>{a.email}</td>
-                  <td style={styles.td}>
-                    <span style={{ ...styles.statusBadge, color: a.status === 'DISABLED' ? '#c0392b' : 'var(--brg)' }}>
-                      {a.status}
-                    </span>
-                  </td>
-                  <td style={styles.td}>{a.isSystemAdmin ? 'Yes' : ''}</td>
-                  <td style={styles.td}>
-                    {/* Disabled for the caller's own row, mirroring the
-                        backend's self-disable 400 — avoids a
-                        guaranteed-failing click. */}
-                    {a.status === 'DISABLED' ? (
-                      <button type="button" style={styles.rowButton} onClick={() => handleEnable(a.userId)}>
-                        Enable
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        style={styles.rowButton}
-                        disabled={a.userId === user?.id}
-                        onClick={() => handleDisable(a.userId)}
-                      >
-                        Disable
-                      </button>
+              {accounts.map((a) => {
+                const isSelf = a.userId === user?.id;
+                return (
+                  <Fragment key={a.userId}>
+                    <tr>
+                      <td style={styles.td}>{a.username}</td>
+                      <td style={styles.td}>{a.email}</td>
+                      <td style={styles.td}>
+                        <span style={{ ...styles.statusBadge, color: a.status === 'DISABLED' ? '#c0392b' : 'var(--brg)' }}>
+                          {a.status}
+                        </span>
+                      </td>
+                      <td style={styles.td}>{a.isSystemAdmin ? 'Yes' : ''}</td>
+                      <td style={styles.td}>
+                        <div style={styles.actionRow}>
+                          {/* Disabled for the caller's own row, mirroring the
+                              backend's self-disable/self-demote 400s —
+                              avoids a guaranteed-failing click. */}
+                          {a.status === 'DISABLED' ? (
+                            <button type="button" style={styles.rowButton} onClick={() => handleEnable(a.userId)}>
+                              Enable
+                            </button>
+                          ) : (
+                            <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => handleDisable(a.userId)}>
+                              Disable
+                            </button>
+                          )}
+                          {a.isSystemAdmin ? (
+                            <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => handleDemote(a.userId)}>
+                              Demote
+                            </button>
+                          ) : (
+                            <button type="button" style={styles.rowButton} onClick={() => handlePromote(a.userId)}>
+                              Promote
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            style={styles.rowButton}
+                            onClick={() => setManagingUserId(managingUserId === a.userId ? null : a.userId)}
+                          >
+                            {managingUserId === a.userId ? 'Close' : 'Manage'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {managingUserId === a.userId && (
+                      <ManageUserRow
+                        key={`${a.userId}-manage`}
+                        targetUser={a}
+                        organizations={organizations}
+                        onResetPassword={handleGlobalResetPassword}
+                        onAddOrg={handleAddUserToOrg}
+                        onChangeOrgRole={handleChangeUserOrgRole}
+                        onRemoveFromOrg={handleRemoveUserFromOrg}
+                      />
                     )}
-                  </td>
-                </tr>
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        <div style={styles.sectionTitle}>Organizations</div>
+        {orgsError && <div style={styles.error}>{orgsError}</div>}
+        {organizations.length === 0 ? (
+          <div style={styles.empty}>No organizations yet.</div>
+        ) : (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Name</th>
+                <th style={styles.th}>Status</th>
+                <th style={styles.th}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {organizations.map((org) => (
+                <OrganizationRow
+                  key={org.id}
+                  org={org}
+                  onRename={handleRenameOrg}
+                  onArchive={handleArchiveOrg}
+                  onUnarchive={handleUnarchiveOrg}
+                />
               ))}
             </tbody>
           </table>

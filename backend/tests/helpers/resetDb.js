@@ -33,6 +33,15 @@ const adminDb = knexFactory({
 // whichever org has the earliest created_at, so deleting it would break
 // every subsequent signup in the same test run).
 export async function resetDb(db) {
+  // organizations.archived_by (System Admin panel: manage organizations and
+  // existing users) references users(id) with no cascade, and organizations
+  // itself is never cleared below (same reasoning as ever — the
+  // earliest-created org must survive across the whole test run). Left
+  // unhandled, archiving an org in one test would leave a dangling
+  // archived_by reference that blocks every subsequent test's user deletion
+  // below. Nulled, not restored — no test relies on archived_by surviving
+  // across a reset.
+  await adminDb('organizations').update({ archived_by: null });
   await adminDb('messages').del();
   await db('channel_members').del();
   await adminDb('channels').del();

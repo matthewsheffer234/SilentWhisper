@@ -1082,6 +1082,142 @@ test.describe('system admin: disable/enable accounts', () => {
   });
 });
 
+// New: manage organizations and existing users (promote/demote, global
+// password reset, org lifecycle, moving a user between orgs) — all via
+// SystemAdminPanel's expanded capabilities.
+test.describe('system admin: manage organizations and existing users', () => {
+  test('promoting and demoting a user via the accounts table takes effect immediately', async ({ page }) => {
+    const admin = await seedUserWithChannel('privadmin');
+    await promoteToSystemAdmin(admin.userId);
+    const target = await seedPlainUser('privtarget');
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${target.username}")`) });
+    await targetRow.locator('button:has-text("Promote")').click();
+    await expect(targetRow.locator('button:has-text("Demote")')).toBeVisible({ timeout: 10_000 });
+
+    await targetRow.locator('button:has-text("Demote")').click();
+    await expect(targetRow.locator('button:has-text("Promote")')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('a system admin cannot demote their own account', async ({ page }) => {
+    const admin = await seedUserWithChannel('privself');
+    await promoteToSystemAdmin(admin.userId);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const selfRow = page.locator('tr', { has: page.locator(`td:has-text("${admin.username}")`) });
+    await expect(selfRow.locator('button:has-text("Demote")')).toBeDisabled();
+  });
+
+  test('global password reset works on a bare account with no workspace, via Manage', async ({ page }) => {
+    const admin = await seedUserWithChannel('resetflowadmin');
+    await promoteToSystemAdmin(admin.userId);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const newUsername = `resetflow_created_${Date.now()}`;
+    await page.fill('#sysadmin-new-username', newUsername);
+    await page.fill('#sysadmin-new-email', `${newUsername}@example.com`);
+    await page.fill('#sysadmin-new-password', 'correct-horse-battery');
+    await page.click('button:has-text("Create account")');
+    await expect(page.locator(`text=Created ${newUsername}`)).toBeVisible({ timeout: 10_000 });
+
+    const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${newUsername}")`).first() });
+    await targetRow.locator('button:has-text("Manage")').click();
+    await page.fill('input[placeholder="New password"]', 'a-brand-new-password');
+    await page.click('button:has-text("Reset")');
+    await expect(page.locator('text=Password reset')).toBeVisible({ timeout: 10_000 });
+
+    await page.click('button[aria-label="Close system admin"]');
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Sign out")');
+
+    await page.waitForSelector('text=Silent Whisper', { timeout: 15_000 });
+    await page.fill('#username', newUsername);
+    await page.fill('#password', 'a-brand-new-password');
+    await page.click('button:has-text("Sign In")');
+    await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
+  });
+
+  test('renaming and archiving/unarchiving an organization via the Organizations section', async ({ page }) => {
+    const admin = await seedUserWithChannel('orgmgmtadmin');
+    await promoteToSystemAdmin(admin.userId);
+    const org = await createOrgApi(admin.accessToken, `Org Mgmt ${Date.now()}`);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    // Scoped by data-testid (stable across the row's own edit-mode toggle),
+    // not a text-based locator — once "Rename" is clicked, the org name
+    // moves out of the <td>'s text content and into an <input value>,
+    // which :has-text() never matches, so a text-scoped row locator stops
+    // resolving to anything the instant edit mode opens.
+    const orgRow = page.locator(`[data-testid="org-row-${org.id}"]`);
+    await orgRow.locator('button:has-text("Rename")').click();
+    const renameInput = orgRow.locator('input');
+    await renameInput.fill(`${org.name} Renamed`);
+    await orgRow.locator('button:has-text("Save")').click();
+    await expect(orgRow.locator(`td:has-text("${org.name} Renamed")`)).toBeVisible({ timeout: 10_000 });
+
+    await orgRow.locator('button:has-text("Archive")').click();
+    await expect(orgRow.locator('td:has-text("Archived")')).toBeVisible({ timeout: 10_000 });
+    await orgRow.locator('button:has-text("Unarchive")').click();
+    await expect(orgRow.locator('td:has-text("Archived")')).toHaveCount(0);
+  });
+
+  test('moving a user between two organizations via Manage', async ({ page }) => {
+    const admin = await seedUserWithChannel('orgmoveadmin');
+    await promoteToSystemAdmin(admin.userId);
+    const orgB = await createOrgApi(admin.accessToken, `Org Move Target ${Date.now()}`);
+    const target = await seedPlainUser('orgmovetarget');
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click('button:has-text("Admin Tools")');
+    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${target.username}")`) });
+    await targetRow.locator('button:has-text("Manage")').click();
+
+    // seedPlainUser (FEATURE_REQUEST.md entry 1, slice 4) always
+    // auto-enrolls a fresh account into the earliest-created org (Default
+    // Organization) — a brand-new user already has exactly one membership,
+    // not zero, before this test adds a second. Scoped to this specific
+    // Manage row's own org list via data-testid — "Default Organization"
+    // otherwise ambiguously matches the org switcher, other tables, etc.
+    const userOrgsList = page.locator('[data-testid="manage-user-orgs"]');
+    await expect(userOrgsList.getByText('Default Organization')).toBeVisible({ timeout: 10_000 });
+
+    await page.selectOption('select[aria-label="Add to organization"]', orgB.id);
+    await page.click('button:has-text("Add")');
+
+    const roleSelect = page.locator(`select[aria-label="Role for ${target.username} in ${orgB.name}"]`);
+    await expect(roleSelect).toBeVisible({ timeout: 10_000 });
+    await expect(roleSelect).toHaveValue('ORG_MEMBER');
+
+    await roleSelect.selectOption('ORG_ADMIN');
+    await expect(roleSelect).toHaveValue('ORG_ADMIN', { timeout: 10_000 });
+
+    await page.locator(`[data-testid="org-membership-${orgB.id}"]`).locator('button:has-text("Remove")').click();
+    await expect(roleSelect).toHaveCount(0);
+    // The Default Organization membership from seeding is still there.
+    await expect(userOrgsList.getByText('Default Organization')).toBeVisible();
+  });
+});
+
 test.describe('semantic search (real Ollama inference — allow extra time)', () => {
   test.slow();
 

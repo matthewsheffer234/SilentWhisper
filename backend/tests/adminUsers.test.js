@@ -293,3 +293,216 @@ describe('GET /api/workspaces/admin/all', () => {
     expect(res.status).toBe(403);
   });
 });
+
+// System Admin panel: manage organizations and existing users. Granting/
+// revoking is_system_admin has been offline-CLI-only since slice 1
+// (scripts/grant-system-admin.mjs) — this is the first in-app, audited path.
+describe('POST /api/admin/users/:userId/promote', () => {
+  test('promotes a plain user to system admin', async () => {
+    const admin = await seedSystemAdmin('promoteadmin0');
+    const target = await signup('promotetarget0');
+
+    const res = await request(app).post(`/api/admin/users/${target.userId}/promote`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ userId: target.userId, isSystemAdmin: true });
+
+    const row = await db('users').where({ id: target.userId }).first('is_system_admin');
+    expect(row.is_system_admin).toBe(true);
+
+    const auditRow = await db('audit_logs').where({ action_type: 'SYSTEM_ADMIN_STATUS_CHANGE' }).first();
+    expect(auditRow.payload).toMatchObject({ targetUserId: target.userId, action: 'promote' });
+  });
+
+  test('is idempotent — promoting an already-admin user is a 200 no-op, not a duplicate audit row', async () => {
+    const admin = await seedSystemAdmin('promoteadmin1');
+    const target = await seedSystemAdmin('promotetarget1');
+
+    const res = await request(app).post(`/api/admin/users/${target.userId}/promote`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+
+    const rows = await db('audit_logs').where({ action_type: 'SYSTEM_ADMIN_STATUS_CHANGE' });
+    expect(rows).toHaveLength(0);
+  });
+
+  test('a nonexistent target 404s', async () => {
+    const admin = await seedSystemAdmin('promoteadmin2');
+    const res = await request(app)
+      .post('/api/admin/users/00000000-0000-0000-0000-000000000000/promote')
+      .set(authHeader(admin.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('a non-admin gets 403', async () => {
+    const user = await signup('promoteplain0');
+    const target = await signup('promotetarget2');
+    const res = await request(app).post(`/api/admin/users/${target.userId}/promote`).set(authHeader(user.accessToken));
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /api/admin/users/:userId/demote', () => {
+  test('demotes a system admin back to a plain user', async () => {
+    const admin = await seedSystemAdmin('demoteadmin0');
+    const target = await seedSystemAdmin('demotetarget0');
+
+    const res = await request(app).post(`/api/admin/users/${target.userId}/demote`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ userId: target.userId, isSystemAdmin: false });
+
+    const row = await db('users').where({ id: target.userId }).first('is_system_admin');
+    expect(row.is_system_admin).toBe(false);
+
+    const auditRow = await db('audit_logs').where({ action_type: 'SYSTEM_ADMIN_STATUS_CHANGE' }).first();
+    expect(auditRow.payload).toMatchObject({ targetUserId: target.userId, action: 'demote' });
+  });
+
+  test('is idempotent — demoting an already-plain user is a 200 no-op, not a duplicate audit row', async () => {
+    const admin = await seedSystemAdmin('demoteadmin1');
+    const target = await signup('demotetarget1');
+
+    const res = await request(app).post(`/api/admin/users/${target.userId}/demote`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+
+    const rows = await db('audit_logs').where({ action_type: 'SYSTEM_ADMIN_STATUS_CHANGE' });
+    expect(rows).toHaveLength(0);
+  });
+
+  // Mirrors /disable's own self-lockout guard: prevents the sole/last-acting
+  // system admin from demoting themselves out of the ability to ever
+  // promote anyone again without falling back to the offline CLI.
+  test('a system admin cannot demote their own account', async () => {
+    const admin = await seedSystemAdmin('demoteself0');
+    const res = await request(app).post(`/api/admin/users/${admin.userId}/demote`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(400);
+
+    const row = await db('users').where({ id: admin.userId }).first('is_system_admin');
+    expect(row.is_system_admin).toBe(true);
+  });
+
+  test('a nonexistent target 404s', async () => {
+    const admin = await seedSystemAdmin('demoteadmin2');
+    const res = await request(app)
+      .post('/api/admin/users/00000000-0000-0000-0000-000000000000/demote')
+      .set(authHeader(admin.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('a non-admin gets 403', async () => {
+    const user = await signup('demoteplain0');
+    const target = await seedSystemAdmin('demotetarget2');
+    const res = await request(app).post(`/api/admin/users/${target.userId}/demote`).set(authHeader(user.accessToken));
+    expect(res.status).toBe(403);
+  });
+});
+
+// Global, workspace-independent password reset — closes a real gap
+// POST /:workspaceId/members/:userId/reset-password (workspaces.js) can't: a
+// bare account with no workspace tie could never have its password reset by
+// anyone before this route existed.
+describe('POST /api/admin/users/:userId/reset-password', () => {
+  test("resets a bare account's password with no workspace tie, and revokes its sessions", async () => {
+    const admin = await seedSystemAdmin('resetadmin0');
+    const createRes = await request(app)
+      .post('/api/admin/users')
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'resettarget0', email: 'resettarget0@example.com', password: 'correct-horse-battery' });
+    const targetUserId = createRes.body.userId;
+
+    const loginRes = await request(app).post('/api/auth/login').send({ username: 'resettarget0', password: 'correct-horse-battery' });
+    const cookieHeader = (loginRes.headers['set-cookie'] || []).find((c) => c.startsWith('refresh_token='));
+
+    const res = await request(app)
+      .post(`/api/admin/users/${targetUserId}/reset-password`)
+      .set(authHeader(admin.accessToken))
+      .send({ newPassword: 'a-brand-new-password' });
+    expect(res.status).toBe(204);
+
+    const oldPasswordLogin = await request(app).post('/api/auth/login').send({ username: 'resettarget0', password: 'correct-horse-battery' });
+    expect(oldPasswordLogin.status).toBe(401);
+
+    const newPasswordLogin = await request(app).post('/api/auth/login').send({ username: 'resettarget0', password: 'a-brand-new-password' });
+    expect(newPasswordLogin.status).toBe(200);
+
+    const refreshAttempt = await request(app).post('/api/auth/refresh').set('Cookie', [cookieHeader.split(';')[0]]);
+    expect(refreshAttempt.status).toBe(401);
+
+    const row = await db('audit_logs').where({ action_type: 'ADMIN_PASSWORD_RESET' }).first();
+    expect(row.payload).toMatchObject({ targetUserId, targetUsername: 'resettarget0' });
+  });
+
+  test("resetting the caller's own id 400s, pointing at the self-service flow", async () => {
+    const admin = await seedSystemAdmin('resetadmin1');
+    const res = await request(app)
+      .post(`/api/admin/users/${admin.userId}/reset-password`)
+      .set(authHeader(admin.accessToken))
+      .send({ newPassword: 'a-brand-new-password' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/change-password/);
+  });
+
+  test('a password failing the policy 400s', async () => {
+    const admin = await seedSystemAdmin('resetadmin2');
+    const target = await signup('resettarget2');
+    const res = await request(app)
+      .post(`/api/admin/users/${target.userId}/reset-password`)
+      .set(authHeader(admin.accessToken))
+      .send({ newPassword: 'short' });
+    expect(res.status).toBe(400);
+  });
+
+  test('a nonexistent target 404s', async () => {
+    const admin = await seedSystemAdmin('resetadmin3');
+    const res = await request(app)
+      .post('/api/admin/users/00000000-0000-0000-0000-000000000000/reset-password')
+      .set(authHeader(admin.accessToken))
+      .send({ newPassword: 'a-brand-new-password' });
+    expect(res.status).toBe(404);
+  });
+
+  test('a non-admin gets 403', async () => {
+    const user = await signup('resetplain0');
+    const target = await signup('resettarget3');
+    const res = await request(app)
+      .post(`/api/admin/users/${target.userId}/reset-password`)
+      .set(authHeader(user.accessToken))
+      .send({ newPassword: 'a-brand-new-password' });
+    expect(res.status).toBe(403);
+  });
+});
+
+// The one genuinely new read this panel needs: nothing before this answered
+// "which orgs does user X belong to" from a user-centric view.
+describe('GET /api/admin/users/:userId/organizations', () => {
+  test("lists a user's organization memberships with role and archived status", async () => {
+    const admin = await seedSystemAdmin('orglistadmin0');
+    const target = await signup('orglisttarget0');
+    const orgRes = await request(app).post('/api/organizations').set(authHeader(admin.accessToken)).send({ name: 'Second Org' });
+    await request(app)
+      .post(`/api/organizations/${orgRes.body.id}/members`)
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'orglisttarget0', role: 'ORG_ADMIN' });
+
+    const res = await request(app).get(`/api/admin/users/${target.userId}/organizations`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ organizationId: orgRes.body.id, role: 'ORG_ADMIN', archivedAt: null }),
+      ]),
+    );
+  });
+
+  test('a nonexistent target 404s', async () => {
+    const admin = await seedSystemAdmin('orglistadmin1');
+    const res = await request(app)
+      .get('/api/admin/users/00000000-0000-0000-0000-000000000000/organizations')
+      .set(authHeader(admin.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('a non-admin gets 403', async () => {
+    const user = await signup('orglistplain0');
+    const target = await signup('orglisttarget1');
+    const res = await request(app).get(`/api/admin/users/${target.userId}/organizations`).set(authHeader(user.accessToken));
+    expect(res.status).toBe(403);
+  });
+});

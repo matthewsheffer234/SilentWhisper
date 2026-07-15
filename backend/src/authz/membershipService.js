@@ -154,6 +154,16 @@ export async function requireWorkspaceNotArchived(db, workspaceId) {
   }
 }
 
+// Organization lifecycle management (system admin only, see organizations.js).
+// Structurally identical to requireWorkspaceNotArchived — called after the
+// caller's org permission/existence has already been established.
+export async function requireOrgNotArchived(db, organizationId) {
+  const org = await db('organizations').where({ id: organizationId }).first('archived_at');
+  if (org?.archived_at) {
+    throw new ConflictError('This organization is archived');
+  }
+}
+
 export async function getChannel(db, channelId) {
   return db('channels').where({ id: channelId }).first();
 }
