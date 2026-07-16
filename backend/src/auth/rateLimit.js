@@ -104,6 +104,20 @@ export const invitationCreateLimiter = rateLimit({
   handler: jsonRateLimitHandler,
 });
 
+// Membership-invitation creation ("Live notification system..." entry):
+// same shape and ceiling as invitationCreateLimiter above — the equivalent
+// action for an existing account (propose membership, notify, await
+// accept/decline) rather than a token-based invitation for a new one.
+export const membershipInvitationCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `membership-invitation-create:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});
+
 // FEATURE_REQUEST.md's @mention autocomplete entry: the first endpoint in
 // this app designed to be hit on every keystroke rather than once per user
 // action — per-user (not per-IP, like llm/aiRateLimit.js's

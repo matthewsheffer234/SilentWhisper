@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { assertUuid, assertUsername } from '../validation.js';
+import { assertUuid, assertUsername, assertEmail } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { signAccessToken } from '../auth/jwt.js';
 import { issueRefreshToken } from '../auth/refreshTokens.js';
@@ -66,11 +66,15 @@ invitationsRouter.get('/:token', async (req, res, next) => {
 // in one transaction, then logs the new user in immediately — same
 // response shape as POST /auth/signup. Rate-limited with signupIpLimiter,
 // not a dedicated limiter: this *is* a signup from an abuse standpoint.
+// The invitee supplies their own email here (FEATURE_REQUEST.md's "Remove
+// email-based invitations" entry) — the invitation itself no longer carries
+// one, since no email server has ever validated it against anything.
 invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next) => {
   try {
     const rawToken = req.params.token;
     const tokenHash = hashInvitationToken(rawToken);
     const username = assertUsername(req.body?.username);
+    const email = assertEmail(req.body?.email);
     const passwordError = assertValidPassword(req.body?.password);
     if (passwordError) throw new ValidationError(passwordError);
 
@@ -82,14 +86,14 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
         return { kind: 'invalid' };
       }
 
-      const existing = await trx('users').where({ username }).orWhere({ email: row.email }).first();
+      const existing = await trx('users').where({ username }).orWhere({ email }).first();
       if (existing) {
         return { kind: 'conflict' };
       }
 
       const passwordHash = await bcrypt.hash(req.body.password, config.auth.bcryptSaltRounds);
       const [user] = await trx('users')
-        .insert({ username, email: row.email, password_hash: passwordHash, display_name: username })
+        .insert({ username, email, password_hash: passwordHash, display_name: username })
         .returning(['id', 'username', 'display_name', 'email', 'is_system_admin']);
 
       if (row.scope_type === 'ORGANIZATION') {

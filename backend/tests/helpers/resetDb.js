@@ -43,10 +43,12 @@ export async function resetDb(db) {
   // across a reset.
   await adminDb('organizations').update({ archived_by: null });
   await db('mention_notifications').del();
+  await db('user_notifications').del();
   await adminDb('messages').del();
   await db('channel_members').del();
   await adminDb('channels').del();
   await db('invitations').del();
+  await db('membership_invitations').del();
   await db('workspace_members').del();
   await adminDb('workspaces').del();
   await db('refresh_tokens').del();

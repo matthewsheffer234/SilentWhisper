@@ -198,11 +198,11 @@ async function getOrganizationsApi(accessToken) {
   return res.json();
 }
 
-async function createWorkspaceInvitationApi(accessToken, workspaceId, email, role) {
+async function createWorkspaceInvitationApi(accessToken, workspaceId, role) {
   const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/invitations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify(role ? { email, role } : { email }),
+    body: JSON.stringify(role ? { role } : {}),
   });
   return res.json();
 }
@@ -354,11 +354,12 @@ test.describe('core messaging workflow', () => {
 
     const inviter = await seedUserWithChannel('coreinviter');
     const username = uniqueUsername('core');
-    const invitation = await createWorkspaceInvitationApi(inviter.accessToken, inviter.workspace.id, `${username}@example.com`);
+    const invitation = await createWorkspaceInvitationApi(inviter.accessToken, inviter.workspace.id);
 
     await page.goto(`/invite/${invitation.token}`);
     await expect(page.getByText(inviter.username, { exact: true })).toBeVisible({ timeout: 15_000 });
     await page.fill('#invite-username', username);
+    await page.fill('#invite-email', `${username}@example.com`);
     await page.fill('#invite-password', 'correct-horse-battery');
     await page.click('button:has-text("Accept invitation")');
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
@@ -2170,17 +2171,21 @@ test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
     await confirmDialogAction(page, 'Remove Member', 'Remove');
     await expect(page.locator(`td:has-text("${target.username}")`)).not.toBeVisible({ timeout: 10_000 });
 
-    // Create an invitation, see it pending, then revoke it.
-    const email = `orginvite_${Date.now()}@example.com`;
-    await page.fill('#org-invite-email', email);
+    // Create an invitation (no email collected — FEATURE_REQUEST.md's
+    // "Remove email-based invitations" entry), see it pending, then revoke
+    // it. Identified by row count rather than an email, since there's
+    // nothing else unique to match on for a default-role invitation.
+    const invitationsTable = page.locator('table').filter({ has: page.locator('th', { hasText: 'Invited by' }) });
+    const rowCountBefore = await invitationsTable.locator('tbody tr').count();
     await page.click('button:has-text("Create invitation")');
     await expect(page.locator('button:has-text("Copy")').first()).toBeVisible({ timeout: 10_000 });
 
-    const invitationRow = page.locator('tr', { hasText: email });
-    await expect(invitationRow).toBeVisible({ timeout: 10_000 });
+    const invitationRow = invitationsTable.locator('tbody tr').last();
+    await expect(invitationsTable.locator('tbody tr')).toHaveCount(rowCountBefore + 1);
+    await expect(invitationRow).toContainText('ORG_MEMBER');
     await invitationRow.locator('button:has-text("Revoke")').click();
     await confirmDialogAction(page, 'Revoke Invitation', 'Revoke');
-    await expect(page.locator(`td:has-text("${email}")`)).not.toBeVisible({ timeout: 10_000 });
+    await expect(invitationsTable.locator('tbody tr')).toHaveCount(rowCountBefore);
   });
 });
 
@@ -2190,8 +2195,8 @@ test.describe('workspace token invitations (FEATURE_REQUEST.md entry 1, slice 3)
     await loginViaUi(page, admin.username, admin.password);
 
     await openWorkspaceSettings(page, admin.workspace.name);
-    const email = `wsinvitelink_${Date.now()}@example.com`;
-    await page.fill('input[placeholder="Email to invite"]', email);
+    // No email collected — FEATURE_REQUEST.md's "Remove email-based
+    // invitations" entry — the role selector defaults to Member.
     await page.click('button:has-text("Create link")');
     await expect(page.locator('button:has-text("Copy")').first()).toBeVisible({ timeout: 10_000 });
     await page.click(`button[aria-label="Close ${admin.workspace.name} settings"]`);
@@ -2199,11 +2204,13 @@ test.describe('workspace token invitations (FEATURE_REQUEST.md entry 1, slice 3)
     await openAdminPanelItem(page, 'Manage Users');
     await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
 
-    const invitationRow = page.locator('tr', { hasText: email });
+    const invitationsTable = page.locator('table').filter({ has: page.locator('th', { hasText: 'Invited by' }) });
+    const invitationRow = invitationsTable.locator('tbody tr').filter({ hasText: 'MEMBER' }).first();
     await expect(invitationRow).toBeVisible({ timeout: 10_000 });
+    const rowCountBefore = await invitationsTable.locator('tbody tr').count();
     await invitationRow.locator('button:has-text("Revoke")').click();
     await confirmDialogAction(page, 'Revoke Invitation', 'Revoke');
-    await expect(page.locator(`td:has-text("${email}")`)).not.toBeVisible({ timeout: 10_000 });
+    await expect(invitationsTable.locator('tbody tr')).toHaveCount(rowCountBefore - 1);
   });
 });
 
@@ -2214,8 +2221,10 @@ test.describe('invitation redemption (public /invite/:token page)', () => {
     // RUNBOOK.md's own documented gotcha: this stack has no per-test data
     // reset, so a hardcoded invitee email collides with a previous run's
     // already-redeemed account on any repeat run — derived from the same
-    // unique username the account itself will use instead.
-    const invitation = await createWorkspaceInvitationApi(admin.accessToken, admin.workspace.id, `${redeemedUsername}@example.com`);
+    // unique username the account itself will use instead. The invitation
+    // itself no longer carries an email at all (FEATURE_REQUEST.md's
+    // "Remove email-based invitations" entry) — it's supplied at redemption.
+    const invitation = await createWorkspaceInvitationApi(admin.accessToken, admin.workspace.id);
 
     await page.goto(`/invite/${invitation.token}`);
     // Exact match: a plain `text=${admin.username}` substring-matches both
@@ -2229,6 +2238,7 @@ test.describe('invitation redemption (public /invite/:token page)', () => {
     await expect(page.getByText(admin.workspace.name, { exact: true })).toBeVisible({ timeout: 10_000 });
 
     await page.fill('#invite-username', redeemedUsername);
+    await page.fill('#invite-email', `${redeemedUsername}@example.com`);
     await page.fill('#invite-password', 'correct-horse-battery');
     await page.click('button:has-text("Accept invitation")');
 
@@ -2238,6 +2248,93 @@ test.describe('invitation redemption (public /invite/:token page)', () => {
   test('an invalid token shows a generic error, not a raw 404 or blank page', async ({ page }) => {
     await page.goto('/invite/not-a-real-token-at-all');
     await expect(page.locator('text=This invitation link is invalid or has expired.')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// FEATURE_REQUEST.md's "live notification system + in-app invitation
+// notification & acceptance workflow" entry: an *existing* account (unlike
+// the token-based flow above, for people with no account yet) is proposed
+// membership, notified live over the already-open WebSocket connection, and
+// decides for themselves whether to accept or decline — replacing the
+// people-picker's instant, no-consent add for this path.
+test.describe('membership invitations (live notification system)', () => {
+  test('a live invite toast appears; accepting via the notification panel grants membership', async ({ page }) => {
+    const owner = await seedUserWithChannel('miowner');
+    const invitee = await seedPlainUser('miinvitee');
+
+    await loginViaUi(page, invitee.username, invitee.password);
+
+    // Sent as the owner via the same API the new "Invite (needs acceptance)"
+    // button calls — the invitee's own session stays open and connected the
+    // whole time, exactly like the "mentions" test above delivers over an
+    // already-open WebSocket rather than requiring a reload.
+    const res = await fetch(`${API_BASE}/workspaces/${owner.workspace.id}/membership-invitations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${owner.accessToken}` },
+      body: JSON.stringify({ userId: invitee.userId, role: 'MEMBER' }),
+    });
+    expect(res.status).toBe(201);
+
+    // Live toast (ChatShell.jsx's WS 'membership_invitation' handler) —
+    // clicking it opens the notification panel directly, not a channel:
+    // there's no message to jump to, just a decision to make.
+    const toast = page.locator(`text=invited you to ${owner.workspace.name}`);
+    await expect(toast).toBeVisible({ timeout: 10_000 });
+    await toast.click();
+
+    const panel = page.locator('section[aria-label="Notifications"]');
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await expect(panel.locator(`text=${owner.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    await panel.locator('button:has-text("Accept")').click();
+    await expect(panel.locator(`text=${owner.workspace.name}`)).not.toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close notifications"]');
+
+    // Membership actually granted, not just the panel row disappearing —
+    // the workspace now appears in the invitee's own sidebar.
+    await page.reload();
+    await expect(page.locator('aside').getByText(owner.workspace.name, { exact: true })).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('declining leaves no membership and clears the pending invitation', async ({ page }) => {
+    const owner = await seedUserWithChannel('midecline');
+    const invitee = await seedPlainUser('midecline_invitee');
+
+    const res = await fetch(`${API_BASE}/workspaces/${owner.workspace.id}/membership-invitations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${owner.accessToken}` },
+      body: JSON.stringify({ userId: invitee.userId, role: 'MEMBER' }),
+    });
+    expect(res.status).toBe(201);
+
+    await loginViaUi(page, invitee.username, invitee.password);
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Notifications")');
+    const panel = page.locator('section[aria-label="Notifications"]');
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await expect(panel.locator(`text=${owner.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    await panel.locator('button:has-text("Decline")').click();
+    await expect(panel.locator(`text=${owner.workspace.name}`)).not.toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close notifications"]');
+
+    await page.reload();
+    await expect(page.locator('aside').getByText(owner.workspace.name, { exact: true })).not.toBeVisible();
+  });
+
+  test('a workspace owner can send a needs-acceptance invitation from Workspace Settings', async ({ page }) => {
+    const owner = await seedUserWithChannel('misend');
+    const invitee = await seedPlainUser('misend_invitee');
+    await loginViaUi(page, owner.username, owner.password);
+
+    await openWorkspaceSettings(page, owner.workspace.name);
+    await pickPerson(page, 'Search people to invite', invitee.username, invitee.username);
+    await page.click('button:has-text("Invite (needs acceptance)")');
+    await expect(page.locator('text=pending their acceptance')).toBeVisible({ timeout: 10_000 });
+
+    const row = await withPgClient((pgClient) =>
+      pgClient.query('SELECT status FROM membership_invitations WHERE invited_user_id = $1', [invitee.userId]),
+    );
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0].status).toBe('PENDING');
   });
 });
 

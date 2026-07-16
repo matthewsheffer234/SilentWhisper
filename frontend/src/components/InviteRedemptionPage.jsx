@@ -88,6 +88,7 @@ export default function InviteRedemptionPage() {
   const [preview, setPreview] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitError, setSubmitError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -104,7 +105,7 @@ export default function InviteRedemptionPage() {
     setSubmitError(null);
     setSubmitting(true);
     try {
-      const redeemedUser = await invitationsApi.acceptInvitation(token, { username, password });
+      const redeemedUser = await invitationsApi.acceptInvitation(token, { username, email, password });
       completeAuth(redeemedUser);
       navigate('/', { replace: true });
     } catch (err) {
@@ -149,6 +150,18 @@ export default function InviteRedemptionPage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
+                  required
+                />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label} htmlFor="invite-email">Email</label>
+                <input
+                  id="invite-email"
+                  type="email"
+                  style={styles.input}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
                   required
                 />
               </div>

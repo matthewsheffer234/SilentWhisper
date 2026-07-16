@@ -330,7 +330,7 @@ export default function WorkspaceSidebar({
   const userMenuItems = [
     {
       key: 'mention-notifications',
-      label: `Mentions${notificationSummary?.unreadCount ? ` (${notificationSummary.unreadCount})` : ''}`,
+      label: `Notifications${notificationSummary?.unreadCount ? ` (${notificationSummary.unreadCount})` : ''}`,
       onSelect: onOpenNotifications,
     },
     ...(notif.supported

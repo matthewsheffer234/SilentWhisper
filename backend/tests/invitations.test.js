@@ -5,7 +5,10 @@ import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 import { createOrg } from './helpers/fixtures.js';
 
-// FEATURE_REQUEST.md entry 1 (Enterprise authorization model), slice 2.
+// FEATURE_REQUEST.md entry 1 (Enterprise authorization model), slice 2, and
+// the later "Remove email-based invitations" entry: creation no longer
+// collects/echoes an email — the invitee supplies their own at redemption
+// time instead (POST /:token/accept).
 
 beforeEach(async () => {
   await resetDb(db);
@@ -29,14 +32,16 @@ describe('POST /api/organizations/:orgId/invitations', () => {
     const res = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(admin.accessToken))
-      .send({ email: 'invitee@example.com', role: 'ORG_MEMBER' });
+      .send({ role: 'ORG_MEMBER' });
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ email: 'invitee@example.com', role: 'ORG_MEMBER' });
+    expect(res.body).toMatchObject({ role: 'ORG_MEMBER' });
+    expect(res.body.email).toBeUndefined();
     expect(typeof res.body.token).toBe('string');
     expect(res.body.token.length).toBeGreaterThan(20);
 
     const row = await db('audit_logs').where({ action_type: 'INVITATION_CREATED' }).first();
     expect(row.payload).toMatchObject({ scopeType: 'ORGANIZATION', organizationId: org.id });
+    expect(row.payload.email).toBeUndefined();
   });
 
   test('a plain ORG_MEMBER cannot create an invitation', async () => {
@@ -49,7 +54,7 @@ describe('POST /api/organizations/:orgId/invitations', () => {
     const res = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(member.accessToken))
-      .send({ email: 'x@example.com' });
+      .send({});
     expect(res.status).toBe(403);
   });
 });
@@ -62,14 +67,14 @@ describe('POST /api/workspaces/:workspaceId/invitations', () => {
     const res = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'wsinvitee@example.com', role: 'MANAGER' });
+      .send({ role: 'MANAGER' });
     expect(res.status).toBe(201);
     expect(res.body.role).toBe('MANAGER');
 
     const ownerRoleRejected = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'wsinvitee2@example.com', role: 'OWNER' });
+      .send({ role: 'OWNER' });
     expect(ownerRoleRejected.status).toBe(400);
   });
 
@@ -82,7 +87,7 @@ describe('POST /api/workspaces/:workspaceId/invitations', () => {
     const res = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(member.accessToken))
-      .send({ email: 'x@example.com' });
+      .send({});
     expect(res.status).toBe(403);
   });
 });
@@ -95,26 +100,26 @@ describe('GET /api/organizations/:orgId/invitations', () => {
     const pending = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(admin.accessToken))
-      .send({ email: 'pending0@example.com' });
+      .send({});
 
     const acceptedSource = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(admin.accessToken))
-      .send({ email: 'accepted0@example.com' });
+      .send({});
     await request(app)
       .post(`/api/invitations/${acceptedSource.body.token}/accept`)
-      .send({ username: 'orginviteaccepted0', password: 'correct-horse-battery' });
+      .send({ username: 'orginviteaccepted0', email: 'orginviteaccepted0@example.com', password: 'correct-horse-battery' });
 
     const revoked = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(admin.accessToken))
-      .send({ email: 'revoked0@example.com' });
+      .send({});
     await request(app).post(`/api/invitations/${revoked.body.id}/revoke`).set(authHeader(admin.accessToken));
 
     const expired = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(admin.accessToken))
-      .send({ email: 'expired0@example.com' });
+      .send({});
     await db('invitations').where({ id: expired.body.id }).update({ expires_at: new Date(Date.now() - 1000) });
 
     const res = await request(app).get(`/api/organizations/${org.id}/invitations`).set(authHeader(admin.accessToken));
@@ -122,11 +127,11 @@ describe('GET /api/organizations/:orgId/invitations', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0]).toMatchObject({
       id: pending.body.id,
-      email: 'pending0@example.com',
       invitedByUsername: 'orginvitelist0',
       // FEATURE_REQUEST.md's "display names as the primary identity" entry.
       invitedByDisplayName: 'orginvitelist0',
     });
+    expect(res.body[0].email).toBeUndefined();
   });
 
   test('a non-member gets 404 for a real org, not 403', async () => {
@@ -147,12 +152,12 @@ describe('GET /api/workspaces/:workspaceId/invitations', () => {
     const pending = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'wspending0@example.com' });
+      .send({});
 
     const revoked = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'wsrevoked0@example.com' });
+      .send({});
     await request(app).post(`/api/invitations/${revoked.body.id}/revoke`).set(authHeader(owner.accessToken));
 
     const res = await request(app).get(`/api/workspaces/${ws.id}/invitations`).set(authHeader(owner.accessToken));
@@ -160,10 +165,10 @@ describe('GET /api/workspaces/:workspaceId/invitations', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0]).toMatchObject({
       id: pending.body.id,
-      email: 'wspending0@example.com',
       invitedByUsername: 'wsinvitelist0',
       invitedByDisplayName: 'wsinvitelist0',
     });
+    expect(res.body[0].email).toBeUndefined();
   });
 
   test('a plain member without WORKSPACE_MANAGE_MEMBERS gets 403', async () => {
@@ -184,7 +189,7 @@ describe('GET /api/invitations/:token', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'previewee@example.com', role: 'MEMBER' });
+      .send({ role: 'MEMBER' });
 
     const res = await request(app).get(`/api/invitations/${createRes.body.token}`);
     expect(res.status).toBe(200);
@@ -208,7 +213,7 @@ describe('GET /api/invitations/:token', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'expiredpreview@example.com' });
+      .send({});
 
     await db('invitations').where({ id: createRes.body.id }).update({ expires_at: new Date(Date.now() - 1000) });
 
@@ -218,17 +223,17 @@ describe('GET /api/invitations/:token', () => {
 });
 
 describe('POST /api/invitations/:token/accept', () => {
-  test('creates an account, attaches the invited-role membership, and logs in atomically', async () => {
+  test('creates an account with the invitee-supplied email, attaches the invited-role membership, and logs in atomically', async () => {
     const owner = await signup('wsaccept0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'accepted0@example.com', role: 'MANAGER' });
+      .send({ role: 'MANAGER' });
 
     const res = await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'accepteduser0', password: 'correct-horse-battery' });
+      .send({ username: 'accepteduser0', email: 'accepted0@example.com', password: 'correct-horse-battery' });
     expect(res.status).toBe(201);
     expect(res.body.accessToken).toEqual(expect.any(String));
     expect(res.body.user).toMatchObject({
@@ -255,17 +260,36 @@ describe('POST /api/invitations/:token/accept', () => {
     expect(auditRow.actor_id).toBe(res.body.user.id);
   });
 
+  test('missing or malformed email 400s at accept time', async () => {
+    const owner = await signup('wsacceptnoemail0');
+    const ws = await createWorkspace(owner);
+    const createRes = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({});
+
+    const missing = await request(app)
+      .post(`/api/invitations/${createRes.body.token}/accept`)
+      .send({ username: 'noemailuser0', password: 'correct-horse-battery' });
+    expect(missing.status).toBe(400);
+
+    const malformed = await request(app)
+      .post(`/api/invitations/${createRes.body.token}/accept`)
+      .send({ username: 'noemailuser0', email: 'not-an-email', password: 'correct-horse-battery' });
+    expect(malformed.status).toBe(400);
+  });
+
   test('an org-scoped invitation attaches org membership directly, no double org row', async () => {
     const admin = await seedSystemAdmin('orgaccept0');
     const org = await createOrg(admin.accessToken);
     const createRes = await request(app)
       .post(`/api/organizations/${org.id}/invitations`)
       .set(authHeader(admin.accessToken))
-      .send({ email: 'orgaccepted0@example.com', role: 'ORG_ADMIN' });
+      .send({ role: 'ORG_ADMIN' });
 
     const res = await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'orgaccepteduser0', password: 'correct-horse-battery' });
+      .send({ username: 'orgaccepteduser0', email: 'orgaccepted0@example.com', password: 'correct-horse-battery' });
     expect(res.status).toBe(201);
 
     const memberships = await db('organization_members').where({ user_id: res.body.user.id });
@@ -273,19 +297,64 @@ describe('POST /api/invitations/:token/accept', () => {
     expect(memberships[0]).toMatchObject({ organization_id: org.id, org_role: 'ORG_ADMIN' });
   });
 
-  test('an email/username collision 409s', async () => {
+  test('a username collision 409s', async () => {
     await signup('collideduser0');
     const owner = await signup('wsacceptcollide0');
     const ws = await createWorkspace(owner);
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'collideduser0@example.com' });
+      .send({});
 
     const res = await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'collideduser0', password: 'correct-horse-battery' });
+      .send({ username: 'collideduser0', email: 'newemail-collide0@example.com', password: 'correct-horse-battery' });
     expect(res.status).toBe(409);
+  });
+
+  // Now that email is invitee-supplied rather than pre-declared on the
+  // invitation row, the collision can happen on the *redeemer's own chosen
+  // email* colliding with an existing account — a case that couldn't even
+  // occur under the old design (the inviter's guessed email was fixed at
+  // creation time, not chosen by the redeemer).
+  test('a self-supplied email colliding with an existing account 409s', async () => {
+    await signup('emailcollideexisting0', { email: 'existing-email0@example.com' });
+    const owner = await signup('wsacceptemailcollide0');
+    const ws = await createWorkspace(owner);
+    const createRes = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({});
+
+    const res = await request(app)
+      .post(`/api/invitations/${createRes.body.token}/accept`)
+      .send({ username: 'brandnewusername0', email: 'existing-email0@example.com', password: 'correct-horse-battery' });
+    expect(res.status).toBe(409);
+  });
+
+  test('two distinct invitations can each be redeemed with a distinct, self-chosen email', async () => {
+    const owner = await signup('wsacceptdistinct0');
+    const ws = await createWorkspace(owner);
+    const first = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({ role: 'MEMBER' });
+    const second = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({ role: 'MEMBER' });
+
+    const firstRes = await request(app)
+      .post(`/api/invitations/${first.body.token}/accept`)
+      .send({ username: 'distinctuser0a', email: 'distinct0a@example.com', password: 'correct-horse-battery' });
+    expect(firstRes.status).toBe(201);
+    expect(firstRes.body.user.email).toBe('distinct0a@example.com');
+
+    const secondRes = await request(app)
+      .post(`/api/invitations/${second.body.token}/accept`)
+      .send({ username: 'distinctuser0b', email: 'distinct0b@example.com', password: 'correct-horse-battery' });
+    expect(secondRes.status).toBe(201);
+    expect(secondRes.body.user.email).toBe('distinct0b@example.com');
   });
 
   test('accepting the same token twice 404s the second time', async () => {
@@ -294,16 +363,16 @@ describe('POST /api/invitations/:token/accept', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'reuse0@example.com' });
+      .send({});
 
     const first = await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'reuseuser0', password: 'correct-horse-battery' });
+      .send({ username: 'reuseuser0', email: 'reuse0@example.com', password: 'correct-horse-battery' });
     expect(first.status).toBe(201);
 
     const second = await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'reuseuser0-again', password: 'correct-horse-battery' });
+      .send({ username: 'reuseuser0-again', email: 'reuse0-again@example.com', password: 'correct-horse-battery' });
     expect(second.status).toBe(404);
   });
 
@@ -313,12 +382,12 @@ describe('POST /api/invitations/:token/accept', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'expiredaccept0@example.com' });
+      .send({});
     await db('invitations').where({ id: createRes.body.id }).update({ expires_at: new Date(Date.now() - 1000) });
 
     const res = await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'expiredacceptuser0', password: 'correct-horse-battery' });
+      .send({ username: 'expiredacceptuser0', email: 'expiredaccept0@example.com', password: 'correct-horse-battery' });
     expect(res.status).toBe(404);
   });
 });
@@ -330,14 +399,14 @@ describe('POST /api/invitations/:id/revoke', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'revoked0@example.com' });
+      .send({});
 
     const revokeRes = await request(app).post(`/api/invitations/${createRes.body.id}/revoke`).set(authHeader(owner.accessToken));
     expect(revokeRes.status).toBe(204);
 
     const acceptRes = await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'revokeduser0', password: 'correct-horse-battery' });
+      .send({ username: 'revokeduser0', email: 'revoked0@example.com', password: 'correct-horse-battery' });
     expect(acceptRes.status).toBe(404);
   });
 
@@ -349,7 +418,7 @@ describe('POST /api/invitations/:id/revoke', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'revoked1@example.com' });
+      .send({});
 
     const res = await request(app).post(`/api/invitations/${createRes.body.id}/revoke`).set(authHeader(otherMember.accessToken));
     expect(res.status).toBe(403);
@@ -362,7 +431,7 @@ describe('POST /api/invitations/:id/revoke', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'revoked1b@example.com' });
+      .send({});
 
     const res = await request(app).post(`/api/invitations/${createRes.body.id}/revoke`).set(authHeader(outsider.accessToken));
     expect(res.status).toBe(404);
@@ -374,10 +443,10 @@ describe('POST /api/invitations/:id/revoke', () => {
     const createRes = await request(app)
       .post(`/api/workspaces/${ws.id}/invitations`)
       .set(authHeader(owner.accessToken))
-      .send({ email: 'revoked2@example.com' });
+      .send({});
     await request(app)
       .post(`/api/invitations/${createRes.body.token}/accept`)
-      .send({ username: 'revoked2user', password: 'correct-horse-battery' });
+      .send({ username: 'revoked2user', email: 'revoked2@example.com', password: 'correct-horse-battery' });
 
     const res = await request(app).post(`/api/invitations/${createRes.body.id}/revoke`).set(authHeader(owner.accessToken));
     expect(res.status).toBe(204);

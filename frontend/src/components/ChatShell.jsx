@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { UserPlus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { createSocket } from '../ws/socket.js';
 import * as workspacesApi from '../api/workspaces.js';
@@ -101,6 +102,7 @@ export default function ChatShell() {
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
+  const [membershipInvitationToasts, setMembershipInvitationToasts] = useState([]);
   const [notificationSummary, setNotificationSummary] = useState({ unreadCount: 0, byWorkspace: [], byChannel: [] });
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [organizations, setOrganizations] = useState([]);
@@ -240,6 +242,27 @@ export default function ChatShell() {
           });
         };
       }
+    });
+
+    // A membership invitation (FEATURE_REQUEST.md "Live notification
+    // system..."): unlike a mention, clicking this toast opens the
+    // notification panel directly rather than navigating to a channel —
+    // there's no message/thread to jump to, just a pending decision to make.
+    socket.on('membership_invitation', (frame) => {
+      const toastId = crypto.randomUUID();
+      notificationsApi.getNotificationSummary().then(setNotificationSummary).catch(() => {});
+      setMembershipInvitationToasts((prev) => [
+        ...prev,
+        {
+          id: toastId,
+          inviterDisplayName: frame.inviterDisplayName || frame.inviterUsername,
+          scopeName: frame.scopeName,
+          invitedRole: frame.invitedRole,
+        },
+      ]);
+      setTimeout(() => {
+        setMembershipInvitationToasts((prev) => prev.filter((t) => t.id !== toastId));
+      }, 6000);
     });
 
     socket.on('disconnected', () => setJoinedChannels(new Set()));
@@ -393,8 +416,12 @@ export default function ChatShell() {
     return workspacesApi.inviteWorkspaceMember(workspaceId, username, role);
   }
 
-  function handleCreateInviteLink(workspaceId, email, role) {
-    return workspacesApi.createWorkspaceInvitation(workspaceId, email, role);
+  function handleInviteMembership(workspaceId, userId, role) {
+    return workspacesApi.createWorkspaceMembershipInvitation(workspaceId, userId, role);
+  }
+
+  function handleCreateInviteLink(workspaceId, role) {
+    return workspacesApi.createWorkspaceInvitation(workspaceId, role);
   }
 
   async function handleArchiveWorkspace(workspaceId) {
@@ -724,7 +751,8 @@ export default function ChatShell() {
           workspace={workspaceSettingsTarget}
           onClose={() => setWorkspaceSettingsId(null)}
           onInviteMember={(username, role) => handleInviteMember(workspaceSettingsTarget.id, username, role)}
-          onCreateInviteLink={(email, role) => handleCreateInviteLink(workspaceSettingsTarget.id, email, role)}
+          onInviteMembership={(userId, role) => handleInviteMembership(workspaceSettingsTarget.id, userId, role)}
+          onCreateInviteLink={(role) => handleCreateInviteLink(workspaceSettingsTarget.id, role)}
           onTransferOwnership={(username) => handleTransferOwnership(workspaceSettingsTarget.id, username)}
           onChangeVisibility={(visibility) => handleChangeVisibility(workspaceSettingsTarget.id, visibility)}
           onToggleManagersCanArchive={(value) => handleToggleManagersCanArchive(workspaceSettingsTarget.id, value)}
@@ -743,6 +771,25 @@ export default function ChatShell() {
           {mentionToasts.map((t) => (
             <button key={t.id} type="button" style={styles.mentionToast} onClick={() => handleNavigateToMention(t)}>
               <span style={styles.mentionToastAuthor}>{t.mentionedBy}</span> mentioned you: {t.content}
+            </button>
+          ))}
+        </div>
+      )}
+      {membershipInvitationToasts.length > 0 && (
+        <div style={styles.mentionToastContainer} role="status" aria-live="polite">
+          {membershipInvitationToasts.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              style={styles.mentionToast}
+              onClick={() => {
+                setMembershipInvitationToasts((prev) => prev.filter((toast) => toast.id !== t.id));
+                setNotificationsOpen(true);
+              }}
+            >
+              <UserPlus size={14} aria-hidden="true" />{' '}
+              <span style={styles.mentionToastAuthor}>{t.inviterDisplayName}</span> invited you to {t.scopeName} as{' '}
+              {t.invitedRole}
             </button>
           ))}
         </div>

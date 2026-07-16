@@ -8,6 +8,7 @@ import {
   removeOrgMember,
   addOrgMember,
   createOrgInvitation,
+  createOrgMembershipInvitation,
   listOrgInvitations,
   searchOrgPeople,
 } from '../api/organizations.js';
@@ -106,7 +107,7 @@ const styles = {
 // FEATURE_REQUEST.md's "unified people picker" entry replaced the raw
 // exact-username input with PeoplePicker, matching
 // UserManagementPanel/WorkspaceSidebar's equivalent forms.
-function AddMemberForm({ onSubmit, orgId }) {
+function AddMemberForm({ onSubmit, onInvite, orgId }) {
   const [person, setPerson] = useState(null);
   const [role, setRole] = useState('ORG_MEMBER');
   const [status, setStatus] = useState(null);
@@ -121,6 +122,22 @@ function AddMemberForm({ onSubmit, orgId }) {
       setPerson(null);
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to add member' });
+    }
+  }
+
+  // FEATURE_REQUEST.md "Live notification system...": an alternative to the
+  // instant add above — proposes membership instead, notified live, left
+  // pending until the recipient accepts or declines. Shares the same
+  // person/role selection, just a different submit action.
+  async function handleInvite() {
+    if (!person) return;
+    setStatus(null);
+    try {
+      await onInvite(person.userId, role);
+      setStatus({ type: 'success', message: `Invited ${person.displayName || person.username} — pending their acceptance` });
+      setPerson(null);
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to send invitation' });
     }
   }
 
@@ -149,7 +166,12 @@ function AddMemberForm({ onSubmit, orgId }) {
           </select>
         </div>
       </div>
-      <button type="submit" style={styles.submitButton} disabled={!person}>Add member</button>
+      <div style={styles.row}>
+        <button type="submit" style={styles.submitButton} disabled={!person}>Add member</button>
+        <button type="button" style={styles.submitButton} disabled={!person} onClick={handleInvite}>
+          Invite (needs acceptance)
+        </button>
+      </div>
       {status && (
         <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: status.type === 'error' ? '#c0392b' : 'var(--brg)' }}>
           {status.message}
@@ -164,20 +186,16 @@ function AddMemberForm({ onSubmit, orgId }) {
 // project, so the raw link is shown once for the admin to copy/share
 // out-of-band, same convention as WorkspaceSidebar's InviteLinkForm.
 function CreateInvitationForm({ onSubmit }) {
-  const [email, setEmail] = useState('');
   const [role, setRole] = useState('ORG_MEMBER');
   const [status, setStatus] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmed = email.trim();
-    if (!trimmed) return;
     setStatus(null);
     try {
-      const invitation = await onSubmit(trimmed, role);
+      const invitation = await onSubmit(role);
       const link = `${window.location.origin}/invite/${invitation.token}`;
       setStatus({ type: 'success', message: link });
-      setEmail('');
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to create invitation' });
     }
@@ -186,10 +204,6 @@ function CreateInvitationForm({ onSubmit }) {
   return (
     <form onSubmit={handleSubmit}>
       <div style={styles.row}>
-        <div style={{ ...styles.field, flex: 1 }}>
-          <label style={styles.label} htmlFor="org-invite-email">Email</label>
-          <input id="org-invite-email" type="email" style={styles.input} value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </div>
         <div style={{ ...styles.field, flex: 1 }}>
           <label style={styles.label} htmlFor="org-invite-role">Role</label>
           <select id="org-invite-role" style={styles.select} value={role} onChange={(e) => setRole(e.target.value)}>
@@ -275,8 +289,12 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
     loadMembers(selectedOrgId);
   }
 
-  async function handleCreateInvitation(email, role) {
-    const invitation = await createOrgInvitation(selectedOrgId, email, role);
+  async function handleInviteMembership(userId, role) {
+    await createOrgMembershipInvitation(selectedOrgId, userId, role);
+  }
+
+  async function handleCreateInvitation(role) {
+    const invitation = await createOrgInvitation(selectedOrgId, role);
     loadInvitations(selectedOrgId);
     return invitation;
   }
@@ -357,7 +375,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
         )}
 
         <div style={styles.sectionTitle}>Add an existing member</div>
-        <AddMemberForm orgId={selectedOrgId} onSubmit={handleAddMember} />
+        <AddMemberForm orgId={selectedOrgId} onSubmit={handleAddMember} onInvite={handleInviteMembership} />
 
         <div style={styles.sectionTitle}>Create invitation</div>
         <CreateInvitationForm onSubmit={handleCreateInvitation} />
@@ -369,16 +387,16 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Email</th>
                 <th style={styles.th}>Role</th>
+                <th style={styles.th}>Invited by</th>
                 <th style={styles.th}></th>
               </tr>
             </thead>
             <tbody>
               {invitations.map((inv) => (
                 <tr key={inv.id}>
-                  <td style={styles.td}>{inv.email}</td>
                   <td style={styles.td}>{inv.invitedRole}</td>
+                  <td style={styles.td}>{inv.invitedByDisplayName || inv.invitedByUsername}</td>
                   <td style={styles.td}>
                     <button type="button" style={styles.rowButton} onClick={() => setConfirmRevoke(inv)}>
                       Revoke
@@ -401,7 +419,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
         {confirmRevoke && (
           <ConfirmDialog
             title="Revoke Invitation"
-            message={`Revoke the pending invitation for ${confirmRevoke.email}? The invite link will stop working immediately.`}
+            message={`Revoke this pending ${confirmRevoke.invitedRole} invitation? The invite link will stop working immediately.`}
             confirmLabel="Revoke"
             onConfirm={() => handleRevokeInvitation(confirmRevoke.id)}
             onClose={() => setConfirmRevoke(null)}

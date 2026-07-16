@@ -8,7 +8,6 @@ import {
   assertUuid,
   assertName,
   assertUsername,
-  assertEmail,
   assertEnum,
   assertBoolean,
   assertBoundedInt,
@@ -20,7 +19,12 @@ import {
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
 import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
-import { adminPasswordResetLimiter, invitationCreateLimiter, memberSearchLimiter } from '../auth/rateLimit.js';
+import {
+  adminPasswordResetLimiter,
+  invitationCreateLimiter,
+  memberSearchLimiter,
+  membershipInvitationCreateLimiter,
+} from '../auth/rateLimit.js';
 import {
   requireWorkspaceMember,
   requireWorkspacePermission,
@@ -34,6 +38,8 @@ import {
   isSystemAdminUser,
 } from '../authz/membershipService.js';
 import { PERMISSIONS } from '../authz/permissions.js';
+import { createUserNotification } from '../services/userNotificationService.js';
+import { sendToUser } from '../ws/connectionRegistry.js';
 import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from '../errors.js';
 
 // Resolves which organization a new workspace attaches to, or which one
@@ -433,11 +439,12 @@ workspacesRouter.post('/:workspaceId/members', async (req, res, next) => {
 // for adding an *existing* user. Gated on WORKSPACE_MANAGE_MEMBERS, not a
 // separate WORKSPACE_INVITE permission (see permissions.js's comment).
 // Raw token returned once — no email infra exists in this project, same
-// out-of-band precedent as admin-set passwords.
+// out-of-band precedent as admin-set passwords. The invitee supplies their
+// own email at redemption time (invitations.js's POST /:token/accept), not
+// here — FEATURE_REQUEST.md's "Remove email-based invitations" entry.
 workspacesRouter.post('/:workspaceId/invitations', invitationCreateLimiter, async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    const email = assertEmail(req.body?.email);
     const invitedRole =
       req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_WORKSPACE_ROLES, 'role') : 'MEMBER';
     // Same MANAGER-tier split as POST /:workspaceId/members above — an
@@ -456,25 +463,23 @@ workspacesRouter.post('/:workspaceId/invitations', invitationCreateLimiter, asyn
       .insert({
         scope_type: 'WORKSPACE',
         workspace_id: workspaceId,
-        email,
         invited_role: invitedRole,
         invited_by: req.user.id,
         token_hash: hashInvitationToken(rawToken),
         expires_at: new Date(Date.now() + INVITATION_TOKEN_TTL_MS),
       })
-      .returning(['id', 'email', 'invited_role', 'expires_at']);
+      .returning(['id', 'invited_role', 'expires_at']);
 
     await appendAuditEvent(db, {
       actorId: req.user.id,
       actorIp: req.ip,
       actionType: 'INVITATION_CREATED',
       targetResource: invitation.id,
-      payload: { scopeType: 'WORKSPACE', workspaceId, email, invitedRole },
+      payload: { scopeType: 'WORKSPACE', workspaceId, invitedRole },
     });
 
     res.status(201).json({
       id: invitation.id,
-      email: invitation.email,
       role: invitation.invited_role,
       expiresAt: invitation.expires_at,
       token: rawToken,
@@ -500,7 +505,6 @@ workspacesRouter.get('/:workspaceId/invitations', async (req, res, next) => {
       .andWhere('i.expires_at', '>', new Date())
       .select(
         'i.id',
-        'i.email',
         'i.invited_role',
         'i.expires_at',
         'u.username as invited_by_username',
@@ -511,7 +515,6 @@ workspacesRouter.get('/:workspaceId/invitations', async (req, res, next) => {
     res.json(
       rows.map((r) => ({
         id: r.id,
-        email: r.email,
         invitedRole: r.invited_role,
         expiresAt: r.expires_at,
         invitedByUsername: r.invited_by_username,
@@ -522,6 +525,105 @@ workspacesRouter.get('/:workspaceId/invitations', async (req, res, next) => {
     next(err);
   }
 });
+
+// FEATURE_REQUEST.md "Live notification system + in-app invitation
+// notification & acceptance workflow": for an *existing* account — proposes
+// membership rather than adding it immediately (POST /:workspaceId/members
+// above), notified live, accepted/declined by the recipient via
+// /api/membership-invitations. Same MANAGER-tier permission split as the
+// immediate-add route and the token-invitation route above.
+workspacesRouter.post(
+  '/:workspaceId/membership-invitations',
+  membershipInvitationCreateLimiter,
+  async (req, res, next) => {
+    try {
+      const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+      const invitedUserId = assertUuid(req.body?.userId, 'userId');
+      const role =
+        req.body?.role !== undefined ? assertEnum(req.body.role, ASSIGNABLE_WORKSPACE_ROLES, 'role') : 'MEMBER';
+      await requireWorkspacePermission(
+        db,
+        req.user.id,
+        workspaceId,
+        role === 'MANAGER' ? PERMISSIONS.WORKSPACE_MANAGE_MANAGERS : PERMISSIONS.WORKSPACE_MANAGE_MEMBERS,
+      );
+      await requireWorkspaceNotArchived(db, workspaceId);
+
+      const targetUser = await db('users').where({ id: invitedUserId }).first('id', 'username', 'display_name');
+      if (!targetUser) {
+        throw new ValidationError('No user with that id exists');
+      }
+
+      const existingRole = await getWorkspaceRole(db, invitedUserId, workspaceId);
+      if (existingRole) {
+        throw new ConflictError('User is already a member of this workspace');
+      }
+
+      const existingInvitation = await db('membership_invitations')
+        .where({ scope_type: 'WORKSPACE', workspace_id: workspaceId, invited_user_id: invitedUserId, status: 'PENDING' })
+        .first('id');
+      if (existingInvitation) {
+        throw new ConflictError('An invitation is already pending for this user');
+      }
+
+      const workspace = await db('workspaces').where({ id: workspaceId }).first('name');
+
+      const [invitation] = await db('membership_invitations')
+        .insert({
+          scope_type: 'WORKSPACE',
+          workspace_id: workspaceId,
+          invited_user_id: invitedUserId,
+          invited_role: role,
+          invited_by: req.user.id,
+        })
+        .returning(['id', 'invited_role', 'created_at']);
+
+      const notification = await createUserNotification(db, {
+        recipientUserId: invitedUserId,
+        type: 'WORKSPACE_INVITE',
+        payload: {
+          membershipInvitationId: invitation.id,
+          scopeType: 'WORKSPACE',
+          workspaceId,
+          scopeName: workspace.name,
+          invitedRole: role,
+          inviterUsername: req.user.username,
+          inviterDisplayName: req.user.displayName,
+        },
+      });
+
+      sendToUser(invitedUserId, {
+        type: 'membership_invitation',
+        membershipInvitationId: invitation.id,
+        scopeType: 'WORKSPACE',
+        workspaceId,
+        scopeName: workspace.name,
+        invitedRole: role,
+        inviterUsername: req.user.username,
+        inviterDisplayName: req.user.displayName,
+        notificationId: notification.id,
+      });
+
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'WORKSPACE_MEMBERSHIP_CHANGE',
+        targetResource: workspaceId,
+        payload: { action: 'invite', invitedUserId, invitedUsername: targetUser.username, role },
+      });
+
+      res.status(201).json({
+        id: invitation.id,
+        invitedUserId,
+        invitedUsername: targetUser.username,
+        role,
+        status: 'PENDING',
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // Admin dashboard (FEATURE_REQUEST.md): the roster the "Manage Users" panel
 // needs to render — a gap the original design didn't spell out explicitly

@@ -9,6 +9,7 @@ import {
   markAllMentionNotificationsRead,
   markMentionNotificationRead,
 } from '../services/mentionNotificationService.js';
+import { getUnreadUserNotificationCount } from '../services/userNotificationService.js';
 
 export const notificationsRouter = Router();
 
@@ -30,10 +31,28 @@ function parseNotificationQuery(query) {
   return { limit, before: before?.toISOString(), unreadOnly };
 }
 
+// unreadCount is combined (mentions + membership-invitation alerts) — the
+// single value the sidebar's badge trigger renders (WorkspaceSidebar.jsx).
+// mentionUnreadCount/membershipInvitationUnreadCount are kept alongside it,
+// additively, for anything that needs to distinguish the two (e.g.
+// NotificationPanel's two sections) without a second round trip. Shared by
+// both GET /mentions and GET /summary so opening the mentions list never
+// clobbers the sidebar's combined badge back down to a mentions-only count.
+async function getCombinedSummary(db, userId) {
+  const mentionSummary = await getMentionSummary(db, userId);
+  const membershipInvitationUnreadCount = await getUnreadUserNotificationCount(db, userId);
+  return {
+    ...mentionSummary,
+    mentionUnreadCount: mentionSummary.unreadCount,
+    membershipInvitationUnreadCount,
+    unreadCount: mentionSummary.unreadCount + membershipInvitationUnreadCount,
+  };
+}
+
 notificationsRouter.get('/mentions', async (req, res, next) => {
   try {
     const notifications = await listMentionNotifications(db, req.user.id, parseNotificationQuery(req.query));
-    const summary = await getMentionSummary(db, req.user.id);
+    const summary = await getCombinedSummary(db, req.user.id);
     res.json({ notifications, summary });
   } catch (err) {
     next(err);
@@ -42,7 +61,7 @@ notificationsRouter.get('/mentions', async (req, res, next) => {
 
 notificationsRouter.get('/summary', async (req, res, next) => {
   try {
-    res.json(await getMentionSummary(db, req.user.id));
+    res.json(await getCombinedSummary(db, req.user.id));
   } catch (err) {
     next(err);
   }

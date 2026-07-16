@@ -15,10 +15,21 @@ export const inviteWorkspaceMember = (workspaceId, username, role) =>
 
 // Invitations (slice 3): token-based, for people who don't have an account
 // yet — coexists with inviteWorkspaceMember above (direct-add of an existing
-// user), doesn't replace it.
-export const createWorkspaceInvitation = (workspaceId, email, role) =>
-  apiFetch(`/workspaces/${workspaceId}/invitations`, { method: 'POST', body: { email, role } });
+// user), doesn't replace it. No email is collected here (FEATURE_REQUEST.md's
+// "Remove email-based invitations" entry) — the invitee supplies their own
+// at redemption time.
+export const createWorkspaceInvitation = (workspaceId, role) =>
+  apiFetch(`/workspaces/${workspaceId}/invitations`, { method: 'POST', body: { role } });
 export const listWorkspaceInvitations = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/invitations`);
+
+// Membership invitations (FEATURE_REQUEST.md "Live notification system..."):
+// for an *existing* account — proposes membership, notified live, the
+// recipient accepts/declines via api/notifications.js's
+// accept/declineMembershipInvitation. Distinct from both
+// inviteWorkspaceMember (instant) and createWorkspaceInvitation (token-based,
+// for people with no account yet).
+export const createWorkspaceMembershipInvitation = (workspaceId, userId, role) =>
+  apiFetch(`/workspaces/${workspaceId}/membership-invitations`, { method: 'POST', body: { userId, role } });
 
 // Self-service workspace subscription (FEATURE_REQUEST.md). organizationId
 // is required here in practice once an account belongs to 2+ orgs — the

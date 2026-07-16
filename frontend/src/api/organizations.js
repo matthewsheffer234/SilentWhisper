@@ -18,9 +18,20 @@ export const unarchiveOrganization = (orgId) => apiFetch(`/organizations/${orgId
 
 // Token-based invitations (slice 3) — for people who don't have an account
 // yet, coexists with addOrgMember above (direct-add of an existing user).
-export const createOrgInvitation = (orgId, email, role) =>
-  apiFetch(`/organizations/${orgId}/invitations`, { method: 'POST', body: { email, role } });
+// No email is collected here (FEATURE_REQUEST.md's "Remove email-based
+// invitations" entry) — the invitee supplies their own at redemption time.
+export const createOrgInvitation = (orgId, role) =>
+  apiFetch(`/organizations/${orgId}/invitations`, { method: 'POST', body: { role } });
 export const listOrgInvitations = (orgId) => apiFetch(`/organizations/${orgId}/invitations`);
+
+// Membership invitations (FEATURE_REQUEST.md "Live notification system..."):
+// for an *existing* account — proposes membership, notified live, the
+// recipient accepts/declines via api/notifications.js's
+// accept/declineMembershipInvitation. Distinct from both addOrgMember
+// (instant) and createOrgInvitation (token-based, for people with no
+// account yet).
+export const createOrgMembershipInvitation = (orgId, userId, role) =>
+  apiFetch(`/organizations/${orgId}/membership-invitations`, { method: 'POST', body: { userId, role } });
 
 // FEATURE_REQUEST.md's "unified people picker" entry.
 export const searchOrgPeople = (orgId, query) => {

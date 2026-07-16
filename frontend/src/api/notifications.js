@@ -16,3 +16,11 @@ export const markMentionNotificationRead = (id) =>
 
 export const markAllMentionNotificationsRead = () =>
   apiFetch('/notifications/mentions/read-all', { method: 'POST' });
+
+// Membership invitations (FEATURE_REQUEST.md "Live notification system..."):
+// an existing account's own pending invitations, distinct from
+// api/invitations.js's token-based ones.
+export const listMembershipInvitations = () => apiFetch('/membership-invitations');
+export const acceptMembershipInvitation = (id) => apiFetch(`/membership-invitations/${id}/accept`, { method: 'POST' });
+export const declineMembershipInvitation = (id) =>
+  apiFetch(`/membership-invitations/${id}/decline`, { method: 'POST' });

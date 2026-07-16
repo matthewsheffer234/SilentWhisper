@@ -84,7 +84,7 @@ const styles = {
   divider: { border: 'none', borderTop: '1px solid var(--border)', margin: '18px 0' },
 };
 
-function InviteMemberSection({ workspaceId, onInviteMember }) {
+function InviteMemberSection({ workspaceId, onInviteMember, onInviteMembership }) {
   const [person, setPerson] = useState(null);
   const [role, setRole] = useState('MEMBER');
   const [status, setStatus] = useState(null);
@@ -99,6 +99,22 @@ function InviteMemberSection({ workspaceId, onInviteMember }) {
       setPerson(null);
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to add member' });
+    }
+  }
+
+  // FEATURE_REQUEST.md "Live notification system...": proposes membership
+  // instead of adding it immediately — notified live, left pending until the
+  // recipient accepts or declines. Shares the same person/role selection as
+  // the instant-add submit above, just a different action.
+  async function handleInvite() {
+    if (!person) return;
+    setStatus(null);
+    try {
+      await onInviteMembership(person.userId, role);
+      setStatus({ type: 'success', message: `Invited ${person.displayName || person.username} — pending their acceptance` });
+      setPerson(null);
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to send invitation' });
     }
   }
 
@@ -120,6 +136,9 @@ function InviteMemberSection({ workspaceId, onInviteMember }) {
           <option value="MANAGER">Manager</option>
         </select>
         <button type="submit" style={styles.actionButton} disabled={!person}>Add</button>
+        <button type="button" style={styles.secondaryButton} disabled={!person} onClick={handleInvite}>
+          Invite (needs acceptance)
+        </button>
       </form>
       {status && (
         <div style={{ ...styles.feedback, ...(status.type === 'error' ? styles.error : styles.success) }}>{status.message}</div>
@@ -129,20 +148,16 @@ function InviteMemberSection({ workspaceId, onInviteMember }) {
 }
 
 function InviteLinkSection({ onCreateInviteLink }) {
-  const [email, setEmail] = useState('');
   const [role, setRole] = useState('MEMBER');
   const [status, setStatus] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmed = email.trim();
-    if (!trimmed) return;
     setStatus(null);
     try {
-      const invitation = await onCreateInviteLink(trimmed, role);
+      const invitation = await onCreateInviteLink(role);
       const link = `${window.location.origin}/invite/${invitation.token}`;
       setStatus({ type: 'success', message: link });
-      setEmail('');
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to create invitation' });
     }
@@ -151,12 +166,6 @@ function InviteLinkSection({ onCreateInviteLink }) {
   return (
     <div>
       <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <input
-          style={styles.inlineInput}
-          placeholder="Email to invite"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
         <select style={styles.roleSelect} value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
           <option value="MEMBER">Member</option>
           <option value="MANAGER">Manager</option>
@@ -237,6 +246,7 @@ export default function WorkspaceSettingsSheet({
   workspace,
   onClose,
   onInviteMember,
+  onInviteMembership,
   onCreateInviteLink,
   onTransferOwnership,
   onChangeVisibility,
@@ -304,7 +314,7 @@ export default function WorkspaceSettingsSheet({
       {canInvite && (
         <>
           <div style={sectionTitleStyle()}>Invite an existing member</div>
-          <InviteMemberSection workspaceId={workspace.id} onInviteMember={onInviteMember} />
+          <InviteMemberSection workspaceId={workspace.id} onInviteMember={onInviteMember} onInviteMembership={onInviteMembership} />
 
           <div style={styles.sectionTitle}>Create an invite link</div>
           <div style={styles.hint}>For someone who doesn't have an account yet — share the link with them yourself.</div>

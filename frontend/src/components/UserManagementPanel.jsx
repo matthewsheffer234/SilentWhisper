@@ -318,16 +318,16 @@ export default function UserManagementPanel({ workspaces, onClose }) {
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Email</th>
                 <th style={styles.th}>Role</th>
+                <th style={styles.th}>Invited by</th>
                 <th style={styles.th}></th>
               </tr>
             </thead>
             <tbody>
               {invitations.map((inv) => (
                 <tr key={inv.id}>
-                  <td style={styles.td}>{inv.email}</td>
                   <td style={styles.td}>{inv.invitedRole}</td>
+                  <td style={styles.td}>{inv.invitedByDisplayName || inv.invitedByUsername}</td>
                   <td style={styles.td}>
                     <button type="button" style={styles.rowSelect} onClick={() => setConfirmRevoke(inv)}>
                       Revoke
@@ -350,7 +350,7 @@ export default function UserManagementPanel({ workspaces, onClose }) {
         {confirmRevoke && (
           <ConfirmDialog
             title="Revoke Invitation"
-            message={`Revoke the pending invitation for ${confirmRevoke.email}? The invite link will stop working immediately.`}
+            message={`Revoke this pending ${confirmRevoke.invitedRole} invitation? The invite link will stop working immediately.`}
             confirmLabel="Revoke"
             onConfirm={() => handleRevokeInvitation(confirmRevoke.id)}
             onClose={() => setConfirmRevoke(null)}

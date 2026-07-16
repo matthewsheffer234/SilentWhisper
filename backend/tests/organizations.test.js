@@ -323,7 +323,7 @@ describe('every gated write path 409s against an archived organization', () => {
     const res = await request(app)
       .post(`/api/organizations/${orgId}/invitations`)
       .set(authHeader(admin.accessToken))
-      .send({ email: 'archorginvite@example.com' });
+      .send({});
     expect(res.status).toBe(409);
   });
 
