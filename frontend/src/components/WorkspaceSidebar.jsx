@@ -16,10 +16,10 @@ import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
-import ConfirmDialog from './ConfirmDialog.jsx';
+import WorkspaceSettingsSheet from './WorkspaceSettingsSheet.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
-import { searchWorkspacePeople, searchWorkspaceMembers } from '../api/workspaces.js';
+import { searchWorkspaceMembers } from '../api/workspaces.js';
 
 // Menu.jsx renders `item.label` as arbitrary children, not just text — this
 // composes an icon + text pair with the same layout Menu.jsx's own item row
@@ -260,64 +260,10 @@ function activateOnKey(handler) {
   };
 }
 
-// PROJECT_PLAN.md Section 11's "Post-Phase-5 finding" — there was previously
-// no way for an admin to add anyone to a workspace they created except
-// direct database access. `onSubmit` is expected to reject with a real
-// `Error` (apiFetch's convention — see api/client.js) carrying a useful
-// `.message` (unknown username, already a member, etc.) so it can be shown
-// inline rather than swallowed.
-// FEATURE_REQUEST.md's "unified people picker" entry replaced the raw
-// exact-username `<input>` these three forms used to have with
-// `PeoplePicker` — search by display name/username/email, with ineligible
-// rows (already a member, already in this channel, yourself) shown
-// disabled rather than only failing after submit.
-function InviteMemberForm({ onSubmit, workspaceId }) {
-  const [person, setPerson] = useState(null);
-  const [role, setRole] = useState('MEMBER');
-  const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!person) return;
-    setStatus(null);
-    try {
-      await onSubmit(person.username, role);
-      setStatus({ type: 'success', message: `Added ${person.displayName || person.username} to the workspace` });
-      setPerson(null);
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message || 'Failed to add member' });
-    }
-  }
-
-  return (
-    <div>
-      <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <PeoplePicker
-            searchFn={(q) => searchWorkspacePeople(workspaceId, q)}
-            value={person}
-            onChange={setPerson}
-            placeholder="Search people to invite"
-            ariaLabel="Search people to invite"
-            isIneligible={(p) => (p.alreadyMember ? 'Already a member' : null)}
-          />
-        </div>
-        <select style={styles.roleSelect} value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
-          <option value="MEMBER">Member</option>
-          <option value="MANAGER">Manager</option>
-        </select>
-        <button type="submit" style={styles.inviteSubmit} disabled={!person}>Add</button>
-      </form>
-      {status && (
-        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
-          {status.message}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Private-channel invite workflow — cloned from InviteMemberForm's shape,
+// Private-channel invite workflow — cloned from the workspace-level invite
+// form's shape (moved into `WorkspaceSettingsSheet.jsx` as part of
+// FEATURE_REQUEST.md's "dedicated admin/settings area" entry — this one
+// stays here since it's channel-, not workspace-, scoped),
 // minus the role select (channel membership carries no role, unlike
 // workspace membership). Only ever rendered for a PRIVATE channel the caller
 // already belongs to (see the channel row below) — a public channel's
@@ -367,128 +313,6 @@ function InviteToChannelForm({ onSubmit, workspaceId, channelId }) {
   );
 }
 
-// New (FEATURE_REQUEST.md entry 1, slice 4). Candidate pool is current
-// workspace members only, matching POST /:workspaceId/transfer-ownership's
-// own requirement that the target already be a member.
-// FEATURE_REQUEST.md's "confirmation and recovery for destructive or
-// high-impact actions" entry: picking a person and clicking Transfer no
-// longer calls the API directly — it opens a ConfirmDialog naming the
-// target and the workspace, since ownership transfer also demotes the
-// caller's own role and can't be undone except by the new owner
-// transferring back.
-function TransferOwnershipForm({ onSubmit, workspaceId, workspaceName }) {
-  const [person, setPerson] = useState(null);
-  const [status, setStatus] = useState(null);
-  const [confirming, setConfirming] = useState(null); // person pending confirmation
-
-  function handleSubmit(e) {
-    e.preventDefault();
-    if (!person) return;
-    setStatus(null);
-    setConfirming(person);
-  }
-
-  async function handleConfirm() {
-    await onSubmit(confirming.username);
-    setStatus({ type: 'success', message: `Ownership transferred to ${confirming.displayName || confirming.username}` });
-    setPerson(null);
-  }
-
-  return (
-    <div>
-      <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <PeoplePicker
-            searchFn={(q) => searchWorkspaceMembers(workspaceId, q)}
-            value={person}
-            onChange={setPerson}
-            placeholder="Search workspace members"
-            ariaLabel="Search workspace members for ownership transfer"
-            isIneligible={(p) => (p.isSelf ? 'Cannot transfer to yourself' : null)}
-          />
-        </div>
-        <button type="submit" style={styles.inviteSubmit} disabled={!person}>Transfer</button>
-      </form>
-      {status && (
-        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
-          {status.message}
-        </div>
-      )}
-      {confirming && (
-        <ConfirmDialog
-          title="Transfer Ownership"
-          message={`Transfer ownership of "${workspaceName}" to ${confirming.displayName || confirming.username}? You will become a Manager and lose owner-only controls such as archiving and future ownership transfers.`}
-          confirmLabel="Transfer"
-          onConfirm={handleConfirm}
-          onClose={() => setConfirming(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-// Token-based invitation (FEATURE_REQUEST.md entry 1, slice 3) — for people
-// who don't have an account yet, coexists with InviteMemberForm above
-// (direct-add of an existing user), doesn't replace it. No email infra
-// exists in this project (backend/src/routes/workspaces.js's own comment),
-// so the raw link is shown once for the admin to copy/share out-of-band.
-function InviteLinkForm({ onSubmit }) {
-  const [email, setEmail] = useState('');
-  const [role, setRole] = useState('MEMBER');
-  const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const trimmed = email.trim();
-    if (!trimmed) return;
-    setStatus(null);
-    try {
-      const invitation = await onSubmit(trimmed, role);
-      const link = `${window.location.origin}/invite/${invitation.token}`;
-      setStatus({ type: 'success', message: link });
-      setEmail('');
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message || 'Failed to create invitation' });
-    }
-  }
-
-  return (
-    <div>
-      <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <input
-          style={styles.inlineInput}
-          placeholder="Email to invite"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <select style={styles.roleSelect} value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
-          <option value="MEMBER">Member</option>
-          <option value="MANAGER">Manager</option>
-        </select>
-        <button type="submit" style={styles.inviteSubmit}>Create link</button>
-      </form>
-      {status && (
-        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
-          {status.type === 'success' ? (
-            <>
-              <span>{status.message}</span>{' '}
-              <button
-                type="button"
-                style={styles.inviteSubmit}
-                onClick={() => navigator.clipboard?.writeText(status.message)}
-              >
-                Copy
-              </button>
-            </>
-          ) : (
-            status.message
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function WorkspaceSidebar({
   user,
   presence,
@@ -502,13 +326,10 @@ export default function WorkspaceSidebar({
   onInviteToChannel,
   onLogout,
   canManageAi,
-  onOpenAiSettings,
-  onOpenAuditLog,
   onNavigateToSearchResult,
   onInviteMember,
   onCreateInviteLink,
   onOpenChangePassword,
-  onOpenUserManagement,
   onArchiveWorkspace,
   onUnarchiveWorkspace,
   onOpenBrowseWorkspaces,
@@ -517,8 +338,7 @@ export default function WorkspaceSidebar({
   onSelectOrganization,
   isSystemAdmin,
   onOpenCreateOrganization,
-  onOpenOrgManagement,
-  onOpenSystemAdmin,
+  onOpenAdminPanel,
   onTransferOwnership,
   onChangeVisibility,
   onToggleManagersCanArchive,
@@ -527,11 +347,8 @@ export default function WorkspaceSidebar({
   onOpenCreateWorkspace,
   onOpenCreateChannel,
 }) {
-  const [inviteFormWorkspaceId, setInviteFormWorkspaceId] = useState(null);
-  const [inviteLinkFormWorkspaceId, setInviteLinkFormWorkspaceId] = useState(null);
-  const [transferFormWorkspaceId, setTransferFormWorkspaceId] = useState(null);
   const [inviteChannelFormId, setInviteChannelFormId] = useState(null);
-  const [confirmArchiveWs, setConfirmArchiveWs] = useState(null);
+  const [workspaceSettingsId, setWorkspaceSettingsId] = useState(null);
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
 
@@ -554,6 +371,9 @@ export default function WorkspaceSidebar({
   const isSelectedWorkspaceArchived = Boolean(selectedWorkspace?.archivedAt);
 
   const currentOrg = organizations.find((o) => o.id === selectedOrganizationId) ?? null;
+  // "Manage organization members…" moved to the Admin hub (FEATURE_REQUEST.md's
+  // "dedicated admin/settings area" entry) — the switcher's job narrows to
+  // switching and, for a system admin, creating a new org.
   const orgSwitcherItems = [
     ...organizations.map((org) => ({
       key: org.id,
@@ -571,19 +391,23 @@ export default function WorkspaceSidebar({
           },
         ]
       : []),
-    ...(currentOrg && hasOrgManagementAccess(isSystemAdmin, currentOrg.role)
-      ? [{ key: 'manage-org', label: 'Manage organization members…', onSelect: onOpenOrgManagement }]
-      : []),
   ];
 
   // Organization controls are only useful when there is a decision or an
   // admin action to make — a bare single-org switcher with one always-
   // checked, non-actionable entry is exactly the "database administration
-  // surface" friction FEATURE_REQUEST.md entry 2 asks to de-emphasize.
-  const showOrgRow =
-    organizations.length > 1 ||
-    isSystemAdmin ||
-    Boolean(currentOrg && hasOrgManagementAccess(isSystemAdmin, currentOrg.role));
+  // surface" friction FEATURE_REQUEST.md entry 2 asks to de-emphasize. Org
+  // *management* access alone no longer forces the switcher to show (that
+  // entry point moved to the Admin hub) — only an actual switch/create
+  // decision does.
+  const showOrgRow = organizations.length > 1 || isSystemAdmin;
+
+  // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: the Admin
+  // hub is worth showing if the caller has *any* of the privileged
+  // capabilities it groups — workspace-scoped user admin/AI/audit
+  // (canManageAi), managing at least one organization, or system admin.
+  const canManageAnyOrg = organizations.some((org) => hasOrgManagementAccess(isSystemAdmin, org.role));
+  const showAdminButton = canManageAi || canManageAnyOrg || isSystemAdmin;
 
   const userMenuItems = [
     {
@@ -661,30 +485,20 @@ export default function WorkspaceSidebar({
 
       <SearchBar onNavigate={onNavigateToSearchResult} />
 
-      {canManageAi && (
+      {/* FEATURE_REQUEST.md's "dedicated admin/settings area" entry: this
+          used to be a dropdown Menu opening each admin panel directly
+          (AI Settings, Audit Log, Manage Users, System Admin) plus a
+          separate "Manage organization members…" item tucked into the org
+          switcher below. One trigger now opens one AdminPanel.jsx hub
+          (rendered by ChatShell.jsx) that lists all five destinations —
+          same low-frequency, non-permanent-sidebar-row placement, but a
+          single consistent entry point instead of two unrelated ones. */}
+      {showAdminButton && (
         <div style={styles.adminToolsRow}>
-          <Menu
-            ariaLabel="Admin tools"
-            items={[
-              { key: 'ai-settings', label: 'AI Settings', onSelect: onOpenAiSettings },
-              { key: 'audit-log', label: 'Audit Log', onSelect: onOpenAuditLog },
-              { key: 'manage-users', label: 'Manage Users', onSelect: onOpenUserManagement },
-              // System Admin (FEATURE_REQUEST.md entry 1, slice 4): gated on
-              // the plain isSystemAdmin prop, not canManageAi — a
-              // workspace-admin-but-not-system-admin (this whole menu's own
-              // canManageAi gate) must never see this item, since account
-              // creation/disable and cross-org oversight are system-admin-only.
-              ...(isSystemAdmin
-                ? [{ key: 'system-admin', label: 'System Admin', separatorBefore: true, onSelect: onOpenSystemAdmin }]
-                : []),
-            ]}
-            renderTrigger={(triggerProps) => (
-              <button type="button" {...triggerProps} style={styles.aiSettingsButton}>
-                <Settings size={14} aria-hidden="true" />
-                Admin Tools
-              </button>
-            )}
-          />
+          <button type="button" style={styles.aiSettingsButton} onClick={onOpenAdminPanel}>
+            <Settings size={14} aria-hidden="true" />
+            Admin
+          </button>
         </div>
       )}
 
@@ -716,46 +530,14 @@ export default function WorkspaceSidebar({
           const canTransferOwnership = hasPermission(ws.role, PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP);
           const canChangeVisibility = hasPermission(ws.role, PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY);
           const canManageSettings = hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_SETTINGS);
-          const workspaceMenuItems = [
-            ...(canInvite
-              ? [
-                  { key: 'invite', label: 'Invite member…', onSelect: () => setInviteFormWorkspaceId(ws.id) },
-                  { key: 'invite-link', label: 'Create invite link…', onSelect: () => setInviteLinkFormWorkspaceId(ws.id) },
-                ]
-              : []),
-            ...(canArchive
-              ? [{ key: 'archive', label: 'Archive workspace', separatorBefore: canInvite, onSelect: () => setConfirmArchiveWs(ws) }]
-              : []),
-            ...(canTransferOwnership
-              ? [
-                  {
-                    key: 'transfer-ownership',
-                    label: 'Transfer ownership…',
-                    separatorBefore: canInvite || canArchive,
-                    onSelect: () => setTransferFormWorkspaceId(ws.id),
-                  },
-                ]
-              : []),
-            ...(canChangeVisibility
-              ? [
-                  {
-                    key: 'change-visibility',
-                    label: ws.visibility === 'DISCOVERABLE' ? 'Make invite-only' : 'Make listed',
-                    onSelect: () => onChangeVisibility(ws.id, ws.visibility === 'DISCOVERABLE' ? 'PRIVATE' : 'DISCOVERABLE'),
-                  },
-                ]
-              : []),
-            ...(canManageSettings
-              ? [
-                  {
-                    key: 'managers-can-archive',
-                    label: 'Managers can archive',
-                    checked: Boolean(ws.managersCanArchive),
-                    onSelect: () => onToggleManagersCanArchive(ws.id, !ws.managersCanArchive),
-                  },
-                ]
-              : []),
-          ];
+          // FEATURE_REQUEST.md's "dedicated admin/settings area" entry:
+          // what used to be up to five separate overflow-menu items
+          // (Invite member…, Create invite link…, Archive workspace,
+          // Transfer ownership…, the visibility-toggle label, and the
+          // managers-can-archive checkbox) collapses to one trigger opening
+          // WorkspaceSettingsSheet, which gates each of its own sections on
+          // these same permissions internally.
+          const hasWorkspaceSettings = canInvite || canArchive || canTransferOwnership || canChangeVisibility || canManageSettings;
           return (
             <div key={ws.id}>
               <div
@@ -767,38 +549,30 @@ export default function WorkspaceSidebar({
                 onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
               >
                 <span style={{ flex: 1 }}>{ws.name}</span>
-                {workspaceMenuItems.length > 0 && (
-                  <Menu
-                    ariaLabel={`${ws.name} options`}
-                    items={workspaceMenuItems}
-                    renderTrigger={({ onClick, ...triggerProps }) => (
-                      <button
-                        type="button"
-                        {...triggerProps}
-                        style={styles.overflowTrigger}
-                        aria-label={`${ws.name} options`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onClick();
-                        }}
-                      >
-                        <MoreHorizontal size={18} aria-hidden="true" />
-                      </button>
-                    )}
-                  />
+                {hasWorkspaceSettings && (
+                  <button
+                    type="button"
+                    style={styles.overflowTrigger}
+                    aria-label={`${ws.name} settings`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setWorkspaceSettingsId(ws.id);
+                    }}
+                  >
+                    <MoreHorizontal size={18} aria-hidden="true" />
+                  </button>
                 )}
               </div>
-              {inviteFormWorkspaceId === ws.id && (
-                <InviteMemberForm workspaceId={ws.id} onSubmit={(username, role) => onInviteMember(ws.id, username, role)} />
-              )}
-              {inviteLinkFormWorkspaceId === ws.id && (
-                <InviteLinkForm onSubmit={(email, role) => onCreateInviteLink(ws.id, email, role)} />
-              )}
-              {transferFormWorkspaceId === ws.id && (
-                <TransferOwnershipForm
-                  workspaceId={ws.id}
-                  workspaceName={ws.name}
-                  onSubmit={(username) => onTransferOwnership(ws.id, username)}
+              {workspaceSettingsId === ws.id && (
+                <WorkspaceSettingsSheet
+                  workspace={ws}
+                  onClose={() => setWorkspaceSettingsId(null)}
+                  onInviteMember={(username, role) => onInviteMember(ws.id, username, role)}
+                  onCreateInviteLink={(email, role) => onCreateInviteLink(ws.id, email, role)}
+                  onTransferOwnership={(username) => onTransferOwnership(ws.id, username)}
+                  onChangeVisibility={(visibility) => onChangeVisibility(ws.id, visibility)}
+                  onToggleManagersCanArchive={(value) => onToggleManagersCanArchive(ws.id, value)}
+                  onArchiveWorkspace={() => onArchiveWorkspace(ws.id)}
                 />
               )}
             </div>
@@ -938,15 +712,6 @@ export default function WorkspaceSidebar({
           </>
         )}
       </div>
-      {confirmArchiveWs && (
-        <ConfirmDialog
-          title="Archive Workspace"
-          message={`Archive "${confirmArchiveWs.name}"? Members will keep read access to existing messages, but no one will be able to post, create channels, or invite anyone until it's unarchived.`}
-          confirmLabel="Archive"
-          onConfirm={() => onArchiveWorkspace(confirmArchiveWs.id)}
-          onClose={() => setConfirmArchiveWs(null)}
-        />
-      )}
     </aside>
   );
 }

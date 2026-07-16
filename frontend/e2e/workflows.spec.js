@@ -268,6 +268,31 @@ async function confirmDialogAction(page, dialogTitle, buttonText) {
   await dialog.locator(`button:has-text("${buttonText}")`).click();
 }
 
+// FEATURE_REQUEST.md's "dedicated admin/settings area" entry: the workspace
+// row's overflow trigger no longer opens a dropdown Menu of several
+// individually-labeled items (Invite member…, Archive workspace, Transfer
+// ownership…, etc.) — it opens one WorkspaceSettingsSheet (aria-label
+// `"${name} settings"`) containing all of them as sections, gated
+// internally on the same permissions the old menu items were.
+async function openWorkspaceSettings(page, workspaceName) {
+  await page.click(`button[aria-label="${workspaceName} settings"]`);
+  const dialog = page.getByRole('dialog', { name: `${workspaceName} settings`, exact: true });
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  return dialog;
+}
+
+// Same entry: "Admin Tools" (a dropdown Menu opening a panel directly per
+// item) is now a single "Admin" button opening one AdminPanel.jsx hub sheet
+// (aria-label "admin") whose own rows — plain buttons, not
+// `[role="menuitem"]` — each open the real destination panel and close the
+// hub itself first.
+async function openAdminPanelItem(page, itemTitle) {
+  await page.click('button:has-text("Admin")');
+  const dialog = page.getByRole('dialog', { name: 'admin', exact: true });
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await dialog.locator(`button:has-text("${itemTitle}")`).click();
+}
+
 test.describe('core messaging workflow', () => {
   // Self-service signup is closed (FEATURE_REQUEST.md entry 1, slice 4) —
   // exercises the already-shipped InviteRedemptionPage.jsx end-to-end
@@ -558,11 +583,10 @@ test.describe('admin surfaces', () => {
     const seeded = await seedUserWithChannel('aiadmin');
     await loginViaUi(page, seeded.username, seeded.password);
 
-    // FEATURE_REQUEST.md's Apple HIG overhaul entry: AI Settings/Audit
-    // Log/Manage Users now live behind a single "Admin Tools" pull-down
-    // button rather than three standalone always-visible buttons.
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("AI Settings")');
+    // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: AI
+    // Settings/Audit Log/Manage Users now live behind a single "Admin" hub
+    // sheet rather than three standalone always-visible buttons.
+    await openAdminPanelItem(page, 'AI Settings');
     await page.waitForSelector('text=AI Settings', { timeout: 10_000 });
     await page.waitForSelector('text=/Provider (reachable|unreachable)/', { timeout: 15_000 });
 
@@ -581,8 +605,7 @@ test.describe('admin surfaces', () => {
     const seeded = await seedUserWithChannel('auditadmin');
     await loginViaUi(page, seeded.username, seeded.password);
 
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("Audit Log")');
+    await openAdminPanelItem(page, 'Audit Log');
     await page.waitForSelector('text=Audit Log', { timeout: 10_000 });
     // Seeding is now a direct DB insert (FEATURE_REQUEST.md entry 1, slice 4
     // — self-service signup is closed) and produces no audit row of its
@@ -607,25 +630,26 @@ test.describe('workspace invite', () => {
     await loginViaUi(page, admin.username, admin.password);
     await page.click(`text=${admin.workspace.name}`);
 
-    // FEATURE_REQUEST.md's Apple HIG overhaul entry: Invite now lives behind
-    // the workspace row's own "•••" overflow menu (a pull-down button, in
-    // Apple's terms) rather than a standalone always-visible button.
-    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
-    await page.click('text=Invite member…');
+    // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: Invite
+    // now lives inside the workspace row's own WorkspaceSettingsSheet
+    // (opened via its "•••" overflow trigger) rather than a standalone
+    // always-visible button or a dropdown menu item.
+    await openWorkspaceSettings(page, admin.workspace.name);
     await pickPerson(page, 'Search people to invite', invitee.username, invitee.username);
     await page.click('button:has-text("Add")');
     await expect(page.locator(`text=Added ${invitee.username} to the workspace`)).toBeVisible({ timeout: 10_000 });
+    await page.click(`button[aria-label="Close ${admin.workspace.name} settings"]`);
 
-    // The sidebar's own admin-only invite control must not be visible to a
-    // plain member — verified by actually logging in as the invitee, not
+    // The sidebar's own admin-only settings control must not be visible to
+    // a plain member — verified by actually logging in as the invitee, not
     // just asserting on the admin's own screen. A plain member gets no
     // overflow trigger at all on a workspace they can't administer (the
-    // component never renders the Menu when workspaceMenuItems is empty).
+    // component never renders it when hasWorkspaceSettings is false).
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
     await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator(`button[aria-label="${admin.workspace.name} options"]`)).not.toBeVisible();
+    await expect(page.locator(`button[aria-label="${admin.workspace.name} settings"]`)).not.toBeVisible();
   });
 
   // FEATURE_REQUEST.md's "unified people picker" entry changed this failure
@@ -639,8 +663,7 @@ test.describe('workspace invite', () => {
     await loginViaUi(page, admin.username, admin.password);
     await page.click(`text=${admin.workspace.name}`);
 
-    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
-    await page.click('text=Invite member…');
+    await openWorkspaceSettings(page, admin.workspace.name);
     await page.fill('input[aria-label="Search people to invite"]', 'no-such-user-anywhere');
     await expect(page.locator('text=No matching people found.')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('button:has-text("Add")')).toBeDisabled();
@@ -670,8 +693,7 @@ test.describe('workspace invite', () => {
 
     await loginViaUi(page, admin.username, admin.password);
     await page.click(`text=${admin.workspace.name}`);
-    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
-    await page.click('text=Invite member…');
+    await openWorkspaceSettings(page, admin.workspace.name);
     // Query is the target's own full username — a prefix match for exactly
     // that account and nothing already on the unfiltered first page.
     await page.fill('input[aria-label="Search people to invite"]', target.username);
@@ -822,8 +844,8 @@ test.describe('channel details panel', () => {
       timeout: 10_000,
     });
 
-    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await page.click('text=Archive workspace');
+    await openWorkspaceSettings(page, owner.workspace.name);
+    await page.click('button:has-text("Archive workspace")');
     await confirmDialogAction(page, 'Archive Workspace', 'Archive');
     await expect(page.locator(`text=(archived — read only)`)).toBeVisible({ timeout: 10_000 });
 
@@ -1152,7 +1174,7 @@ test.describe('admin user management', () => {
   // the actor is promoted to system admin first, and account creation now
   // drives the new SystemAdminPanel. The created account has no workspace
   // tie yet (system-admin creation is workspace-agnostic), so it's added to
-  // the admin's workspace via the sidebar's existing "Invite member…" form
+  // the admin's workspace via the WorkspaceSettingsSheet's invite section
   // (direct-add of an existing user by username) before the rest of the
   // original flow — promote to manager, reset password, sign in as the
   // promoted account — continues unchanged through UserManagementPanel.
@@ -1163,8 +1185,7 @@ test.describe('admin user management', () => {
     await promoteToSystemAdmin(admin.userId);
     await loginViaUi(page, admin.username, admin.password);
 
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
 
     const newUsername = `mgmt_created_${Date.now()}`;
@@ -1180,14 +1201,13 @@ test.describe('admin user management', () => {
     await expect(page.locator(`td:has-text("${newUsername}")`).first()).toBeVisible({ timeout: 10_000 });
     await page.click('button[aria-label="Close system admin"]');
 
-    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
-    await page.click('text=Invite member…');
+    await openWorkspaceSettings(page, admin.workspace.name);
     await pickPerson(page, 'Search people to invite', newUsername, newUsername);
     await page.click('button:has-text("Add")');
     await expect(page.locator(`text=Added ${newUsername} to the workspace`)).toBeVisible({ timeout: 10_000 });
+    await page.click(`button[aria-label="Close ${admin.workspace.name} settings"]`);
 
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("Manage Users")');
+    await openAdminPanelItem(page, 'Manage Users');
     await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
     await expect(page.locator(`td:has-text("${newUsername}")`)).toBeVisible({ timeout: 10_000 });
 
@@ -1215,13 +1235,15 @@ test.describe('admin user management', () => {
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
     // The role promotion took effect: this account is now a MANAGER and
     // sees the same admin-only controls the original admin does — the
-    // "Admin Tools" trigger itself (canManageAi-gated via requireSystemPermission's
+    // "Admin" hub trigger itself (canManageAi-gated via requireSystemPermission's
     // OWNER/MANAGER-of-any-workspace fallback), not a bare button for each
-    // individual tool. It must not see "System Admin" though — that item is
+    // individual tool. It must not see "System Admin" though — that row is
     // gated on isSystemAdmin specifically, which this account never held.
-    await expect(page.locator('button:has-text("Admin Tools")')).toBeVisible({ timeout: 10_000 });
-    await page.click('button:has-text("Admin Tools")');
-    await expect(page.locator('[role="menuitem"]:has-text("System Admin")')).not.toBeVisible();
+    await expect(page.locator('button:has-text("Admin")')).toBeVisible({ timeout: 10_000 });
+    await page.click('button:has-text("Admin")');
+    const adminDialog = page.getByRole('dialog', { name: 'admin', exact: true });
+    await expect(adminDialog).toBeVisible({ timeout: 10_000 });
+    await expect(adminDialog.locator('button:has-text("System Admin")')).not.toBeVisible();
   });
 });
 
@@ -1233,11 +1255,12 @@ test.describe('workspace archive/unarchive', () => {
     await page.click('text=general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
-    // FEATURE_REQUEST.md's Apple HIG overhaul entry: Archive now lives
-    // behind the workspace row's own "•••" overflow menu, consolidated with
-    // Invite rather than sitting as a permanent inline pill.
-    await page.click(`button[aria-label="${seeded.workspace.name} options"]`);
-    await page.click('text=Archive workspace');
+    // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: Archive
+    // now lives inside the workspace row's own WorkspaceSettingsSheet,
+    // consolidated with Invite/Transfer/Visibility rather than sitting as a
+    // permanent inline pill or a flat dropdown-menu item.
+    await openWorkspaceSettings(page, seeded.workspace.name);
+    await page.click('button:has-text("Archive workspace")');
     await confirmDialogAction(page, 'Archive Workspace', 'Archive');
 
     await expect(page.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
@@ -1247,9 +1270,9 @@ test.describe('workspace archive/unarchive', () => {
     });
     await expect(page.locator('button:has-text("New channel")')).not.toBeVisible();
     // Archived rows render through a separate branch that never mounts the
-    // overflow Menu at all (no Invite/Archive applies to a read-only
+    // settings trigger at all (no Invite/Archive applies to a read-only
     // workspace) — a structural guarantee, not just a hidden button.
-    await expect(page.locator(`button[aria-label="${seeded.workspace.name} options"]`)).not.toBeVisible();
+    await expect(page.locator(`button[aria-label="${seeded.workspace.name} settings"]`)).not.toBeVisible();
 
     const archivedRow = page.locator('[role="button"]', { hasText: seeded.workspace.name });
     await archivedRow.locator('button:has-text("Unarchive")').click();
@@ -1266,34 +1289,38 @@ test.describe('workspace ownership transfer', () => {
     await inviteToWorkspace(owner.accessToken, owner.workspace.id, target.username);
 
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await page.click('text=Transfer ownership…');
+    const settingsDialog = await openWorkspaceSettings(page, owner.workspace.name);
     await pickPerson(page, 'Search workspace members for ownership transfer', target.username, target.username);
     await page.click('button:has-text("Transfer")');
     await confirmDialogAction(page, 'Transfer Ownership', 'Transfer');
-    await expect(page.locator(`text=Ownership transferred to ${target.username}`)).toBeVisible({ timeout: 10_000 });
+    // A successful transfer demotes the caller to Manager, which closes the
+    // whole settings sheet — the same "closes on success" pattern Archive
+    // uses — rather than leaving a doomed success message behind in a
+    // section that's about to lose its own OWNER-only permission gate.
+    await expect(settingsDialog).not.toBeVisible({ timeout: 10_000 });
 
-    // The old owner is now a MANAGER, not OWNER — Transfer ownership… no
-    // longer appears in their own overflow menu for this workspace.
-    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await expect(page.locator('text=Transfer ownership…')).not.toBeVisible();
+    // The old owner is now a MANAGER, not OWNER — the "Transfer ownership"
+    // section no longer appears in their own settings sheet for this
+    // workspace (WORKSPACE_TRANSFER_OWNERSHIP is OWNER-only).
+    await openWorkspaceSettings(page, owner.workspace.name);
+    await expect(page.locator('text=Transfer ownership')).not.toBeVisible();
   });
 });
 
 // New (FEATURE_REQUEST.md entry 1, slice 4).
 test.describe('workspace visibility change', () => {
-  test('the owner toggles visibility via the overflow menu label', async ({ page }) => {
+  test('the owner toggles visibility via the settings sheet', async ({ page }) => {
     const owner = await seedUserWithChannel('visibility');
     await loginViaUi(page, owner.username, owner.password);
 
-    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await expect(page.locator('text=Make listed')).toBeVisible({ timeout: 5_000 });
-    await page.click('text=Make listed');
+    await openWorkspaceSettings(page, owner.workspace.name);
+    await expect(page.locator('button:has-text("Make listed")')).toBeVisible({ timeout: 5_000 });
+    await page.click('button:has-text("Make listed")');
 
-    // The menu closes on selection (Menu.jsx's existing behavior) — reopen
-    // to confirm the label flipped, proving the change actually landed.
-    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await expect(page.locator('text=Make invite-only')).toBeVisible({ timeout: 10_000 });
+    // The sheet stays open across the change (unlike the old dropdown menu,
+    // which closed on selection) — the button's own label flipping in place
+    // proves the change landed, no need to close/reopen.
+    await expect(page.locator('button:has-text("Make invite-only")')).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -1317,17 +1344,15 @@ test.describe('managers_can_archive delegation', () => {
     });
 
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await expect(page.locator('[role="menuitemcheckbox"]:has-text("Managers can archive")')).toHaveAttribute(
-      'aria-checked',
-      'false',
-    );
-    await page.click('text=Managers can archive');
-    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await expect(page.locator('[role="menuitemcheckbox"]:has-text("Managers can archive")')).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    await openWorkspaceSettings(page, owner.workspace.name);
+    // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: this used
+    // to be a `role="menuitemcheckbox"` Menu item; it's a plain checkbox
+    // inside the settings sheet now.
+    const managersCanArchiveCheckbox = page.locator('label:has-text("Managers can archive") input[type="checkbox"]');
+    await expect(managersCanArchiveCheckbox).not.toBeChecked();
+    await page.click('label:has-text("Managers can archive")');
+    await expect(managersCanArchiveCheckbox).toBeChecked();
+    await page.click(`button[aria-label="Close ${owner.workspace.name} settings"]`);
     await page.click('button[aria-label="User menu"]');
     await page.click('[role="menuitem"]:has-text("Sign out")');
 
@@ -1335,8 +1360,8 @@ test.describe('managers_can_archive delegation', () => {
     // in the same context — avoids racing the owner's own session/cookies.
     const managerPage = await context.newPage();
     await loginViaUi(managerPage, manager.username, manager.password);
-    await managerPage.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await managerPage.click('text=Archive workspace');
+    await openWorkspaceSettings(managerPage, owner.workspace.name);
+    await managerPage.click('button:has-text("Archive workspace")');
     await confirmDialogAction(managerPage, 'Archive Workspace', 'Archive');
     await expect(managerPage.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
     await managerPage.close();
@@ -1351,8 +1376,7 @@ test.describe('workspace member removal', () => {
     await inviteToWorkspace(admin.accessToken, admin.workspace.id, member.username);
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("Manage Users")');
+    await openAdminPanelItem(page, 'Manage Users');
     await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
     await expect(page.locator(`td:has-text("${member.username}")`)).toBeVisible({ timeout: 10_000 });
 
@@ -1372,8 +1396,7 @@ test.describe('system admin: disable/enable accounts', () => {
     const target = await seedPlainUser('disableflowtarget');
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
 
     const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${target.username}")`) });
@@ -1393,8 +1416,7 @@ test.describe('system admin: disable/enable accounts', () => {
     await expect(page.locator('text=Invalid username or password')).toBeVisible({ timeout: 10_000 });
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
     await targetRow.locator('button:has-text("Enable")').click();
     await expect(targetRow.locator('button:has-text("Disable")')).toBeVisible({ timeout: 10_000 });
@@ -1420,8 +1442,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     const target = await seedPlainUser('privtarget');
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
 
     const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${target.username}")`) });
@@ -1437,8 +1458,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     await promoteToSystemAdmin(admin.userId);
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
 
     const selfRow = page.locator('tr', { has: page.locator(`td:has-text("${admin.username}")`) });
@@ -1450,8 +1470,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     await promoteToSystemAdmin(admin.userId);
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
 
     const newUsername = `resetflow_created_${Date.now()}`;
@@ -1485,8 +1504,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     const org = await createOrgApi(admin.accessToken, `Org Mgmt ${Date.now()}`);
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
 
     // Scoped by data-testid (stable across the row's own edit-mode toggle),
@@ -1514,8 +1532,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     const target = await seedPlainUser('orgmovetarget');
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("System Admin")');
+    await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
 
     const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${target.username}")`) });
@@ -1667,31 +1684,29 @@ test.describe('menus (Apple HIG overhaul: pull-down buttons + progressive disclo
     await expect(page.locator('text=Change Password').first()).toBeVisible({ timeout: 10_000 });
     await page.click('button[aria-label="Close change password"]');
 
-    await page.click('button:has-text("Admin Tools")');
-    await expect(page.locator('[role="menu"][aria-label="Admin tools"]')).toBeVisible({ timeout: 5_000 });
+    await page.click('button:has-text("Admin")');
+    const adminDialog = page.getByRole('dialog', { name: 'admin', exact: true });
+    await expect(adminDialog).toBeVisible({ timeout: 5_000 });
     await page.click('body', { position: { x: 5, y: 5 } });
-    await expect(page.locator('[role="menu"][aria-label="Admin tools"]')).not.toBeVisible();
+    await expect(adminDialog).not.toBeVisible();
   });
 
-  test('the Admin Tools menu opens the same three existing panels', async ({ page }) => {
+  test('the Admin hub opens the same three existing panels', async ({ page }) => {
     const seeded = await seedUserWithChannel('menuadmin');
     await loginViaUi(page, seeded.username, seeded.password);
 
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("AI Settings")');
+    await openAdminPanelItem(page, 'AI Settings');
     await expect(page.locator('text=Configure the local LLM provider')).toBeVisible({ timeout: 10_000 });
     await page.click('button[aria-label="Close AI settings"]');
 
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("Audit Log")');
+    await openAdminPanelItem(page, 'Audit Log');
     // Seeding is now a direct DB insert and produces no audit row of its own
     // (FEATURE_REQUEST.md entry 1, slice 4) — the workspace creation in
     // seedUserWithChannel still goes over the real API.
     await expect(page.locator('text=WORKSPACE_CREATED').first()).toBeVisible({ timeout: 10_000 });
     await page.click('button[aria-label="Close audit log"]');
 
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("Manage Users")');
+    await openAdminPanelItem(page, 'Manage Users');
     await expect(page.locator('text=Manage Users').first()).toBeVisible({ timeout: 10_000 });
   });
 });
@@ -1927,8 +1942,9 @@ test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
     // whose role GET /organizations reports as null for a system admin.
     await page.click(`button:has-text("${defaultOrg.name}")`);
     await page.click(`[role="menuitemcheckbox"]:has-text("${org.name}")`);
-    await page.click(`button:has-text("${org.name}")`);
-    await page.click('[role="menuitem"]:has-text("Manage organization members…")');
+    // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: this item
+    // moved out of the org switcher and into the Admin hub.
+    await openAdminPanelItem(page, 'Manage Organization');
     await page.waitForSelector('text=Manage Organization', { timeout: 10_000 });
 
     // Add-by-username, then role change, then remove.
@@ -1963,15 +1979,14 @@ test.describe('workspace token invitations (FEATURE_REQUEST.md entry 1, slice 3)
     const admin = await seedUserWithChannel('wsinvitelink');
     await loginViaUi(page, admin.username, admin.password);
 
-    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
-    await page.click('text=Create invite link…');
+    await openWorkspaceSettings(page, admin.workspace.name);
     const email = `wsinvitelink_${Date.now()}@example.com`;
     await page.fill('input[placeholder="Email to invite"]', email);
     await page.click('button:has-text("Create link")');
     await expect(page.locator('button:has-text("Copy")').first()).toBeVisible({ timeout: 10_000 });
+    await page.click(`button[aria-label="Close ${admin.workspace.name} settings"]`);
 
-    await page.click('button:has-text("Admin Tools")');
-    await page.click('[role="menuitem"]:has-text("Manage Users")');
+    await openAdminPanelItem(page, 'Manage Users');
     await page.waitForSelector('text=Manage Users', { timeout: 10_000 });
 
     const invitationRow = page.locator('tr', { hasText: email });

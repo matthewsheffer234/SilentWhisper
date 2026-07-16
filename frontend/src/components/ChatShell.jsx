@@ -4,7 +4,7 @@ import { createSocket } from '../ws/socket.js';
 import * as workspacesApi from '../api/workspaces.js';
 import * as organizationsApi from '../api/organizations.js';
 import * as notificationsApi from '../api/notifications.js';
-import { PERMISSIONS, hasSystemPermission } from '../authz/permissions.js';
+import { PERMISSIONS, hasSystemPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
@@ -16,6 +16,7 @@ import BrowseWorkspacesPanel from './BrowseWorkspacesPanel.jsx';
 import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import OrgManagementPanel from './OrgManagementPanel.jsx';
 import SystemAdminPanel from './SystemAdminPanel.jsx';
+import AdminPanel from './AdminPanel.jsx';
 import NotificationPanel from './NotificationPanel.jsx';
 import ChannelDetailsPanel from './ChannelDetailsPanel.jsx';
 import CreateWorkspaceSheet from './CreateWorkspaceSheet.jsx';
@@ -84,6 +85,7 @@ export default function ChatShell() {
   const [createOrgOpen, setCreateOrgOpen] = useState(false);
   const [orgManagementOpen, setOrgManagementOpen] = useState(false);
   const [systemAdminOpen, setSystemAdminOpen] = useState(false);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -443,6 +445,11 @@ export default function ChatShell() {
   // point mirrors that same rule rather than the currently-selected
   // workspace's role.
   const canManageAi = hasSystemPermission(user?.isSystemAdmin, workspaces, PERMISSIONS.AI_SETTINGS_MANAGE);
+  // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: the Admin
+  // hub's "Manage Organization" row is worth showing if the caller manages
+  // *any* organization, not just the currently-selected one (OrgManagementPanel
+  // itself already has its own manageable-org selector once opened).
+  const canManageOrg = organizations.some((org) => hasOrgManagementAccess(user?.isSystemAdmin, org.role));
   const isSelectedWorkspaceArchived = Boolean(workspaces.find((ws) => ws.id === selectedWorkspaceId)?.archivedAt);
   const selectedWorkspaceName = workspaces.find((ws) => ws.id === selectedWorkspaceId)?.name ?? null;
   // Same gate WorkspaceSidebar's own "Invite to channel…" overflow item uses
@@ -468,13 +475,10 @@ export default function ChatShell() {
         onInviteToChannel={handleInviteToChannel}
         onLogout={logout}
         canManageAi={canManageAi}
-        onOpenAiSettings={() => setAiSettingsOpen(true)}
-        onOpenAuditLog={() => setAuditLogOpen(true)}
         onNavigateToSearchResult={handleNavigateToSearchResult}
         onInviteMember={handleInviteMember}
         onCreateInviteLink={handleCreateInviteLink}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
-        onOpenUserManagement={() => setUserManagementOpen(true)}
         onArchiveWorkspace={handleArchiveWorkspace}
         onUnarchiveWorkspace={handleUnarchiveWorkspace}
         onOpenBrowseWorkspaces={() => setBrowseWorkspacesOpen(true)}
@@ -483,8 +487,7 @@ export default function ChatShell() {
         onSelectOrganization={setSelectedOrganizationId}
         isSystemAdmin={Boolean(user?.isSystemAdmin)}
         onOpenCreateOrganization={() => setCreateOrgOpen(true)}
-        onOpenOrgManagement={() => setOrgManagementOpen(true)}
-        onOpenSystemAdmin={() => setSystemAdminOpen(true)}
+        onOpenAdminPanel={() => setAdminPanelOpen(true)}
         onTransferOwnership={handleTransferOwnership}
         onChangeVisibility={handleChangeVisibility}
         onToggleManagersCanArchive={handleToggleManagersCanArchive}
@@ -577,6 +580,19 @@ export default function ChatShell() {
         />
       )}
       {systemAdminOpen && <SystemAdminPanel onClose={() => setSystemAdminOpen(false)} />}
+      {adminPanelOpen && (
+        <AdminPanel
+          onClose={() => setAdminPanelOpen(false)}
+          canManageAi={canManageAi}
+          canManageOrg={canManageOrg}
+          isSystemAdmin={Boolean(user?.isSystemAdmin)}
+          onOpenUserManagement={() => setUserManagementOpen(true)}
+          onOpenAiSettings={() => setAiSettingsOpen(true)}
+          onOpenAuditLog={() => setAuditLogOpen(true)}
+          onOpenOrgManagement={() => setOrgManagementOpen(true)}
+          onOpenSystemAdmin={() => setSystemAdminOpen(true)}
+        />
+      )}
       {notificationsOpen && (
         <NotificationPanel
           onClose={() => setNotificationsOpen(false)}
