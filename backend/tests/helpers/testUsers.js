@@ -15,22 +15,27 @@ const TEST_PASSWORD_HASH = bcrypt.hashSync(TEST_PASSWORD, 4);
 // drops the `app` first argument, so most of the ~276 existing call sites
 // need only `signup(app, ` -> `signup(`. Same
 // {userId, username, accessToken} return shape as before.
-export async function signup(username, { email, organizationId } = {}) {
+export async function signup(username, { email, organizationId, displayName } = {}) {
   return db.transaction(async (trx) => {
     const [user] = await trx('users')
       .insert({
         username,
         email: email ?? `${username}@example.com`,
         password_hash: TEST_PASSWORD_HASH,
-        display_name: username,
+        // Defaults to username, matching every real account-creation path's
+        // own backfill convention (admin.js, invitations.js) — tests that
+        // need to prove displayName is rendered distinctly from username
+        // pass an explicit override.
+        display_name: displayName ?? username,
       })
-      .returning(['id', 'username']);
+      .returning(['id', 'username', 'display_name']);
     const orgId = organizationId ?? (await trx('organizations').orderBy('created_at', 'asc').first('id')).id;
     await trx('organization_members').insert({ organization_id: orgId, user_id: user.id, org_role: 'ORG_MEMBER' });
     return {
       userId: user.id,
       username: user.username,
-      accessToken: signAccessToken({ userId: user.id, username: user.username }),
+      displayName: user.display_name,
+      accessToken: signAccessToken({ userId: user.id, username: user.username, displayName: user.display_name }),
     };
   });
 }

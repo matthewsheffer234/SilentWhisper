@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
+import Sheet from './Sheet.jsx';
 import {
   createAdminUser,
   listAdminUsers,
@@ -33,42 +34,6 @@ import { useAuth } from '../context/AuthContext.jsx';
 // enforcement boundary, same as every other admin panel in this app.
 
 const styles = {
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.35)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 50,
-  },
-  panel: {
-    width: 760,
-    maxWidth: '94vw',
-    maxHeight: '86vh',
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--surface)',
-    borderRadius: 14,
-    boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
-    padding: '20px 24px',
-    overflowY: 'auto',
-  },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  title: { fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-1)' },
-  closeButton: {
-    minWidth: 44,
-    minHeight: 44,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'none',
-    border: 'none',
-    color: 'var(--text-3)',
-    cursor: 'pointer',
-    fontSize: 'var(--text-lg)',
-  },
-  subtitle: { fontSize: 'var(--text-sm)', color: 'var(--text-3)', marginBottom: 16 },
   field: { marginBottom: 14 },
   label: {
     display: 'block',
@@ -113,6 +78,7 @@ const styles = {
     textTransform: 'uppercase',
   },
   td: { padding: '6px 8px', borderTop: '1px solid var(--border)', color: 'var(--text-1)', verticalAlign: 'middle' },
+  secondaryUsername: { color: 'var(--text-3)', fontSize: 'var(--text-xs)', marginLeft: 6 },
   rowButton: {
     minHeight: 36,
     padding: '0 10px',
@@ -563,17 +529,14 @@ export default function SystemAdminPanel({ onClose }) {
   }
 
   return (
-    <div style={styles.backdrop} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.header}>
-          <span style={styles.title}>System Admin</span>
-          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close system admin">×</button>
-        </div>
-        <div style={styles.subtitle}>
-          Create accounts, adjust privileges, reset passwords, manage organization membership, and review every workspace
-          across every organization.
-        </div>
-
+    <Sheet
+      title="System Admin"
+      ariaLabel="system admin"
+      subtitle="Create accounts, adjust privileges, reset passwords, manage organization membership, and review every workspace across every organization."
+      onClose={onClose}
+      width={760}
+      maxHeight="86vh"
+    >
         <div style={styles.sectionTitle}>Create account</div>
         <CreateAccountForm organizations={organizations} onSubmit={handleCreateAccount} />
 
@@ -587,7 +550,7 @@ export default function SystemAdminPanel({ onClose }) {
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Username</th>
+                <th style={styles.th}>Member</th>
                 <th style={styles.th}>Email</th>
                 <th style={styles.th}>Status</th>
                 <th style={styles.th}>System admin</th>
@@ -600,7 +563,12 @@ export default function SystemAdminPanel({ onClose }) {
                 return (
                   <Fragment key={a.userId}>
                     <tr>
-                      <td style={styles.td}>{a.username}</td>
+                      <td style={styles.td}>
+                        {a.displayName || a.username}
+                        {a.displayName && a.displayName !== a.username && (
+                          <span style={styles.secondaryUsername}>@{a.username}</span>
+                        )}
+                      </td>
                       <td style={styles.td}>{a.email}</td>
                       <td style={styles.td}>
                         <span style={{ ...styles.statusBadge, color: a.status === 'DISABLED' ? '#c0392b' : 'var(--brg)' }}>
@@ -704,7 +672,7 @@ export default function SystemAdminPanel({ onClose }) {
               {allWorkspaces.map((ws) => (
                 <tr key={ws.id}>
                   <td style={styles.td}>{ws.name}</td>
-                  <td style={styles.td}>{ws.ownerUsername}</td>
+                  <td style={styles.td}>{ws.ownerDisplayName || ws.ownerUsername}</td>
                   <td style={styles.td}>{ws.organizationName}</td>
                   <td style={styles.td}>{ws.visibility}</td>
                   <td style={styles.td}>{ws.archivedAt ? 'Yes' : ''}</td>
@@ -713,7 +681,6 @@ export default function SystemAdminPanel({ onClose }) {
             </tbody>
           </table>
         )}
-      </div>
-    </div>
+    </Sheet>
   );
 }

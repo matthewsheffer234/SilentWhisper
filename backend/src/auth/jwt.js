@@ -2,8 +2,8 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
 import { UnauthorizedError } from '../errors.js';
 
-export function signAccessToken({ userId, username }) {
-  return jwt.sign({ sub: userId, username }, config.auth.jwtSecret, {
+export function signAccessToken({ userId, username, displayName }) {
+  return jwt.sign({ sub: userId, username, displayName }, config.auth.jwtSecret, {
     expiresIn: config.auth.accessTokenTtl,
     keyid: config.auth.jwtKeyId,
   });
@@ -26,5 +26,10 @@ export function verifyAccessToken(token) {
   if (decoded.header.kid !== config.auth.jwtKeyId) {
     throw new UnauthorizedError('Invalid or expired access token');
   }
-  return { userId: decoded.payload.sub, username: decoded.payload.username, exp: decoded.payload.exp };
+  return {
+    userId: decoded.payload.sub,
+    username: decoded.payload.username,
+    displayName: decoded.payload.displayName,
+    exp: decoded.payload.exp,
+  };
 }

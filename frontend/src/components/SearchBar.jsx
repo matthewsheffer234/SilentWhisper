@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Search, X } from 'lucide-react';
 import { searchSemantic } from '../api/search.js';
 
 // FEATURE_REQUEST.md's Apple HIG UI/UX overhaul entry: replaces the
@@ -22,7 +23,15 @@ const RESULT_LIMIT = 8;
 const styles = {
   wrap: { position: 'relative', padding: '10px 14px', borderBottom: '1px solid var(--border)' },
   fieldWrap: { position: 'relative', display: 'flex', alignItems: 'center' },
-  icon: { position: 'absolute', left: 10, color: 'var(--text-3)', fontSize: 'var(--text-sm)', pointerEvents: 'none' },
+  icon: {
+    position: 'absolute',
+    left: 10,
+    top: '50%',
+    transform: 'translateY(-50%)',
+    display: 'flex',
+    color: 'var(--text-3)',
+    pointerEvents: 'none',
+  },
   input: {
     width: '100%',
     minHeight: 40,
@@ -229,7 +238,9 @@ export default function SearchBar({ onNavigate }) {
   return (
     <div style={styles.wrap} ref={wrapRef}>
       <div style={styles.fieldWrap}>
-        <span style={styles.icon} aria-hidden="true">🔍</span>
+        <span style={styles.icon} aria-hidden="true">
+          <Search size={16} />
+        </span>
         <input
           ref={inputRef}
           style={styles.input}
@@ -244,7 +255,9 @@ export default function SearchBar({ onNavigate }) {
           aria-haspopup="listbox"
         />
         {query.length > 0 && (
-          <button type="button" style={styles.clearButton} onClick={handleClear} aria-label="Clear search">✕</button>
+          <button type="button" style={styles.clearButton} onClick={handleClear} aria-label="Clear search">
+            <X size={14} aria-hidden="true" />
+          </button>
         )}
       </div>
 
@@ -285,12 +298,14 @@ export default function SearchBar({ onNavigate }) {
                 onClick={() => handleNavigate(hit)}
               >
                 <div style={styles.resultHead}>
-                  <span style={styles.resultChannel}>{hit.channelName} · {hit.username}</span>
+                  <span style={styles.resultChannel}>{hit.channelName} · {hit.displayName || hit.username}</span>
                   <span style={styles.resultMeta}>{new Date(hit.createdAt).toLocaleDateString()}</span>
                 </div>
                 <div style={styles.resultExcerpt}>{hit.excerpt}</div>
                 {hit.parentMessage && (
-                  <div style={styles.resultThreadNote}>Reply to {hit.parentMessage.username}: "{hit.parentMessage.content}"</div>
+                  <div style={styles.resultThreadNote}>
+                    Reply to {hit.parentMessage.displayName || hit.parentMessage.username}: "{hit.parentMessage.content}"
+                  </div>
                 )}
               </div>
             ))}

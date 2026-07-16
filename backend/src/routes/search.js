@@ -72,11 +72,13 @@ searchRouter.post('/search/semantic', semanticSearchRateLimiter, async (req, res
         'c.name as channelName',
         'c.type as channelType',
         'u.username',
+        'u.display_name as displayName',
         'm.content as content',
         'm.created_at as createdAt',
         'pm.id as parentId',
         'pm.content as parentContent',
         'pu.username as parentUsername',
+        'pu.display_name as parentDisplayName',
         db.raw('1 - (me.embedding <=> ?::vector) as similarity', [vectorLiteral]),
       )
       .orderByRaw('me.embedding <=> ?::vector', [vectorLiteral])
@@ -97,10 +99,13 @@ searchRouter.post('/search/semantic', semanticSearchRateLimiter, async (req, res
       channelName: r.channelName,
       channelType: r.channelType,
       username: r.username,
+      displayName: r.displayName,
       excerpt: excerpt(r.content),
       createdAt: r.createdAt,
       similarity: Number(r.similarity),
-      parentMessage: r.parentId ? { id: r.parentId, username: r.parentUsername, content: r.parentContent } : null,
+      parentMessage: r.parentId
+        ? { id: r.parentId, username: r.parentUsername, displayName: r.parentDisplayName, content: r.parentContent }
+        : null,
     }));
 
     // AI-operation audit convention (Section 3): log query length and result

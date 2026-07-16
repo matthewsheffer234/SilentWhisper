@@ -200,7 +200,11 @@ describe('POST /api/search/semantic results', () => {
 
     expect(res.status).toBe(200);
     const hit = res.body.results.find((r) => r.messageId === replyId);
-    expect(hit.parentMessage).toMatchObject({ id: rootId, username: 'searchthread0' });
+    // displayName rides alongside username on both the hit itself and its
+    // parentMessage (FEATURE_REQUEST.md's "display names as the primary
+    // identity" entry).
+    expect(hit).toMatchObject({ displayName: 'searchthread0' });
+    expect(hit.parentMessage).toMatchObject({ id: rootId, username: 'searchthread0', displayName: 'searchthread0' });
   });
 
   test('audits the search with query length and result count, never the raw query text', async () => {

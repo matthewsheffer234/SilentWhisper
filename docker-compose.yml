@@ -166,7 +166,16 @@ services:
       VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8101/ws}
     ports:
       - "127.0.0.1:3101:3000"
-    mem_limit: 128m
+    # Bumped from 128m (FEATURE_REQUEST.md's local icon system entry,
+    # 2026-07-16): adding lucide-react pushed Vite's dev-server dependency
+    # pre-bundling step (esbuild scanning the whole package on cold start)
+    # over the old limit, OOM-killing the container outright — confirmed via
+    # `docker inspect`'s OOMKilled flag, not guessed. 256m still OOM-killed
+    # it; measured actual cold-start usage at ~244MiB via a one-off
+    # `docker run -m 512m`, so 512m is real headroom, not a guess. Same class
+    # of bump as Postgres's mem_limit increase when it moved to
+    # pgvector/pgvector:pg16.
+    mem_limit: 512m
     networks:
       - default
       - wireservice_default

@@ -171,7 +171,10 @@ describe('mention delivery (integration)', () => {
     const mention = await mentionPromise;
     expect(mention.channelId).toBe(channelId);
     expect(mention.mentionedBy).toBe('mentrest0');
+    // FEATURE_REQUEST.md's "display names as the primary identity" entry.
+    expect(mention.mentionedByDisplayName).toBe('mentrest0');
     expect(mention.message.content).toContain('@mentrestmember0');
+    expect(mention.message.displayName).toBe('mentrest0');
   });
 
   test('mentioning a channel member over WS delivers a mention frame', async () => {

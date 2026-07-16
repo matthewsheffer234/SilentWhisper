@@ -2,8 +2,17 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, ASSIGNABLE_ORG_ROLES } from '../validation.js';
-import { invitationCreateLimiter } from '../auth/rateLimit.js';
+import {
+  assertUuid,
+  assertName,
+  assertUsername,
+  assertEmail,
+  assertEnum,
+  assertBoundedInt,
+  MAX_USERNAME_LENGTH,
+  ASSIGNABLE_ORG_ROLES,
+} from '../validation.js';
+import { invitationCreateLimiter, memberSearchLimiter } from '../auth/rateLimit.js';
 import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
 import { requireOrgPermission, requireOrgNotArchived, isSystemAdminUser } from '../authz/membershipService.js';
 import { PERMISSIONS } from '../authz/permissions.js';
@@ -181,10 +190,63 @@ organizationsRouter.get('/:orgId/members', async (req, res, next) => {
     const rows = await db('organization_members as om')
       .join('users', 'users.id', 'om.user_id')
       .where('om.organization_id', orgId)
-      .select('users.id', 'users.username', 'om.org_role')
+      .select('users.id', 'users.username', 'users.display_name', 'om.org_role')
       .orderBy('users.username', 'asc');
 
-    res.json(rows.map((r) => ({ userId: r.id, username: r.username, role: r.org_role })));
+    res.json(
+      rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name, role: r.org_role })),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md's "unified people picker" entry. Same shape and
+// reasoning as workspaces.js's GET /:workspaceId/people-search — candidate
+// pool is every existing user account system-wide, matching POST
+// /:orgId/members's own lookup exactly, gated identically
+// (ORG_MANAGE_MEMBERS) since this reveals matching accounts by email.
+organizationsRouter.get('/:orgId/people-search', memberSearchLimiter, async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+
+    const limit =
+      req.query.limit !== undefined ? assertBoundedInt(req.query.limit, { min: 1, max: 20 }, 'limit') : 8;
+    let q = '';
+    if (req.query.q !== undefined) {
+      q = String(req.query.q);
+      if (q.length > MAX_USERNAME_LENGTH) {
+        throw new ValidationError(`q must be at most ${MAX_USERNAME_LENGTH} characters`);
+      }
+    }
+
+    let query = db('users').leftJoin('organization_members as om', function joinMembership() {
+      this.on('om.user_id', '=', 'users.id').andOnVal('om.organization_id', '=', orgId);
+    });
+    if (q) {
+      query = query.andWhere((builder) => {
+        builder
+          .orWhere('users.username', 'ilike', `${q}%`)
+          .orWhere('users.display_name', 'ilike', `${q}%`)
+          .orWhere('users.email', 'ilike', `${q}%`);
+      });
+    }
+
+    const rows = await query
+      .orderBy('users.username', 'asc')
+      .limit(limit)
+      .select('users.id', 'users.username', 'users.display_name', 'users.email', 'om.user_id as memberUserId');
+
+    res.json(
+      rows.map((r) => ({
+        userId: r.id,
+        username: r.username,
+        displayName: r.display_name,
+        email: r.email,
+        alreadyMember: r.memberUserId != null,
+      })),
+    );
   } catch (err) {
     next(err);
   }
@@ -370,7 +432,14 @@ organizationsRouter.get('/:orgId/invitations', async (req, res, next) => {
       .join('users as u', 'u.id', 'i.invited_by')
       .where({ 'i.scope_type': 'ORGANIZATION', 'i.organization_id': orgId, 'i.status': 'PENDING' })
       .andWhere('i.expires_at', '>', new Date())
-      .select('i.id', 'i.email', 'i.invited_role', 'i.expires_at', 'u.username as invited_by_username')
+      .select(
+        'i.id',
+        'i.email',
+        'i.invited_role',
+        'i.expires_at',
+        'u.username as invited_by_username',
+        'u.display_name as invited_by_display_name',
+      )
       .orderBy('i.created_at', 'desc');
 
     res.json(
@@ -380,6 +449,7 @@ organizationsRouter.get('/:orgId/invitations', async (req, res, next) => {
         invitedRole: r.invited_role,
         expiresAt: r.expires_at,
         invitedByUsername: r.invited_by_username,
+        invitedByDisplayName: r.invited_by_display_name,
       })),
     );
   } catch (err) {

@@ -1,45 +1,15 @@
 import { useState } from 'react';
+import Sheet from './Sheet.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 
 // FEATURE_REQUEST.md: self-service password change — previously the only
-// way to change any account's password was a direct database update. Same
-// modal shape as AiSettingsPanel/AuditDashboard (backdrop/panel/header/
-// title/44px closeButton/subtitle), reachable from every user's own
-// "Change Password" control (WorkspaceSidebar), not admin-gated.
+// way to change any account's password was a direct database update. Uses
+// the shared Sheet primitive (FEATURE_REQUEST.md's "standard modal/sheet
+// component" entry) for its backdrop/panel/header/close/focus/Escape
+// behavior, reachable from every user's own "Change Password" control
+// (WorkspaceSidebar), not admin-gated.
 
 const styles = {
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.35)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 50,
-  },
-  panel: {
-    width: 380,
-    maxWidth: '92vw',
-    background: 'var(--surface)',
-    borderRadius: 14,
-    boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
-    padding: '20px 24px',
-  },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  title: { fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-1)' },
-  closeButton: {
-    minWidth: 44,
-    minHeight: 44,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'none',
-    border: 'none',
-    color: 'var(--text-3)',
-    cursor: 'pointer',
-    fontSize: 'var(--text-lg)',
-  },
-  subtitle: { fontSize: 'var(--text-sm)', color: 'var(--text-3)', marginBottom: 16 },
   field: { marginBottom: 14 },
   label: {
     display: 'block',
@@ -101,48 +71,47 @@ export default function ChangePasswordPanel({ onClose }) {
   }
 
   return (
-    <div style={styles.backdrop} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.header}>
-          <span style={styles.title}>Change Password</span>
-          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close change password">×</button>
+    <Sheet
+      title="Change Password"
+      ariaLabel="change password"
+      subtitle="Update the password for your own account."
+      onClose={onClose}
+      width={380}
+      isDirty={Boolean(currentPassword || newPassword)}
+    >
+      {error && <div style={styles.error}>{error}</div>}
+
+      <form onSubmit={handleSubmit}>
+        <div style={styles.field}>
+          <label style={styles.label} htmlFor="current-password">Current password</label>
+          <input
+            id="current-password"
+            type="password"
+            autoComplete="current-password"
+            style={styles.input}
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            required
+          />
         </div>
-        <div style={styles.subtitle}>Update the password for your own account.</div>
+        <div style={styles.field}>
+          <label style={styles.label} htmlFor="new-password">New password</label>
+          <input
+            id="new-password"
+            type="password"
+            autoComplete="new-password"
+            style={styles.input}
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            required
+          />
+        </div>
 
-        {error && <div style={styles.error}>{error}</div>}
-
-        <form onSubmit={handleSubmit}>
-          <div style={styles.field}>
-            <label style={styles.label} htmlFor="current-password">Current password</label>
-            <input
-              id="current-password"
-              type="password"
-              autoComplete="current-password"
-              style={styles.input}
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              required
-            />
-          </div>
-          <div style={styles.field}>
-            <label style={styles.label} htmlFor="new-password">New password</label>
-            <input
-              id="new-password"
-              type="password"
-              autoComplete="new-password"
-              style={styles.input}
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              required
-            />
-          </div>
-
-          <button type="submit" style={styles.saveButton} disabled={saving}>
-            {saving ? 'Saving…' : 'Change password'}
-          </button>
-          {saved && <span style={styles.saved}>Saved</span>}
-        </form>
-      </div>
-    </div>
+        <button type="submit" style={styles.saveButton} disabled={saving}>
+          {saving ? 'Saving…' : 'Change password'}
+        </button>
+        {saved && <span style={styles.saved}>Saved</span>}
+      </form>
+    </Sheet>
   );
 }

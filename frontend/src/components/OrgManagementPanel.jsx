@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import Sheet from './Sheet.jsx';
+import PeoplePicker from './PeoplePicker.jsx';
 import {
   listOrgMembers,
   changeOrgMemberRole,
@@ -6,6 +8,7 @@ import {
   addOrgMember,
   createOrgInvitation,
   listOrgInvitations,
+  searchOrgPeople,
 } from '../api/organizations.js';
 import { revokeInvitation } from '../api/invitations.js';
 import { hasOrgManagementAccess } from '../authz/permissions.js';
@@ -20,42 +23,6 @@ import { hasOrgManagementAccess } from '../authz/permissions.js';
 // enforcement boundary, same as UserManagementPanel already documents.
 
 const styles = {
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.35)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 50,
-  },
-  panel: {
-    width: 640,
-    maxWidth: '94vw',
-    maxHeight: '86vh',
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--surface)',
-    borderRadius: 14,
-    boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
-    padding: '20px 24px',
-    overflowY: 'auto',
-  },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  title: { fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-1)' },
-  closeButton: {
-    minWidth: 44,
-    minHeight: 44,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'none',
-    border: 'none',
-    color: 'var(--text-3)',
-    cursor: 'pointer',
-    fontSize: 'var(--text-lg)',
-  },
-  subtitle: { fontSize: 'var(--text-sm)', color: 'var(--text-3)', marginBottom: 16 },
   field: { marginBottom: 14 },
   label: {
     display: 'block',
@@ -100,6 +67,7 @@ const styles = {
     textTransform: 'uppercase',
   },
   td: { padding: '6px 8px', borderTop: '1px solid var(--border)', color: 'var(--text-1)', verticalAlign: 'middle' },
+  secondaryUsername: { color: 'var(--text-3)', fontSize: 'var(--text-xs)', marginLeft: 6 },
   rowSelect: {
     minHeight: 36,
     borderRadius: 6,
@@ -134,20 +102,22 @@ const styles = {
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '8px 0' },
 };
 
-function AddMemberForm({ onSubmit }) {
-  const [username, setUsername] = useState('');
+// FEATURE_REQUEST.md's "unified people picker" entry replaced the raw
+// exact-username input with PeoplePicker, matching
+// UserManagementPanel/WorkspaceSidebar's equivalent forms.
+function AddMemberForm({ onSubmit, orgId }) {
+  const [person, setPerson] = useState(null);
   const [role, setRole] = useState('ORG_MEMBER');
   const [status, setStatus] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmed = username.trim();
-    if (!trimmed) return;
+    if (!person) return;
     setStatus(null);
     try {
-      await onSubmit(trimmed, role);
-      setStatus({ type: 'success', message: `Added ${trimmed} to the organization` });
-      setUsername('');
+      await onSubmit(person.username, role);
+      setStatus({ type: 'success', message: `Added ${person.displayName || person.username} to the organization` });
+      setPerson(null);
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to add member' });
     }
@@ -157,8 +127,18 @@ function AddMemberForm({ onSubmit }) {
     <form onSubmit={handleSubmit}>
       <div style={styles.row}>
         <div style={{ ...styles.field, flex: 1 }}>
-          <label style={styles.label} htmlFor="org-add-username">Username</label>
-          <input id="org-add-username" style={styles.input} value={username} onChange={(e) => setUsername(e.target.value)} required />
+          {/* PeoplePicker's input carries its own aria-label (below) — this
+              is purely a visual heading, not a <label htmlFor> association,
+              since PeoplePicker owns its own input id/aria wiring. */}
+          <span style={styles.label}>Person</span>
+          <PeoplePicker
+            searchFn={(q) => searchOrgPeople(orgId, q)}
+            value={person}
+            onChange={setPerson}
+            placeholder="Search people to add"
+            ariaLabel="Search people to add to organization"
+            isIneligible={(p) => (p.alreadyMember ? 'Already a member' : null)}
+          />
         </div>
         <div style={{ ...styles.field, flex: 1 }}>
           <label style={styles.label} htmlFor="org-add-role">Role</label>
@@ -168,7 +148,7 @@ function AddMemberForm({ onSubmit }) {
           </select>
         </div>
       </div>
-      <button type="submit" style={styles.submitButton}>Add member</button>
+      <button type="submit" style={styles.submitButton} disabled={!person}>Add member</button>
       {status && (
         <div style={{ marginTop: 8, fontSize: 'var(--text-sm)', color: status.type === 'error' ? '#c0392b' : 'var(--brg)' }}>
           {status.message}
@@ -304,14 +284,14 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
   }
 
   return (
-    <div style={styles.backdrop} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.header}>
-          <span style={styles.title}>Manage Organization</span>
-          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close manage organization">×</button>
-        </div>
-        <div style={styles.subtitle}>Assign roles, add members, and manage invitations for an organization you administer.</div>
-
+    <Sheet
+      title="Manage Organization"
+      ariaLabel="manage organization"
+      subtitle="Assign roles, add members, and manage invitations for an organization you administer."
+      onClose={onClose}
+      width={640}
+      maxHeight="86vh"
+    >
         <div style={styles.field}>
           <label style={styles.label} htmlFor="manage-org-select">Organization</label>
           <select
@@ -337,7 +317,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Username</th>
+                <th style={styles.th}>Member</th>
                 <th style={styles.th}>Role</th>
                 <th style={styles.th}></th>
               </tr>
@@ -345,7 +325,12 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
             <tbody>
               {members.map((m) => (
                 <tr key={m.userId}>
-                  <td style={styles.td}>{m.username}</td>
+                  <td style={styles.td}>
+                    {m.displayName || m.username}
+                    {m.displayName && m.displayName !== m.username && (
+                      <span style={styles.secondaryUsername}>@{m.username}</span>
+                    )}
+                  </td>
                   <td style={styles.td}>
                     <select
                       style={styles.rowSelect}
@@ -369,7 +354,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
         )}
 
         <div style={styles.sectionTitle}>Add an existing member</div>
-        <AddMemberForm onSubmit={handleAddMember} />
+        <AddMemberForm orgId={selectedOrgId} onSubmit={handleAddMember} />
 
         <div style={styles.sectionTitle}>Create invitation</div>
         <CreateInvitationForm onSubmit={handleCreateInvitation} />
@@ -401,7 +386,6 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
             </tbody>
           </table>
         )}
-      </div>
-    </div>
+    </Sheet>
   );
 }

@@ -21,3 +21,11 @@ export const unarchiveOrganization = (orgId) => apiFetch(`/organizations/${orgId
 export const createOrgInvitation = (orgId, email, role) =>
   apiFetch(`/organizations/${orgId}/invitations`, { method: 'POST', body: { email, role } });
 export const listOrgInvitations = (orgId) => apiFetch(`/organizations/${orgId}/invitations`);
+
+// FEATURE_REQUEST.md's "unified people picker" entry.
+export const searchOrgPeople = (orgId, query) => {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  const qs = params.toString();
+  return apiFetch(`/organizations/${orgId}/people-search${qs ? `?${qs}` : ''}`);
+};

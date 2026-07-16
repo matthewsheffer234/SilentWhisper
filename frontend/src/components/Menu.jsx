@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Check } from 'lucide-react';
 
 // FEATURE_REQUEST.md's Apple HIG UI/UX overhaul entry: a reusable pull-down-
 // button-style menu (Apple's actual term for "a button that reveals a menu
@@ -23,7 +24,18 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
 
   function openMenu() {
     const rect = triggerRef.current.getBoundingClientRect();
-    setPosition({ top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - 220) });
+    const top = rect.bottom + 4;
+    setPosition({
+      top,
+      left: Math.min(rect.left, window.innerWidth - 220),
+      // A long item list (many workspaces/organizations) can render taller
+      // than the remaining viewport below the trigger — `top` varies per
+      // trigger position, so this is computed here rather than as a static
+      // CSS value, with its own scroll container picking up the overflow
+      // instead of the menu silently extending past the bottom of the
+      // screen with no way to reach it.
+      maxHeight: Math.max(120, window.innerHeight - top - 12),
+    });
     setHighlightedIndex(-1);
     setOpen(true);
   }
@@ -108,6 +120,14 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
       left: position?.left ?? 0,
       minWidth: 180,
       maxWidth: 260,
+      // No cap previously — fine for a handful of items, but a long list
+      // (many workspaces/organizations) rendered past the bottom of the
+      // viewport with no way to reach it, since a `position: fixed` element
+      // doesn't scroll with the page. openMenu() computes this relative to
+      // where the menu actually starts (`top`), not a flat viewport
+      // fraction, since `top` varies per trigger position.
+      maxHeight: position?.maxHeight,
+      overflowY: 'auto',
       background: 'var(--overlay-bg)',
       boxShadow: 'var(--overlay-shadow)',
       border: '1px solid var(--border)',
@@ -127,7 +147,7 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
       background: highlighted ? 'var(--item-hover)' : 'transparent',
       cursor: disabled ? 'default' : 'pointer',
     }),
-    checkGlyph: { width: 14, display: 'inline-block', color: 'var(--brg)' },
+    checkGlyph: { width: 14, display: 'inline-flex', alignItems: 'center', color: 'var(--brg)' },
   };
 
   return (
@@ -160,7 +180,9 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
                   onMouseEnter={() => setHighlightedIndex(index)}
                   onClick={() => activate(item)}
                 >
-                  {item.checked !== undefined && <span style={styles.checkGlyph}>{item.checked ? '✓' : ''}</span>}
+                  {item.checked !== undefined && (
+                    <span style={styles.checkGlyph}>{item.checked && <Check size={14} strokeWidth={2.5} aria-hidden="true" />}</span>
+                  )}
                   {item.label}
                 </div>
               </div>

@@ -76,3 +76,21 @@ export const searchChannelMembers = (channelId, query) => {
   const qs = params.toString();
   return apiFetch(`/channels/${channelId}/members${qs ? `?${qs}` : ''}`);
 };
+
+// FEATURE_REQUEST.md's "unified people picker" entry. searchWorkspacePeople
+// searches every account (for adding to the workspace); searchWorkspaceMembers
+// searches only the current roster (for private-channel invite —
+// pass channelId — and ownership transfer).
+export const searchWorkspacePeople = (workspaceId, query) => {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  const qs = params.toString();
+  return apiFetch(`/workspaces/${workspaceId}/people-search${qs ? `?${qs}` : ''}`);
+};
+export const searchWorkspaceMembers = (workspaceId, query, { channelId } = {}) => {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  if (channelId) params.set('channelId', channelId);
+  const qs = params.toString();
+  return apiFetch(`/workspaces/${workspaceId}/members-search${qs ? `?${qs}` : ''}`);
+};

@@ -50,6 +50,7 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
         'messages.channel_id',
         'messages.user_id',
         'users.username',
+        'users.display_name',
         'messages.content',
         'messages.parent_message_id',
         'messages.created_at',
@@ -61,6 +62,7 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
         channelId: r.channel_id,
         userId: r.user_id,
         username: r.username,
+        displayName: r.display_name,
         content: r.content,
         parentMessageId: r.parent_message_id,
         createdAt: r.created_at,
@@ -116,7 +118,10 @@ messagesRouter.get('/channels/:channelId/members', memberSearchLimiter, async (r
       query = query.andWhere('users.username', 'ilike', `${q}%`);
     }
 
-    const rows = await query.orderBy('users.username', 'asc').limit(limit).select('users.id', 'users.username');
+    const rows = await query
+      .orderBy('users.username', 'asc')
+      .limit(limit)
+      .select('users.id', 'users.username', 'users.display_name as displayName');
 
     res.json(rows);
   } catch (err) {
@@ -154,6 +159,7 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
       channelId,
       userId: req.user.id,
       username: req.user.username,
+      displayName: req.user.displayName,
       content: req.body?.content,
       parentMessageId: req.body?.parentMessageId,
     });
@@ -188,6 +194,7 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
         channelId,
         workspaceId: channel.workspace_id,
         mentionedBy: req.user.username,
+        mentionedByDisplayName: req.user.displayName,
         notificationId: notificationIdsByRecipient.get(mentionedUserId) ?? null,
       });
     }

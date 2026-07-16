@@ -61,7 +61,7 @@ adminRouter.post('/users', adminUserCreateLimiter, async (req, res, next) => {
     const newUser = await db.transaction(async (trx) => {
       const [user] = await trx('users')
         .insert({ username, email, password_hash: passwordHash, display_name: username })
-        .returning(['id', 'username', 'email']);
+        .returning(['id', 'username', 'display_name', 'email']);
 
       let organizationId = requestedOrgId;
       if (organizationId) {
@@ -92,6 +92,7 @@ adminRouter.post('/users', adminUserCreateLimiter, async (req, res, next) => {
     res.status(201).json({
       userId: newUser.id,
       username: newUser.username,
+      displayName: newUser.display_name,
       email: newUser.email,
       organizationId: newUser.organizationId,
     });
@@ -107,13 +108,14 @@ adminRouter.get('/users', async (req, res, next) => {
     await requireSystemAdmin(req);
 
     const rows = await db('users')
-      .select('id', 'username', 'email', 'status', 'is_system_admin')
+      .select('id', 'username', 'display_name', 'email', 'status', 'is_system_admin')
       .orderBy('username', 'asc');
 
     res.json(
       rows.map((r) => ({
         userId: r.id,
         username: r.username,
+        displayName: r.display_name,
         email: r.email,
         status: r.status,
         isSystemAdmin: r.is_system_admin,

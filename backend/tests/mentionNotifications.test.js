@@ -84,6 +84,8 @@ describe('mention notifications', () => {
       channelId,
       workspaceId,
       senderUsername: 'notifrest0',
+      // FEATURE_REQUEST.md's "display names as the primary identity" entry.
+      senderDisplayName: 'notifrest0',
       channelName: 'general',
       preview: 'hey @notifmember0 check this',
       readAt: null,

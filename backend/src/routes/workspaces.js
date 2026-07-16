@@ -4,11 +4,23 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertName, assertUsername, assertEmail, assertEnum, assertBoolean, CREATABLE_CHANNEL_TYPES, ASSIGNABLE_WORKSPACE_ROLES, WORKSPACE_VISIBILITY } from '../validation.js';
+import {
+  assertUuid,
+  assertName,
+  assertUsername,
+  assertEmail,
+  assertEnum,
+  assertBoolean,
+  assertBoundedInt,
+  MAX_USERNAME_LENGTH,
+  CREATABLE_CHANNEL_TYPES,
+  ASSIGNABLE_WORKSPACE_ROLES,
+  WORKSPACE_VISIBILITY,
+} from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
 import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
-import { adminPasswordResetLimiter, invitationCreateLimiter } from '../auth/rateLimit.js';
+import { adminPasswordResetLimiter, invitationCreateLimiter, memberSearchLimiter } from '../auth/rateLimit.js';
 import {
   requireWorkspaceMember,
   requireWorkspacePermission,
@@ -188,6 +200,7 @@ workspacesRouter.get('/admin/all', async (req, res, next) => {
         'w.name',
         'w.owner_id',
         'u.username as owner_username',
+        'u.display_name as owner_display_name',
         'w.organization_id',
         'o.name as organization_name',
         'w.visibility',
@@ -201,6 +214,7 @@ workspacesRouter.get('/admin/all', async (req, res, next) => {
         name: r.name,
         ownerId: r.owner_id,
         ownerUsername: r.owner_username,
+        ownerDisplayName: r.owner_display_name,
         organizationId: r.organization_id,
         organizationName: r.organization_name,
         visibility: r.visibility,
@@ -484,7 +498,14 @@ workspacesRouter.get('/:workspaceId/invitations', async (req, res, next) => {
       .join('users as u', 'u.id', 'i.invited_by')
       .where({ 'i.scope_type': 'WORKSPACE', 'i.workspace_id': workspaceId, 'i.status': 'PENDING' })
       .andWhere('i.expires_at', '>', new Date())
-      .select('i.id', 'i.email', 'i.invited_role', 'i.expires_at', 'u.username as invited_by_username')
+      .select(
+        'i.id',
+        'i.email',
+        'i.invited_role',
+        'i.expires_at',
+        'u.username as invited_by_username',
+        'u.display_name as invited_by_display_name',
+      )
       .orderBy('i.created_at', 'desc');
 
     res.json(
@@ -494,6 +515,7 @@ workspacesRouter.get('/:workspaceId/invitations', async (req, res, next) => {
         invitedRole: r.invited_role,
         expiresAt: r.expires_at,
         invitedByUsername: r.invited_by_username,
+        invitedByDisplayName: r.invited_by_display_name,
       })),
     );
   } catch (err) {
@@ -517,10 +539,140 @@ workspacesRouter.get('/:workspaceId/members', async (req, res, next) => {
     const rows = await db('workspace_members as wm')
       .join('users', 'users.id', 'wm.user_id')
       .where('wm.workspace_id', workspaceId)
-      .select('users.id', 'users.username', 'wm.system_role')
+      .select('users.id', 'users.username', 'users.display_name', 'wm.system_role')
       .orderBy('users.username', 'asc');
 
-    res.json(rows.map((r) => ({ userId: r.id, username: r.username, role: r.system_role })));
+    res.json(
+      rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name, role: r.system_role })),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md's "unified people picker" entry. Candidate pool is
+// every existing user account, system-wide — matches POST /:workspaceId/members's
+// own lookup exactly (any existing account, not org-restricted), so a
+// picker built on this endpoint can never suggest someone the add endpoint
+// would then reject. Gated the same as that same add endpoint
+// (WORKSPACE_MANAGE_MEMBERS) rather than plain membership, since this reveals
+// matching accounts by email — a broader disclosure than the roster/
+// members-search endpoint below, which only ever returns people already in
+// the workspace.
+workspacesRouter.get('/:workspaceId/people-search', memberSearchLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
+
+    const limit =
+      req.query.limit !== undefined ? assertBoundedInt(req.query.limit, { min: 1, max: 20 }, 'limit') : 8;
+    let q = '';
+    if (req.query.q !== undefined) {
+      q = String(req.query.q);
+      if (q.length > MAX_USERNAME_LENGTH) {
+        throw new ValidationError(`q must be at most ${MAX_USERNAME_LENGTH} characters`);
+      }
+    }
+
+    let query = db('users').leftJoin('workspace_members as wm', function joinMembership() {
+      this.on('wm.user_id', '=', 'users.id').andOnVal('wm.workspace_id', '=', workspaceId);
+    });
+    if (q) {
+      query = query.andWhere((builder) => {
+        builder
+          .orWhere('users.username', 'ilike', `${q}%`)
+          .orWhere('users.display_name', 'ilike', `${q}%`)
+          .orWhere('users.email', 'ilike', `${q}%`);
+      });
+    }
+
+    const rows = await query
+      .orderBy('users.username', 'asc')
+      .limit(limit)
+      .select('users.id', 'users.username', 'users.display_name', 'users.email', 'wm.user_id as memberUserId');
+
+    res.json(
+      rows.map((r) => ({
+        userId: r.id,
+        username: r.username,
+        displayName: r.display_name,
+        email: r.email,
+        alreadyMember: r.memberUserId != null,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Candidate pool is the *current* workspace roster, not every account —
+// backs both the private-channel "add people" flow (POST
+// /:workspaceId/channels/:channelId/members already requires the target be
+// an existing workspace member) and ownership transfer (POST
+// /:workspaceId/transfer-ownership, same requirement). Gated on plain
+// requireWorkspaceMember, deliberately looser than the people-search
+// endpoint above — every field returned here (id/username/displayName) is
+// already visible to any workspace-mate through message authorship and
+// mentions, so this isn't a new disclosure, and both call sites it backs
+// are reachable by a plain member (private-channel invite) or the owner
+// (transfer), not just a workspace admin. Passing `channelId` additionally
+// requires the caller be a member of that specific channel (matching the
+// add-to-channel endpoint's own gate) and flags `alreadyInChannel` per row.
+workspacesRouter.get('/:workspaceId/members-search', memberSearchLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+
+    let channelId = null;
+    if (req.query.channelId !== undefined) {
+      channelId = assertUuid(req.query.channelId, 'channelId');
+      const channel = await requireChannelMember(db, req.user.id, channelId);
+      if (channel.workspace_id !== workspaceId) {
+        throw new ValidationError('Channel does not belong to this workspace');
+      }
+    }
+
+    const limit =
+      req.query.limit !== undefined ? assertBoundedInt(req.query.limit, { min: 1, max: 20 }, 'limit') : 8;
+    let q = '';
+    if (req.query.q !== undefined) {
+      q = String(req.query.q);
+      if (q.length > MAX_USERNAME_LENGTH) {
+        throw new ValidationError(`q must be at most ${MAX_USERNAME_LENGTH} characters`);
+      }
+    }
+
+    let query = db('workspace_members as wm')
+      .join('users', 'users.id', 'wm.user_id')
+      .where('wm.workspace_id', workspaceId);
+    if (channelId) {
+      query = query.leftJoin('channel_members as cm', function joinChannelMembership() {
+        this.on('cm.user_id', '=', 'users.id').andOnVal('cm.channel_id', '=', channelId);
+      });
+    }
+    if (q) {
+      query = query.andWhere((builder) => {
+        builder
+          .orWhere('users.username', 'ilike', `${q}%`)
+          .orWhere('users.display_name', 'ilike', `${q}%`)
+          .orWhere('users.email', 'ilike', `${q}%`);
+      });
+    }
+
+    const selectCols = ['users.id', 'users.username', 'users.display_name', 'users.email'];
+    if (channelId) selectCols.push('cm.user_id as channelMemberUserId');
+    const rows = await query.orderBy('users.username', 'asc').limit(limit).select(selectCols);
+
+    res.json(
+      rows.map((r) => ({
+        userId: r.id,
+        username: r.username,
+        displayName: r.display_name,
+        email: r.email,
+        isSelf: r.id === req.user.id,
+        ...(channelId ? { alreadyInChannel: r.channelMemberUserId != null } : {}),
+      })),
+    );
   } catch (err) {
     next(err);
   }

@@ -164,7 +164,7 @@ export default function ChatShell() {
         {
           id: toastId,
           notificationId: frame.notificationId,
-          mentionedBy: frame.mentionedBy,
+          mentionedBy: frame.mentionedByDisplayName || frame.mentionedBy,
           content: frame.message.content,
           channelId: frame.channelId,
           workspaceId: frame.workspaceId,
@@ -185,7 +185,7 @@ export default function ChatShell() {
         // Locally bundled asset (imported the normal Vite way, rewritten to
         // a bundled, content-hashed path at build time), never a remote
         // URL — Section 9, no runtime asset fetches.
-        const notification = new window.Notification(`${frame.mentionedBy} mentioned you`, {
+        const notification = new window.Notification(`${frame.mentionedByDisplayName || frame.mentionedBy} mentioned you`, {
           body: frame.message.content,
           icon: mentionIcon,
         });

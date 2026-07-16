@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { X, Hash, Lock, Sparkles } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
@@ -28,6 +29,7 @@ const styles = {
     minHeight: 44,
     display: 'inline-flex',
     alignItems: 'center',
+    gap: 6,
     fontSize: 'var(--text-xs)',
     fontWeight: 600,
     color: 'var(--brg)',
@@ -152,12 +154,14 @@ const styles = {
     minHeight: 36,
     display: 'flex',
     alignItems: 'center',
+    gap: 6,
     padding: '0 12px',
     fontSize: 'var(--text-sm)',
     color: 'var(--text-1)',
     cursor: 'pointer',
     background: highlighted ? 'var(--item-hover)' : 'transparent',
   }),
+  mentionOptionUsername: { color: 'var(--text-3)', fontSize: 'var(--text-xs)' },
   sendButton: {
     minHeight: 44,
     padding: '0 20px',
@@ -382,8 +386,12 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
   return (
     <div id={mainContentId} tabIndex={-1} style={styles.wrapper}>
       <div style={styles.header}>
-        <span style={styles.headerTitle}>{channel.type === 'PRIVATE' ? '🔒' : '#'} {channel.name}</span>
+        <span style={styles.headerTitle}>
+          {channel.type === 'PRIVATE' ? <Lock size={16} aria-hidden="true" /> : <Hash size={16} aria-hidden="true" />}
+          {channel.name}
+        </span>
         <button type="button" style={styles.summarizeButton} onClick={handleSummarize} disabled={summary?.loading}>
+          <Sparkles size={14} aria-hidden="true" />
           {summary?.loading ? 'Summarizing…' : 'Summarize'}
         </button>
       </div>
@@ -391,7 +399,9 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
         <div style={styles.summaryPanel}>
           <div style={styles.summaryPanelHeader}>
             <span>Channel summary</span>
-            <button type="button" style={styles.summaryClose} onClick={() => setSummary(null)} aria-label="Close summary">×</button>
+            <button type="button" style={styles.summaryClose} onClick={() => setSummary(null)} aria-label="Close summary">
+              <X size={16} aria-hidden="true" />
+            </button>
           </div>
           {summary.error ? (
             <div style={styles.summaryError}>{summary.error}</div>
@@ -440,7 +450,7 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
                   }}
                 >
                   <div style={{ ...styles.messageMeta, ...(isMine ? styles.messageMetaMine : {}) }}>
-                    {!isMine && <span style={styles.messageAuthor}>{m.username}</span>}
+                    {!isMine && <span style={styles.messageAuthor}>{m.displayName || m.username}</span>}
                     <PresenceBadge status={presence[m.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
                     <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
@@ -499,7 +509,8 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
                   onMouseEnter={() => setMention((prev) => (prev ? { ...prev, highlightIndex: index } : prev))}
                   onClick={() => acceptMentionSuggestion(s.username)}
                 >
-                  @{s.username}
+                  <span>{s.displayName || s.username}</span>
+                  <span style={styles.mentionOptionUsername}>@{s.username}</span>
                 </div>
               ))}
             </div>

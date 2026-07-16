@@ -32,7 +32,10 @@ describe('POST /api/admin/users', () => {
       .set(authHeader(admin.accessToken))
       .send({ username: 'newbare0', email: 'newbare0@example.com', password: 'correct-horse-battery' });
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ username: 'newbare0', email: 'newbare0@example.com' });
+    // displayName backfills to username at creation, same as every other
+    // account-creation path (FEATURE_REQUEST.md's "display names as the
+    // primary identity" entry).
+    expect(res.body).toMatchObject({ username: 'newbare0', displayName: 'newbare0', email: 'newbare0@example.com' });
     expect(res.body.organizationId).toEqual(expect.any(String));
     expect(res.body.accessToken).toBeUndefined();
 
@@ -145,14 +148,26 @@ describe('POST /api/admin/users', () => {
 describe('GET /api/admin/users', () => {
   test('a system admin sees the full roster', async () => {
     const admin = await seedSystemAdmin('adminlist0');
-    const other = await signup('adminlistother0');
+    const other = await signup('adminlistother0', { displayName: 'Admin List Other' });
 
     const res = await request(app).get('/api/admin/users').set(authHeader(admin.accessToken));
     expect(res.status).toBe(200);
     expect(res.body).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ userId: admin.userId, username: 'adminlist0', isSystemAdmin: true, status: 'ACTIVE' }),
-        expect.objectContaining({ userId: other.userId, username: 'adminlistother0', isSystemAdmin: false, status: 'ACTIVE' }),
+        expect.objectContaining({
+          userId: admin.userId,
+          username: 'adminlist0',
+          displayName: 'adminlist0',
+          isSystemAdmin: true,
+          status: 'ACTIVE',
+        }),
+        expect.objectContaining({
+          userId: other.userId,
+          username: 'adminlistother0',
+          displayName: 'Admin List Other',
+          isSystemAdmin: false,
+          status: 'ACTIVE',
+        }),
       ]),
     );
   });

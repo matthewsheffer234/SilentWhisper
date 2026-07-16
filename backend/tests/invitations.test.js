@@ -124,6 +124,8 @@ describe('GET /api/organizations/:orgId/invitations', () => {
       id: pending.body.id,
       email: 'pending0@example.com',
       invitedByUsername: 'orginvitelist0',
+      // FEATURE_REQUEST.md's "display names as the primary identity" entry.
+      invitedByDisplayName: 'orginvitelist0',
     });
   });
 
@@ -160,6 +162,7 @@ describe('GET /api/workspaces/:workspaceId/invitations', () => {
       id: pending.body.id,
       email: 'wspending0@example.com',
       invitedByUsername: 'wsinvitelist0',
+      invitedByDisplayName: 'wsinvitelist0',
     });
   });
 
@@ -190,6 +193,7 @@ describe('GET /api/invitations/:token', () => {
       scopeName: ws.name,
       invitedRole: 'MEMBER',
       invitedByUsername: 'wsinvitepreview0',
+      invitedByDisplayName: 'wsinvitepreview0',
     });
   });
 
@@ -227,7 +231,12 @@ describe('POST /api/invitations/:token/accept', () => {
       .send({ username: 'accepteduser0', password: 'correct-horse-battery' });
     expect(res.status).toBe(201);
     expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.user).toMatchObject({ username: 'accepteduser0', email: 'accepted0@example.com', isSystemAdmin: false });
+    expect(res.body.user).toMatchObject({
+      username: 'accepteduser0',
+      displayName: 'accepteduser0',
+      email: 'accepted0@example.com',
+      isSystemAdmin: false,
+    });
     expect(res.headers['set-cookie']?.[0]).toMatch(/refresh_token=/);
 
     const membership = await db('workspace_members').where({ workspace_id: ws.id, user_id: res.body.user.id }).first();

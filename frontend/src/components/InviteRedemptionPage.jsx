@@ -127,14 +127,14 @@ export default function InviteRedemptionPage() {
         ) : (
           <>
             <div style={styles.context}>
-              <strong>{preview.invitedByUsername}</strong> invited you to join{' '}
+              <strong>{preview.invitedByDisplayName || preview.invitedByUsername}</strong> invited you to join{' '}
               <strong>{preview.scopeName}</strong> as {preview.invitedRole}.
             </div>
 
             {status === 'authenticated' && (
               <div style={styles.notice}>
-                You&apos;re currently signed in as {user?.username}. Redeeming this invite will create a new
-                account and sign you into it.
+                You&apos;re currently signed in as {user?.displayName || user?.username}. Redeeming this invite will
+                create a new account and sign you into it.
               </div>
             )}
 

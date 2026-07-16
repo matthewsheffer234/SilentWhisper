@@ -41,6 +41,27 @@ describe('message author display', () => {
       .set(authHeader(owner.accessToken));
     expect(listRes.body[0].username).toBe('msgowner0');
   });
+
+  // FEATURE_REQUEST.md's "display names as the primary identity" entry: the
+  // author payload is additive ({userId, username, displayName}), not a
+  // replacement — a distinct display name proves the field reflects the
+  // stored value end to end (JWT claim on send, a fresh join on history
+  // list), not just username echoed back under a second key.
+  test('both the send response and the history list include a distinct sender display name', async () => {
+    const owner = await signup('msgowner1', { displayName: 'Message Owner One' });
+    const channelId = await createChannel(owner);
+
+    const sendRes = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'hi' });
+    expect(sendRes.body.displayName).toBe('Message Owner One');
+
+    const listRes = await request(app)
+      .get(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken));
+    expect(listRes.body[0].displayName).toBe('Message Owner One');
+  });
 });
 
 describe('message pagination', () => {

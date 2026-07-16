@@ -86,7 +86,7 @@ describe('org membership routes', () => {
     const orgRes = await createOrg(admin, 'Org Membership Test');
     const orgId = orgRes.body.id;
 
-    const target = await signup('orgmembertarget0');
+    const target = await signup('orgmembertarget0', { displayName: 'Org Member Target' });
     const addRes = await request(app)
       .post(`/api/organizations/${orgId}/members`)
       .set(authHeader(admin.accessToken))
@@ -96,8 +96,12 @@ describe('org membership routes', () => {
 
     const rosterRes = await request(app).get(`/api/organizations/${orgId}/members`).set(authHeader(admin.accessToken));
     expect(rosterRes.status).toBe(200);
+    // FEATURE_REQUEST.md's "display names as the primary identity" entry:
+    // the org member roster table.
     expect(rosterRes.body).toEqual(
-      expect.arrayContaining([expect.objectContaining({ userId: target.userId, role: 'ORG_MEMBER' })]),
+      expect.arrayContaining([
+        expect.objectContaining({ userId: target.userId, displayName: 'Org Member Target', role: 'ORG_MEMBER' }),
+      ]),
     );
 
     const patchRes = await request(app)

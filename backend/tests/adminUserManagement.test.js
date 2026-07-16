@@ -41,10 +41,13 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
 
     const res = await request(app).get(`/api/workspaces/${workspaceId}/members`).set(authHeader(admin.accessToken));
     expect(res.status).toBe(200);
+    // displayName rides alongside username (FEATURE_REQUEST.md's "display
+    // names as the primary identity" entry) — backfilled to match username
+    // for both of these test-seeded accounts.
     expect(res.body).toEqual(
       expect.arrayContaining([
-        { userId: admin.userId, username: 'wsadmin0', role: 'OWNER' },
-        { userId: member.userId, username: 'wsmember0', role: 'MEMBER' },
+        { userId: admin.userId, username: 'wsadmin0', displayName: 'wsadmin0', role: 'OWNER' },
+        { userId: member.userId, username: 'wsmember0', displayName: 'wsmember0', role: 'MEMBER' },
       ]),
     );
   });

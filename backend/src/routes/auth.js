@@ -59,12 +59,20 @@ function clearRefreshCookie(res) {
 // without requiring the client to have cached user info anywhere itself.
 authRouter.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const user = await db('users').where({ id: req.user.id }).first(['id', 'username', 'email', 'is_system_admin']);
+    const user = await db('users')
+      .where({ id: req.user.id })
+      .first(['id', 'username', 'display_name', 'email', 'is_system_admin']);
     if (!user) {
       throw new UnauthorizedError('User no longer exists');
     }
     res.json({
-      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        email: user.email,
+        isSystemAdmin: user.is_system_admin,
+      },
     });
   } catch (err) {
     next(err);
@@ -118,7 +126,7 @@ authRouter.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res,
       throw new UnauthorizedError('Invalid username or password');
     }
 
-    const accessToken = signAccessToken({ userId: user.id, username: user.username });
+    const accessToken = signAccessToken({ userId: user.id, username: user.username, displayName: user.display_name });
     const refreshToken = await issueRefreshToken(db, user.id);
     setRefreshCookie(res, refreshToken);
 
@@ -131,7 +139,13 @@ authRouter.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res,
 
     res.json({
       accessToken,
-      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        email: user.email,
+        isSystemAdmin: user.is_system_admin,
+      },
     });
   } catch (err) {
     next(err);
@@ -148,7 +162,7 @@ authRouter.post('/refresh', async (req, res, next) => {
     const { userId, newRawToken } = await rotateRefreshToken(db, rawToken);
     const user = await db('users').where({ id: userId }).first();
 
-    const accessToken = signAccessToken({ userId, username: user.username });
+    const accessToken = signAccessToken({ userId, username: user.username, displayName: user.display_name });
     setRefreshCookie(res, newRawToken);
 
     await appendAuditEvent(db, {
@@ -210,7 +224,7 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
     // sign back in.
     await revokeAllRefreshTokensForUser(db, user.id);
 
-    const accessToken = signAccessToken({ userId: user.id, username: user.username });
+    const accessToken = signAccessToken({ userId: user.id, username: user.username, displayName: user.display_name });
     const refreshToken = await issueRefreshToken(db, user.id);
     setRefreshCookie(res, refreshToken);
 
@@ -222,7 +236,13 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
 
     res.json({
       accessToken,
-      user: { id: user.id, username: user.username, email: user.email, isSystemAdmin: user.is_system_admin },
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        email: user.email,
+        isSystemAdmin: user.is_system_admin,
+      },
     });
   } catch (err) {
     next(err);

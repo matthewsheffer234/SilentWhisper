@@ -105,8 +105,11 @@ describe('GET /channels/:channelId/members', () => {
     expect(noQueryRes.body.map((r) => r.username)).toEqual(['albertjones', 'alicesmith', 'bobwhite']);
     expect(noQueryRes.body.some((r) => r.username === owner.username)).toBe(false);
 
-    // Lean shape — no email or other fields.
-    expect(Object.keys(noQueryRes.body[0]).sort()).toEqual(['id', 'username']);
+    // Lean shape — no email or other fields; displayName joins alongside
+    // username (FEATURE_REQUEST.md's "display names as the primary
+    // identity" entry) for the mention-autocomplete dropdown to render.
+    expect(Object.keys(noQueryRes.body[0]).sort()).toEqual(['displayName', 'id', 'username']);
+    expect(noQueryRes.body.map((r) => r.displayName).sort()).toEqual(['albertjones', 'alicesmith', 'bobwhite']);
   });
 
   test('results are capped at the configured limit', async () => {

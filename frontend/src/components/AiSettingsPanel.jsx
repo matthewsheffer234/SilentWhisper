@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Sheet from './Sheet.jsx';
 import { getAiSettings, updateAiSettings } from '../api/ai.js';
 
 // PROJECT_PLAN.md Section 6: "Admins can inspect the active provider, model,
@@ -7,45 +8,10 @@ import { getAiSettings, updateAiSettings } from '../api/ai.js';
 // Gated server-side (requireSystemPermission) — this component is only ever
 // rendered for a user ChatShell has already determined is OWNER/MANAGER of
 // at least one workspace (or a system admin), but the backend enforces it
-// regardless.
+// regardless. Uses the shared Sheet primitive (FEATURE_REQUEST.md's
+// "standard modal/sheet component" entry).
 
 const styles = {
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.35)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 50,
-  },
-  panel: {
-    width: 480,
-    maxWidth: '92vw',
-    maxHeight: '86vh',
-    overflowY: 'auto',
-    background: 'var(--surface)',
-    borderRadius: 14,
-    boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
-    padding: '20px 24px',
-  },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  title: { fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-1)' },
-  // 44px minimum tap target (PROJECT_PLAN.md Section 7) — the visible × glyph
-  // stays small; the invisible hit box around it is full-size.
-  closeButton: {
-    minWidth: 44,
-    minHeight: 44,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'none',
-    border: 'none',
-    color: 'var(--text-3)',
-    cursor: 'pointer',
-    fontSize: 'var(--text-lg)',
-  },
-  subtitle: { fontSize: 'var(--text-sm)', color: 'var(--text-3)', marginBottom: 16 },
   healthRow: {
     display: 'flex',
     alignItems: 'center',
@@ -154,16 +120,19 @@ export default function AiSettingsPanel({ onClose }) {
     }
   }
 
-  return (
-    <div style={styles.backdrop} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.header}>
-          <span style={styles.title}>AI Settings</span>
-          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close AI settings">×</button>
-        </div>
-        <div style={styles.subtitle}>Configure the local LLM provider used for channel summaries and task extraction.</div>
+  const isDirty = Boolean(form && settings && JSON.stringify(form) !== JSON.stringify(settings));
 
-        {error && <div style={styles.error}>{error}</div>}
+  return (
+    <Sheet
+      title="AI Settings"
+      ariaLabel="AI settings"
+      subtitle="Configure the local LLM provider used for channel summaries and task extraction."
+      onClose={onClose}
+      width={480}
+      maxHeight="86vh"
+      isDirty={isDirty}
+    >
+      {error && <div style={styles.error}>{error}</div>}
 
         {settings && (
           <div style={styles.healthRow}>
@@ -304,7 +273,6 @@ export default function AiSettingsPanel({ onClose }) {
             {savedAt && <span style={styles.saved}>Saved</span>}
           </form>
         )}
-      </div>
-    </div>
+    </Sheet>
   );
 }

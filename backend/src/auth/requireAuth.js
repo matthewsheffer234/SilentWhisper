@@ -13,8 +13,8 @@ export function requireAuth(req, _res, next) {
     return;
   }
   try {
-    const { userId, username } = verifyAccessToken(token);
-    req.user = { id: userId, username };
+    const { userId, username, displayName } = verifyAccessToken(token);
+    req.user = { id: userId, username, displayName };
     next();
   } catch (err) {
     next(err);

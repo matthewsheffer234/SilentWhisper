@@ -46,13 +46,14 @@ invitationsRouter.get('/:token', async (req, res, next) => {
       row.scope_type === 'ORGANIZATION'
         ? await db('organizations').where({ id: row.organization_id }).first('name')
         : await db('workspaces').where({ id: row.workspace_id }).first('name');
-    const inviter = await db('users').where({ id: row.invited_by }).first('username');
+    const inviter = await db('users').where({ id: row.invited_by }).first('username', 'display_name');
 
     res.json({
       scopeType: row.scope_type,
       scopeName: scopeRow?.name ?? null,
       invitedRole: row.invited_role,
       invitedByUsername: inviter?.username ?? null,
+      invitedByDisplayName: inviter?.display_name ?? null,
       expiresAt: row.expires_at,
     });
   } catch (err) {
@@ -89,7 +90,7 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
       const passwordHash = await bcrypt.hash(req.body.password, config.auth.bcryptSaltRounds);
       const [user] = await trx('users')
         .insert({ username, email: row.email, password_hash: passwordHash, display_name: username })
-        .returning(['id', 'username', 'email', 'is_system_admin']);
+        .returning(['id', 'username', 'display_name', 'email', 'is_system_admin']);
 
       if (row.scope_type === 'ORGANIZATION') {
         await trx('organization_members').insert({
@@ -114,7 +115,7 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
 
       await trx('invitations').where({ id: row.id }).update({ status: 'ACCEPTED', accepted_at: new Date(), accepted_by: user.id });
 
-      const accessToken = signAccessToken({ userId: user.id, username: user.username });
+      const accessToken = signAccessToken({ userId: user.id, username: user.username, displayName: user.display_name });
       const refreshToken = await issueRefreshToken(db, user.id, trx);
       return { kind: 'ok', user, accessToken, refreshToken, invitationId: row.id, scopeType: row.scope_type };
     });
@@ -140,6 +141,7 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
       user: {
         id: result.user.id,
         username: result.user.username,
+        displayName: result.user.display_name,
         email: result.user.email,
         isSystemAdmin: result.user.is_system_admin,
       },

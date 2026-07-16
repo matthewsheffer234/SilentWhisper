@@ -1,47 +1,13 @@
 import { useEffect, useState } from 'react';
+import Sheet from './Sheet.jsx';
 import { listDiscoverableWorkspaces, subscribeToWorkspace } from '../api/workspaces.js';
 
 // Self-service workspace subscription (FEATURE_REQUEST.md): the discover +
 // join half of the feature, mirroring how PUBLIC channels already work.
-// Modal shell copied from AuditDashboard.jsx's pattern rather than
-// reinvented — same backdrop/panel/header/close-button styling.
+// Uses the shared Sheet primitive (FEATURE_REQUEST.md's "standard
+// modal/sheet component" entry).
 
 const styles = {
-  backdrop: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.35)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 50,
-  },
-  panel: {
-    width: 480,
-    maxWidth: '94vw',
-    maxHeight: '86vh',
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--surface)',
-    borderRadius: 14,
-    boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
-    padding: '20px 24px',
-  },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  title: { fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-1)' },
-  closeButton: {
-    minWidth: 44,
-    minHeight: 44,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'none',
-    border: 'none',
-    color: 'var(--text-3)',
-    cursor: 'pointer',
-    fontSize: 'var(--text-lg)',
-  },
-  subtitle: { fontSize: 'var(--text-sm)', color: 'var(--text-3)', marginBottom: 12 },
   error: { color: '#c0392b', fontSize: 'var(--text-sm)', marginBottom: 12 },
   listWrap: { flex: 1, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 10 },
   row: {
@@ -54,7 +20,7 @@ const styles = {
   },
   rowFirst: { borderTop: 'none' },
   name: { flex: 1, fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
-  subscribeButton: {
+  joinButton: {
     minHeight: 32,
     padding: '0 12px',
     borderRadius: 8,
@@ -86,7 +52,7 @@ export default function BrowseWorkspacesPanel({ onClose, onSubscribed, organizat
       .finally(() => setLoading(false));
   }, [organizationId]);
 
-  async function handleSubscribe(workspaceId) {
+  async function handleJoin(workspaceId) {
     setSubscribingId(workspaceId);
     setError(null);
     try {
@@ -101,39 +67,38 @@ export default function BrowseWorkspacesPanel({ onClose, onSubscribed, organizat
   }
 
   return (
-    <div style={styles.backdrop} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.header}>
-          <span style={styles.title}>Browse workspaces</span>
-          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close browse workspaces">×</button>
-        </div>
-        <div style={styles.subtitle}>Discoverable workspaces you're not already a member of.</div>
-
+    <Sheet
+      title="Join a workspace"
+      ariaLabel="join a workspace"
+      subtitle="Listed workspaces you can join. Anyone in your organization can join a listed workspace."
+      onClose={onClose}
+      width={480}
+      maxHeight="86vh"
+    >
         {error && <div style={styles.error}>{error}</div>}
 
         <div style={styles.listWrap}>
           {loading ? (
             <div style={styles.empty}>Loading…</div>
           ) : rows.length === 0 ? (
-            <div style={styles.empty}>No public workspaces to join right now.</div>
+            <div style={styles.empty}>No listed workspaces to join right now.</div>
           ) : (
             rows.map((ws, i) => (
               <div key={ws.id} style={{ ...styles.row, ...(i === 0 ? styles.rowFirst : {}) }}>
                 <span style={styles.name}>{ws.name}</span>
                 <button
                   type="button"
-                  style={styles.subscribeButton}
+                  style={styles.joinButton}
                   disabled={subscribingId === ws.id}
-                  onClick={() => handleSubscribe(ws.id)}
-                  aria-label={`Subscribe to ${ws.name}`}
+                  onClick={() => handleJoin(ws.id)}
+                  aria-label={`Join ${ws.name}`}
                 >
-                  {subscribingId === ws.id ? 'Joining…' : 'Subscribe'}
+                  {subscribingId === ws.id ? 'Joining…' : 'Join'}
                 </button>
               </div>
             ))
           )}
         </div>
-      </div>
-    </div>
+    </Sheet>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { X, Sparkles } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import { extractTasks } from '../api/ai.js';
 import { renderMessageContent } from '../markdown.jsx';
@@ -30,6 +31,7 @@ const styles = {
     minHeight: 44,
     display: 'inline-flex',
     alignItems: 'center',
+    gap: 6,
     fontSize: 'var(--text-xs)',
     fontWeight: 600,
     color: 'var(--brg)',
@@ -146,16 +148,21 @@ export default function ThreadSidebar({ rootMessage, replies, presence, currentU
         Thread
         <div style={styles.headerActions}>
           <button type="button" style={styles.extractButton} onClick={handleExtractTasks} disabled={tasks?.loading}>
+            <Sparkles size={14} aria-hidden="true" />
             {tasks?.loading ? 'Extracting…' : 'Extract Tasks'}
           </button>
-          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close thread">×</button>
+          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close thread">
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
       </div>
       {tasks && (
         <div style={styles.taskPanel}>
           <div style={styles.taskPanelHeader}>
             <span>Action items</span>
-            <button type="button" style={styles.closeButton} onClick={() => setTasks(null)} aria-label="Close action items">×</button>
+            <button type="button" style={styles.closeButton} onClick={() => setTasks(null)} aria-label="Close action items">
+              <X size={16} aria-hidden="true" />
+            </button>
           </div>
           {tasks.error ? (
             <div style={styles.taskError}>{tasks.error}</div>
@@ -171,7 +178,7 @@ export default function ThreadSidebar({ rootMessage, replies, presence, currentU
             <div style={{ ...styles.rowOuter, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
               <div className="sl-row" style={{ ...styles.bubble, ...(isMine ? styles.bubbleMine : styles.bubbleTheirs) }}>
                 <div style={{ ...styles.bubbleMeta, ...(isMine ? styles.bubbleMetaMine : {}) }}>
-                  {!isMine && <span style={styles.bubbleAuthor}>{rootMessage.username}</span>}
+                  {!isMine && <span style={styles.bubbleAuthor}>{rootMessage.displayName || rootMessage.username}</span>}
                   <PresenceBadge status={presence[rootMessage.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>
@@ -190,7 +197,7 @@ export default function ThreadSidebar({ rootMessage, replies, presence, currentU
             <div key={r.id} style={{ ...styles.rowOuter, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
               <div className="sl-row" style={{ ...styles.bubble, ...(isMine ? styles.bubbleMine : styles.bubbleTheirs) }}>
                 <div style={{ ...styles.bubbleMeta, ...(isMine ? styles.bubbleMetaMine : {}) }}>
-                  {!isMine && <span style={styles.bubbleAuthor}>{r.username}</span>}
+                  {!isMine && <span style={styles.bubbleAuthor}>{r.displayName || r.username}</span>}
                   <PresenceBadge status={presence[r.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>{renderMessageContent(r.content, { variant: isMine ? 'mine' : undefined })}</div>

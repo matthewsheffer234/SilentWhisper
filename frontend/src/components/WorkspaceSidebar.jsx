@@ -1,9 +1,37 @@
 import { useState } from 'react';
+import {
+  ChevronDown,
+  Settings,
+  MoreHorizontal,
+  Hash,
+  Lock,
+  Bell,
+  BellOff,
+  Sun,
+  Moon,
+  SunMoon,
+  Plus,
+} from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
+import PeoplePicker from './PeoplePicker.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
+import { searchWorkspacePeople, searchWorkspaceMembers } from '../api/workspaces.js';
+
+// Menu.jsx renders `item.label` as arbitrary children, not just text — this
+// composes an icon + text pair with the same layout Menu.jsx's own item row
+// already uses (flex, gap 8), so icon-bearing labels line up identically to
+// plain-text ones.
+function IconLabel({ icon, children }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      {icon}
+      {children}
+    </span>
+  );
+}
 
 const styles = {
   sidebar: {
@@ -78,6 +106,10 @@ const styles = {
     marginTop: 6,
     padding: '8px 8px',
     minHeight: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
     borderRadius: 8,
     border: '1px dashed var(--border-strong)',
     background: 'transparent',
@@ -88,6 +120,7 @@ const styles = {
   inlineForm: { display: 'flex', gap: 6, padding: '6px 8px' },
   inlineInput: {
     flex: 1,
+    minWidth: 0,
     minHeight: 36,
     padding: '6px 8px',
     borderRadius: 6,
@@ -191,6 +224,7 @@ const styles = {
     padding: '0 8px',
     display: 'flex',
     alignItems: 'center',
+    gap: 6,
     fontSize: 'var(--text-xs)',
     color: 'var(--text-3)',
     background: 'none',
@@ -264,7 +298,7 @@ function InlineCreateForm({ placeholder, onSubmit, extra, visibilityToggle }) {
         onChange={(e) => setValue(e.target.value)}
       />
       {visibilityToggle && (
-        <label style={styles.visibilityToggleLabel}>
+        <label style={styles.visibilityToggleLabel} title={visibilityToggle.hint}>
           <input type="checkbox" checked={toggleOn} onChange={(e) => setToggleOn(e.target.checked)} />
           {visibilityToggle.label}
         </label>
@@ -280,20 +314,24 @@ function InlineCreateForm({ placeholder, onSubmit, extra, visibilityToggle }) {
 // `Error` (apiFetch's convention — see api/client.js) carrying a useful
 // `.message` (unknown username, already a member, etc.) so it can be shown
 // inline rather than swallowed.
-function InviteMemberForm({ onSubmit }) {
-  const [username, setUsername] = useState('');
+// FEATURE_REQUEST.md's "unified people picker" entry replaced the raw
+// exact-username `<input>` these three forms used to have with
+// `PeoplePicker` — search by display name/username/email, with ineligible
+// rows (already a member, already in this channel, yourself) shown
+// disabled rather than only failing after submit.
+function InviteMemberForm({ onSubmit, workspaceId }) {
+  const [person, setPerson] = useState(null);
   const [role, setRole] = useState('MEMBER');
   const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmed = username.trim();
-    if (!trimmed) return;
+    if (!person) return;
     setStatus(null);
     try {
-      await onSubmit(trimmed, role);
-      setStatus({ type: 'success', message: `Added ${trimmed} to the workspace` });
-      setUsername('');
+      await onSubmit(person.username, role);
+      setStatus({ type: 'success', message: `Added ${person.displayName || person.username} to the workspace` });
+      setPerson(null);
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to add member' });
     }
@@ -302,17 +340,21 @@ function InviteMemberForm({ onSubmit }) {
   return (
     <div>
       <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <input
-          style={styles.inlineInput}
-          placeholder="Username to invite"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PeoplePicker
+            searchFn={(q) => searchWorkspacePeople(workspaceId, q)}
+            value={person}
+            onChange={setPerson}
+            placeholder="Search people to invite"
+            ariaLabel="Search people to invite"
+            isIneligible={(p) => (p.alreadyMember ? 'Already a member' : null)}
+          />
+        </div>
         <select style={styles.roleSelect} value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role">
           <option value="MEMBER">Member</option>
           <option value="MANAGER">Manager</option>
         </select>
-        <button type="submit" style={styles.inviteSubmit}>Add</button>
+        <button type="submit" style={styles.inviteSubmit} disabled={!person}>Add</button>
       </form>
       {status && (
         <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
@@ -328,20 +370,22 @@ function InviteMemberForm({ onSubmit }) {
 // workspace membership). Only ever rendered for a PRIVATE channel the caller
 // already belongs to (see the channel row below) — a public channel's
 // self-service "Join" pill already covers the public case, so this control
-// only needs to exist for the one case self-join can't handle.
-function InviteToChannelForm({ onSubmit }) {
-  const [username, setUsername] = useState('');
+// only needs to exist for the one case self-join can't handle. Candidate
+// pool is current workspace members only (searchWorkspaceMembers), not
+// every account — matches the add-to-channel endpoint's own requirement
+// that the target already belong to the workspace.
+function InviteToChannelForm({ onSubmit, workspaceId, channelId }) {
+  const [person, setPerson] = useState(null);
   const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmed = username.trim();
-    if (!trimmed) return;
+    if (!person) return;
     setStatus(null);
     try {
-      await onSubmit(trimmed);
-      setStatus({ type: 'success', message: `Added ${trimmed} to the channel` });
-      setUsername('');
+      await onSubmit(person.username);
+      setStatus({ type: 'success', message: `Added ${person.displayName || person.username} to the channel` });
+      setPerson(null);
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to add member' });
     }
@@ -350,13 +394,17 @@ function InviteToChannelForm({ onSubmit }) {
   return (
     <div>
       <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <input
-          style={styles.inlineInput}
-          placeholder="Username to add to channel"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <button type="submit" style={styles.inviteSubmit}>Add</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PeoplePicker
+            searchFn={(q) => searchWorkspaceMembers(workspaceId, q, { channelId })}
+            value={person}
+            onChange={setPerson}
+            placeholder="Search workspace members to add"
+            ariaLabel="Search workspace members to add to channel"
+            isIneligible={(p) => (p.alreadyInChannel ? 'Already in this channel' : null)}
+          />
+        </div>
+        <button type="submit" style={styles.inviteSubmit} disabled={!person}>Add</button>
       </form>
       {status && (
         <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
@@ -367,23 +415,21 @@ function InviteToChannelForm({ onSubmit }) {
   );
 }
 
-// New (FEATURE_REQUEST.md entry 1, slice 4) — cloned from InviteMemberForm's
-// shape: a username input, not a userId, since a human typing into this
-// form knows a username, matching POST /:workspaceId/transfer-ownership's
-// own precedent.
-function TransferOwnershipForm({ onSubmit }) {
-  const [username, setUsername] = useState('');
+// New (FEATURE_REQUEST.md entry 1, slice 4). Candidate pool is current
+// workspace members only, matching POST /:workspaceId/transfer-ownership's
+// own requirement that the target already be a member.
+function TransferOwnershipForm({ onSubmit, workspaceId }) {
+  const [person, setPerson] = useState(null);
   const [status, setStatus] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmed = username.trim();
-    if (!trimmed) return;
+    if (!person) return;
     setStatus(null);
     try {
-      await onSubmit(trimmed);
-      setStatus({ type: 'success', message: `Ownership transferred to ${trimmed}` });
-      setUsername('');
+      await onSubmit(person.username);
+      setStatus({ type: 'success', message: `Ownership transferred to ${person.displayName || person.username}` });
+      setPerson(null);
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to transfer ownership' });
     }
@@ -392,13 +438,17 @@ function TransferOwnershipForm({ onSubmit }) {
   return (
     <div>
       <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <input
-          style={styles.inlineInput}
-          placeholder="New owner's username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <button type="submit" style={styles.inviteSubmit}>Transfer</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PeoplePicker
+            searchFn={(q) => searchWorkspaceMembers(workspaceId, q)}
+            value={person}
+            onChange={setPerson}
+            placeholder="Search workspace members"
+            ariaLabel="Search workspace members for ownership transfer"
+            isIneligible={(p) => (p.isSelf ? 'Cannot transfer to yourself' : null)}
+          />
+        </div>
+        <button type="submit" style={styles.inviteSubmit} disabled={!person}>Transfer</button>
       </form>
       {status && (
         <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
@@ -545,12 +595,28 @@ export default function WorkspaceSidebar({
       onSelect: () => onSelectOrganization(org.id),
     })),
     ...(isSystemAdmin
-      ? [{ key: 'create-org', label: '+ Create organization…', separatorBefore: true, onSelect: onOpenCreateOrganization }]
+      ? [
+          {
+            key: 'create-org',
+            label: <IconLabel icon={<Plus size={14} aria-hidden="true" />}>Create organization…</IconLabel>,
+            separatorBefore: true,
+            onSelect: onOpenCreateOrganization,
+          },
+        ]
       : []),
     ...(currentOrg && hasOrgManagementAccess(isSystemAdmin, currentOrg.role)
       ? [{ key: 'manage-org', label: 'Manage organization members…', onSelect: onOpenOrgManagement }]
       : []),
   ];
+
+  // Organization controls are only useful when there is a decision or an
+  // admin action to make — a bare single-org switcher with one always-
+  // checked, non-actionable entry is exactly the "database administration
+  // surface" friction FEATURE_REQUEST.md entry 2 asks to de-emphasize.
+  const showOrgRow =
+    organizations.length > 1 ||
+    isSystemAdmin ||
+    Boolean(currentOrg && hasOrgManagementAccess(isSystemAdmin, currentOrg.role));
 
   const userMenuItems = [
     {
@@ -563,11 +629,13 @@ export default function WorkspaceSidebar({
           {
             key: 'notifications',
             label:
-              notif.permission === 'granted'
-                ? '🔔 Notifications on'
-                : notif.permission === 'denied'
-                  ? '🔕 Notifications blocked'
-                  : '🔔 Enable notifications',
+              notif.permission === 'granted' ? (
+                <IconLabel icon={<Bell size={14} aria-hidden="true" />}>Notifications on</IconLabel>
+              ) : notif.permission === 'denied' ? (
+                <IconLabel icon={<BellOff size={14} aria-hidden="true" />}>Notifications blocked</IconLabel>
+              ) : (
+                <IconLabel icon={<Bell size={14} aria-hidden="true" />}>Enable notifications</IconLabel>
+              ),
             disabled: notif.permission !== 'default',
             onSelect: notif.requestPermission,
           },
@@ -578,9 +646,25 @@ export default function WorkspaceSidebar({
     // control), matching how Apple's own Appearance setting is presented —
     // global.css's prefers-color-scheme layer already makes "System" a
     // real, meaningfully different option from picking Light/Dark outright.
-    { key: 'theme-light', label: '☀ Light', checked: theme === 'light', separatorBefore: true, onSelect: () => setTheme('light') },
-    { key: 'theme-dark', label: '☾ Dark', checked: theme === 'dark', onSelect: () => setTheme('dark') },
-    { key: 'theme-system', label: '◐ System', checked: theme === 'system', onSelect: () => setTheme('system') },
+    {
+      key: 'theme-light',
+      label: <IconLabel icon={<Sun size={14} aria-hidden="true" />}>Light</IconLabel>,
+      checked: theme === 'light',
+      separatorBefore: true,
+      onSelect: () => setTheme('light'),
+    },
+    {
+      key: 'theme-dark',
+      label: <IconLabel icon={<Moon size={14} aria-hidden="true" />}>Dark</IconLabel>,
+      checked: theme === 'dark',
+      onSelect: () => setTheme('dark'),
+    },
+    {
+      key: 'theme-system',
+      label: <IconLabel icon={<SunMoon size={14} aria-hidden="true" />}>System</IconLabel>,
+      checked: theme === 'system',
+      onSelect: () => setTheme('system'),
+    },
     { key: 'change-password', label: 'Change Password', onSelect: onOpenChangePassword },
     { key: 'sign-out', label: 'Sign out', separatorBefore: true, onSelect: onLogout },
   ];
@@ -588,7 +672,7 @@ export default function WorkspaceSidebar({
   return (
     <aside style={styles.sidebar}>
       <div style={styles.userRow}>
-        <span style={styles.username}>{user?.username}</span>
+        <span style={styles.username}>{user?.displayName || user?.username}</span>
         <PresenceBadge status={presence[user?.id] ?? 'online'} />
         <div style={styles.userMenuWrap}>
           <Menu
@@ -596,7 +680,7 @@ export default function WorkspaceSidebar({
             items={userMenuItems}
             renderTrigger={(triggerProps) => (
               <button type="button" {...triggerProps} style={styles.userMenuTrigger} aria-label="User menu">
-                ⌄
+                <ChevronDown size={18} aria-hidden="true" />
               </button>
             )}
           />
@@ -629,21 +713,23 @@ export default function WorkspaceSidebar({
             ]}
             renderTrigger={(triggerProps) => (
               <button type="button" {...triggerProps} style={styles.aiSettingsButton}>
-                ⚙ Admin Tools
+                <Settings size={14} aria-hidden="true" />
+                Admin Tools
               </button>
             )}
           />
         </div>
       )}
 
-      {organizations.length > 0 && (
+      {showOrgRow && (
         <div style={styles.adminToolsRow}>
           <Menu
             ariaLabel="Organization switcher"
             items={orgSwitcherItems}
             renderTrigger={(triggerProps) => (
               <button type="button" {...triggerProps} style={styles.aiSettingsButton}>
-                {currentOrg?.name ?? 'Organization'} ⌄
+                {currentOrg?.name ?? 'Organization'}
+                <ChevronDown size={14} aria-hidden="true" />
               </button>
             )}
           />
@@ -687,7 +773,7 @@ export default function WorkspaceSidebar({
               ? [
                   {
                     key: 'change-visibility',
-                    label: ws.visibility === 'DISCOVERABLE' ? 'Make private' : 'Make discoverable',
+                    label: ws.visibility === 'DISCOVERABLE' ? 'Make invite-only' : 'Make listed',
                     onSelect: () => onChangeVisibility(ws.id, ws.visibility === 'DISCOVERABLE' ? 'PRIVATE' : 'DISCOVERABLE'),
                   },
                 ]
@@ -729,20 +815,20 @@ export default function WorkspaceSidebar({
                           onClick();
                         }}
                       >
-                        ⋯
+                        <MoreHorizontal size={18} aria-hidden="true" />
                       </button>
                     )}
                   />
                 )}
               </div>
               {inviteFormWorkspaceId === ws.id && (
-                <InviteMemberForm onSubmit={(username, role) => onInviteMember(ws.id, username, role)} />
+                <InviteMemberForm workspaceId={ws.id} onSubmit={(username, role) => onInviteMember(ws.id, username, role)} />
               )}
               {inviteLinkFormWorkspaceId === ws.id && (
                 <InviteLinkForm onSubmit={(email, role) => onCreateInviteLink(ws.id, email, role)} />
               )}
               {transferFormWorkspaceId === ws.id && (
-                <TransferOwnershipForm onSubmit={(username) => onTransferOwnership(ws.id, username)} />
+                <TransferOwnershipForm workspaceId={ws.id} onSubmit={(username) => onTransferOwnership(ws.id, username)} />
               )}
             </div>
           );
@@ -780,7 +866,13 @@ export default function WorkspaceSidebar({
         {showNewWorkspace ? (
           <InlineCreateForm
             placeholder="Workspace name"
-            visibilityToggle={{ label: 'Discoverable', onValue: 'DISCOVERABLE', offValue: 'PRIVATE', defaultOn: false }}
+            visibilityToggle={{
+              label: 'Listed',
+              hint: 'Listed workspaces can be joined by anyone in your organization. Invite-only workspaces require an invitation.',
+              onValue: 'DISCOVERABLE',
+              offValue: 'PRIVATE',
+              defaultOn: false,
+            }}
             onSubmit={(name, visibility) => {
               onCreateWorkspace(name, visibility);
               setShowNewWorkspace(false);
@@ -793,14 +885,15 @@ export default function WorkspaceSidebar({
               style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
               onClick={() => setShowNewWorkspace(true)}
             >
-              + New workspace
+              <Plus size={14} aria-hidden="true" />
+              New workspace
             </button>
             <button
               type="button"
               style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
               onClick={onOpenBrowseWorkspaces}
             >
-              Browse workspaces
+              Join a workspace
             </button>
           </div>
         )}
@@ -829,7 +922,10 @@ export default function WorkspaceSidebar({
                     onClick={() => onSelectChannel(ch.id)}
                     onKeyDown={activateOnKey(() => onSelectChannel(ch.id))}
                   >
-                    <span style={{ flex: 1 }}>{ch.type === 'PRIVATE' ? '🔒' : '#'} {ch.name}</span>
+                    <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {ch.type === 'PRIVATE' ? <Lock size={14} aria-hidden="true" /> : <Hash size={14} aria-hidden="true" />}
+                      {ch.name}
+                    </span>
                     {!ch.isMember && !isSelectedWorkspaceArchived && (
                       <button
                         type="button"
@@ -863,14 +959,18 @@ export default function WorkspaceSidebar({
                               onClick();
                             }}
                           >
-                            ⋯
+                            <MoreHorizontal size={18} aria-hidden="true" />
                           </button>
                         )}
                       />
                     )}
                   </div>
                   {inviteChannelFormId === ch.id && (
-                    <InviteToChannelForm onSubmit={(username) => onInviteToChannel(ch.id, username)} />
+                    <InviteToChannelForm
+                      workspaceId={selectedWorkspaceId}
+                      channelId={ch.id}
+                      onSubmit={(username) => onInviteToChannel(ch.id, username)}
+                    />
                   )}
                 </div>
               );
@@ -879,7 +979,17 @@ export default function WorkspaceSidebar({
               (showNewChannel ? (
                 <InlineCreateForm
                   placeholder="Channel name"
-                  visibilityToggle={{ label: '🔒 Private', onValue: 'PRIVATE', offValue: 'PUBLIC', defaultOn: false }}
+                  visibilityToggle={{
+                    label: (
+                      <>
+                        <Lock size={12} aria-hidden="true" /> Private
+                      </>
+                    ),
+                    hint: 'Private channels are visible only to invited members. Open channels are visible to the whole workspace.',
+                    onValue: 'PRIVATE',
+                    offValue: 'PUBLIC',
+                    defaultOn: false,
+                  }}
                   onSubmit={(name, type) => {
                     onCreateChannel(name, type ?? 'PUBLIC');
                     setShowNewChannel(false);
@@ -887,7 +997,8 @@ export default function WorkspaceSidebar({
                 />
               ) : (
                 <button type="button" style={styles.addButton} onClick={() => setShowNewChannel(true)}>
-                  + New channel
+                  <Plus size={14} aria-hidden="true" />
+                  New channel
                 </button>
               ))}
           </>

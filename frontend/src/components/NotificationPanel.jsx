@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import * as notificationsApi from '../api/notifications.js';
 
 const styles = {
@@ -130,7 +131,7 @@ export default function NotificationPanel({ onClose, onNavigate, onSummaryChange
             Mark all read
           </button>
           <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close notifications">
-            x
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
         <div style={styles.list}>
@@ -147,7 +148,9 @@ export default function NotificationPanel({ onClose, onNavigate, onSummaryChange
                 onClick={() => openNotification(notification)}
               >
                 <span style={styles.rowHead}>
-                  <span style={styles.sender}>{notification.senderUsername} mentioned you</span>
+                  <span style={styles.sender}>
+                    {notification.senderDisplayName || notification.senderUsername} mentioned you
+                  </span>
                   <span style={styles.time}>{formatTime(notification.createdAt)}</span>
                 </span>
                 <span style={styles.location}>

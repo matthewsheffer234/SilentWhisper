@@ -238,6 +238,19 @@ async function loginViaUi(page, username, password) {
   await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
 }
 
+// FEATURE_REQUEST.md's "unified people picker" entry replaced every
+// exact-username `<input>` (workspace invite, private-channel invite,
+// ownership transfer, org member add) with `PeoplePicker` — a search input
+// plus an async dropdown of real matching accounts, not free text. Selects
+// by clicking the matching `[role="option"]`, exactly what a real user
+// would do, rather than filling a hidden text value.
+async function pickPerson(page, pickerAriaLabel, query, matchUsername) {
+  const input = page.locator(`input[aria-label="${pickerAriaLabel}"]`);
+  await input.fill(query);
+  const option = page.locator(`[role="option"]:has-text("${matchUsername}")`);
+  await option.first().click({ timeout: 10_000 });
+}
+
 test.describe('core messaging workflow', () => {
   // Self-service signup is closed (FEATURE_REQUEST.md entry 1, slice 4) —
   // exercises the already-shipped InviteRedemptionPage.jsx end-to-end
@@ -263,12 +276,12 @@ test.describe('core messaging workflow', () => {
     await page.click('button:has-text("Accept invitation")');
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
 
-    await page.click('text=+ New workspace');
+    await page.click('text=New workspace');
     await page.fill('input[placeholder="Workspace name"]', 'E2E Core Co');
     await page.keyboard.press('Enter');
     await page.waitForSelector('text=E2E Core Co', { timeout: 10_000 });
 
-    await page.click('text=+ New channel');
+    await page.click('text=New channel');
     await page.fill('input[placeholder="Channel name"]', 'general');
     await page.keyboard.press('Enter');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
@@ -582,7 +595,7 @@ test.describe('workspace invite', () => {
     // Apple's terms) rather than a standalone always-visible button.
     await page.click(`button[aria-label="${admin.workspace.name} options"]`);
     await page.click('text=Invite member…');
-    await page.fill('input[placeholder="Username to invite"]', invitee.username);
+    await pickPerson(page, 'Search people to invite', invitee.username, invitee.username);
     await page.click('button:has-text("Add")');
     await expect(page.locator(`text=Added ${invitee.username} to the workspace`)).toBeVisible({ timeout: 10_000 });
 
@@ -598,16 +611,55 @@ test.describe('workspace invite', () => {
     await expect(page.locator(`button[aria-label="${admin.workspace.name} options"]`)).not.toBeVisible();
   });
 
-  test('inviting an unknown username shows an inline error, not a silent failure', async ({ page }) => {
+  // FEATURE_REQUEST.md's "unified people picker" entry changed this failure
+  // mode from "submit, then get a server error" to "never able to submit a
+  // nonexistent person in the first place" — PeoplePicker only ever lets you
+  // select a real search result, so this now proves the improved behavior
+  // (no matches, Add stays disabled) rather than the old server-round-trip
+  // error text, which this flow can no longer produce.
+  test('searching for a nonexistent person shows no results, and Add stays disabled', async ({ page }) => {
     const admin = await seedUserWithChannel('inviteadmin2');
     await loginViaUi(page, admin.username, admin.password);
     await page.click(`text=${admin.workspace.name}`);
 
     await page.click(`button[aria-label="${admin.workspace.name} options"]`);
     await page.click('text=Invite member…');
-    await page.fill('input[placeholder="Username to invite"]', 'no-such-user-anywhere');
-    await page.click('button:has-text("Add")');
-    await expect(page.locator('text=No user with that username exists')).toBeVisible({ timeout: 10_000 });
+    await page.fill('input[aria-label="Search people to invite"]', 'no-such-user-anywhere');
+    await expect(page.locator('text=No matching people found.')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('button:has-text("Add")')).toBeDisabled();
+  });
+
+  // Real bug found and fixed while building PeoplePicker (FEATURE_REQUEST.md's
+  // "unified people picker" entry): focusing the input fires an immediate
+  // search with whatever the query was at that instant (empty, since focus
+  // lands before a fill/keystroke updates it); typing then schedules its own
+  // debounced search for the real query. Nothing enforced response order —
+  // if the empty-query request's response arrived after the typed one's, its
+  // unfiltered first-page results silently clobbered the correct filtered
+  // ones, and the dropdown stayed stuck showing unrelated people. Confirmed
+  // via response logging that both requests really did fire and resolve
+  // (this was a true race, not a request that never happened), then fixed
+  // with a request-sequence guard in PeoplePicker.jsx.
+  test('typing a query into the picker right after it opens shows only matching people, not an unfiltered stale list', async ({
+    page,
+  }) => {
+    const admin = await seedUserWithChannel('racepickeradmin');
+    const target = await seedPlainUser('racepickerwinner');
+    // A second account guaranteed present in the unfiltered first page (an
+    // unrelated seeded user) but which the typed query below must exclude —
+    // proves the dropdown reflects the filtered search, not the stale
+    // unfiltered one the focus-triggered request alone would produce.
+    await seedPlainUser('racepickerother');
+
+    await loginViaUi(page, admin.username, admin.password);
+    await page.click(`text=${admin.workspace.name}`);
+    await page.click(`button[aria-label="${admin.workspace.name} options"]`);
+    await page.click('text=Invite member…');
+    // Query is the target's own full username — a prefix match for exactly
+    // that account and nothing already on the unfiltered first page.
+    await page.fill('input[aria-label="Search people to invite"]', target.username);
+    await expect(page.locator(`[role="option"]:has-text("${target.username}")`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[role="option"]:has-text("racepickerother")')).not.toBeVisible();
   });
 });
 
@@ -625,9 +677,9 @@ test.describe('private channels', () => {
     // The new-channel form's Private checkbox — unchecked by default so
     // existing "+ New channel" behavior (always PUBLIC) is unaffected;
     // checking it is what makes this a PRIVATE channel.
-    await page.click('text=+ New channel');
+    await page.click('text=New channel');
     await page.fill('input[placeholder="Channel name"]', 'e2e-secret-room');
-    await page.click('label:has-text("🔒 Private") input[type="checkbox"]');
+    await page.click('label:has-text("Private") input[type="checkbox"]');
     // Enter must target the name input specifically, not just the page:
     // checking the checkbox moved focus there, and a checkbox doesn't
     // trigger a form's implicit submit-on-Enter the way a text input does.
@@ -635,14 +687,14 @@ test.describe('private channels', () => {
     // Scoped to the sidebar (`aside`) and exact-matched: ChannelView's own
     // header repeats this same "🔒 name" text in #main once the new channel
     // auto-selects, and a bare page-wide `text=` locator matches both.
-    await expect(page.locator('aside').getByText('🔒 e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('aside').getByText('e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // Invite the existing workspace member via the channel row's own "•••"
     // overflow menu — the same pull-down-button pattern the workspace row
     // already uses for its own Invite item.
     await page.click('button[aria-label="e2e-secret-room options"]');
     await page.click('text=Invite to channel…');
-    await page.fill('input[placeholder="Username to add to channel"]', invitee.username);
+    await pickPerson(page, 'Search workspace members to add to channel', invitee.username, invitee.username);
     await page.click('button:has-text("Add")');
     await expect(page.locator(`text=Added ${invitee.username} to the channel`)).toBeVisible({ timeout: 10_000 });
 
@@ -655,7 +707,7 @@ test.describe('private channels', () => {
     await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
     await page.click(`text=${owner.workspace.name}`);
-    await expect(page.locator('aside').getByText('🔒 e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('aside').getByText('e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
     // A channel member, not a pending invite: no "Join" pill on this
     // channel's own row (scoped to it, not the whole sidebar — the
     // invitee is also a workspace member of the seeded PUBLIC "general"
@@ -671,14 +723,14 @@ test.describe('private channels', () => {
 
     await loginViaUi(page, owner.username, owner.password);
     await page.click(`text=${owner.workspace.name}`);
-    await page.click('text=+ New channel');
+    await page.click('text=New channel');
     await page.fill('input[placeholder="Channel name"]', 'e2e-locked-room');
-    await page.click('label:has-text("🔒 Private") input[type="checkbox"]');
+    await page.click('label:has-text("Private") input[type="checkbox"]');
     // Enter must target the name input specifically, not just the page:
     // checking the checkbox moved focus there, and a checkbox doesn't
     // trigger a form's implicit submit-on-Enter the way a text input does.
     await page.locator('input[placeholder="Channel name"]').press('Enter');
-    await expect(page.locator('aside').getByText('🔒 e2e-locked-room', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('aside').getByText('e2e-locked-room', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
@@ -699,25 +751,25 @@ test.describe('workspace discovery / self-service subscribe', () => {
     const seeker = await seedPlainUser('discoseeker');
 
     await loginViaUi(page, seeker.username, seeker.password);
-    await page.click('button:has-text("Browse workspaces")');
+    await page.click('button:has-text("Join a workspace")');
 
-    const subscribeButton = page.locator(`button[aria-label="Subscribe to ${publicWs.name}"]`);
+    const joinButton = page.locator(`button[aria-label="Join ${publicWs.name}"]`);
     await expect(page.locator(`text=${publicWs.name}`)).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(`text=${privateWs.name}`)).not.toBeVisible();
 
-    await subscribeButton.click();
-    // Subscribed successfully -> this specific row drops out of the
-    // discoverable list, matching BrowseWorkspacesPanel's local filter on a
-    // successful subscribe. Scoped to this row's own aria-labeled button
-    // (not a bare "Subscribe" text/global-emptiness check) since this
-    // stack has no per-test data reset — other DISCOVERABLE workspaces from
-    // earlier runs may still legitimately be listed, and subscribing here
-    // also immediately adds/selects publicWs in the sidebar behind the
-    // still-open modal (ChatShell's onSubscribed), so its name alone
-    // staying in the DOM doesn't mean this row didn't disappear.
-    await expect(subscribeButton).not.toBeVisible({ timeout: 10_000 });
+    await joinButton.click();
+    // Joined successfully -> this specific row drops out of the listed
+    // list, matching BrowseWorkspacesPanel's local filter on a successful
+    // join. Scoped to this row's own aria-labeled button (not a bare
+    // "Join" text/global-emptiness check) since this stack has no per-test
+    // data reset — other DISCOVERABLE workspaces from earlier runs may
+    // still legitimately be listed, and joining here also immediately
+    // adds/selects publicWs in the sidebar behind the still-open modal
+    // (ChatShell's onSubscribed), so its name alone staying in the DOM
+    // doesn't mean this row didn't disappear.
+    await expect(joinButton).not.toBeVisible({ timeout: 10_000 });
 
-    await page.click('button[aria-label="Close browse workspaces"]');
+    await page.click('button[aria-label="Close join a workspace"]');
     // Now shows up in the sidebar's own Workspaces list, with zero
     // involvement from the owner/admin.
     await expect(page.locator(`[role="button"]:has-text("${publicWs.name}")`)).toBeVisible({ timeout: 10_000 });
@@ -824,7 +876,16 @@ test.describe('mentions', () => {
 
     await loginViaUi(page, recipient.username, recipient.password);
     await page.click(`text=${sender.workspace.name}`);
-    await page.click('button:has-text("Join")');
+    // Scoped to the channel's own row (div.sl-row's established pattern,
+    // see the private-channel-membership test above) — a bare
+    // `button:has-text("Join")` is ambiguous now that the sidebar also has
+    // a "Join a workspace" button (FEATURE_REQUEST.md entry 2's terminology
+    // cleanup renamed "Browse workspaces" to this), and during the brief
+    // window before the channel list has loaded, that sidebar button can be
+    // the only "Join"-text match in the DOM, silently opening the wrong
+    // modal instead of joining the channel.
+    const channelRow = page.locator('div.sl-row', { hasText: sender.channel.name });
+    await channelRow.locator('button:has-text("Join")').click();
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
     await sendMessage(sender.accessToken, sender.channel.id, `hey @${recipient.username} check this out`);
@@ -940,7 +1001,7 @@ test.describe('admin user management', () => {
 
     await page.click(`button[aria-label="${admin.workspace.name} options"]`);
     await page.click('text=Invite member…');
-    await page.fill('input[placeholder="Username to invite"]', newUsername);
+    await pickPerson(page, 'Search people to invite', newUsername, newUsername);
     await page.click('button:has-text("Add")');
     await expect(page.locator(`text=Added ${newUsername} to the workspace`)).toBeVisible({ timeout: 10_000 });
 
@@ -1001,7 +1062,7 @@ test.describe('workspace archive/unarchive', () => {
     await expect(page.locator('input[placeholder="This workspace is archived — read only"]')).toBeVisible({
       timeout: 10_000,
     });
-    await expect(page.locator('button:has-text("+ New channel")')).not.toBeVisible();
+    await expect(page.locator('button:has-text("New channel")')).not.toBeVisible();
     // Archived rows render through a separate branch that never mounts the
     // overflow Menu at all (no Invite/Archive applies to a read-only
     // workspace) — a structural guarantee, not just a hidden button.
@@ -1010,7 +1071,7 @@ test.describe('workspace archive/unarchive', () => {
     const archivedRow = page.locator('[role="button"]', { hasText: seeded.workspace.name });
     await archivedRow.locator('button:has-text("Unarchive")').click();
     await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('button:has-text("+ New channel")')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('button:has-text("New channel")')).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -1024,7 +1085,7 @@ test.describe('workspace ownership transfer', () => {
     await loginViaUi(page, owner.username, owner.password);
     await page.click(`button[aria-label="${owner.workspace.name} options"]`);
     await page.click('text=Transfer ownership…');
-    await page.fill("input[placeholder=\"New owner's username\"]", target.username);
+    await pickPerson(page, 'Search workspace members for ownership transfer', target.username, target.username);
     await page.click('button:has-text("Transfer")');
     await expect(page.locator(`text=Ownership transferred to ${target.username}`)).toBeVisible({ timeout: 10_000 });
 
@@ -1042,13 +1103,13 @@ test.describe('workspace visibility change', () => {
     await loginViaUi(page, owner.username, owner.password);
 
     await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await expect(page.locator('text=Make discoverable')).toBeVisible({ timeout: 5_000 });
-    await page.click('text=Make discoverable');
+    await expect(page.locator('text=Make listed')).toBeVisible({ timeout: 5_000 });
+    await page.click('text=Make listed');
 
     // The menu closes on selection (Menu.jsx's existing behavior) — reopen
     // to confirm the label flipped, proving the change actually landed.
     await page.click(`button[aria-label="${owner.workspace.name} options"]`);
-    await expect(page.locator('text=Make private')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=Make invite-only')).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -1446,6 +1507,93 @@ test.describe('menus (Apple HIG overhaul: pull-down buttons + progressive disclo
   });
 });
 
+// New (FEATURE_REQUEST.md's "standard modal/sheet component" entry): the
+// shared Sheet primitive every modal panel now uses. Exercised through
+// ChangePasswordPanel/AiSettingsPanel/AuditDashboard specifically since
+// they're already wired up with real triggers elsewhere in this file, but
+// the behavior under test lives entirely in Sheet.jsx, not those panels.
+test.describe('Sheet primitive (FEATURE_REQUEST.md\'s standard modal/sheet component entry)', () => {
+  test('Escape closes the sheet and returns focus to its trigger', async ({ page }) => {
+    const seeded = await seedUserWithChannel('sheetescape');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Change Password")');
+    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[role="dialog"]')).not.toBeVisible();
+    await expect(page.locator('button[aria-label="User menu"]')).toBeFocused();
+  });
+
+  test('clicking the backdrop with no unsaved input closes the sheet without a confirmation prompt', async ({ page }) => {
+    const seeded = await seedUserWithChannel('sheetbackdrop');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    let dialogSeen = false;
+    page.on('dialog', () => {
+      dialogSeen = true;
+    });
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Change Password")');
+    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 10_000 });
+
+    // Backdrop is everything in the dialog's fixed overlay outside the
+    // panel itself — clicking its far corner, away from the centered panel.
+    await page.mouse.click(5, 5);
+    await expect(page.locator('[role="dialog"]')).not.toBeVisible();
+    expect(dialogSeen).toBe(false);
+  });
+
+  test('typed, unsaved input in a sheet is protected: backdrop click prompts for confirmation, and declining keeps the sheet open', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('sheetdirty');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Change Password")');
+    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 10_000 });
+    await page.fill('#current-password', 'something-typed');
+
+    // Decline the confirmation once — the sheet must still be open.
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.mouse.click(5, 5);
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+
+    // Accept it the second time — now it actually closes.
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.mouse.click(5, 5);
+    await expect(page.locator('[role="dialog"]')).not.toBeVisible();
+  });
+
+  test('Tab cycling stays trapped within the open sheet', async ({ page }) => {
+    const seeded = await seedUserWithChannel('sheettrap');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Change Password")');
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+
+    const focusablesInDialog = await dialog.locator(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ).count();
+    // Tab exactly that many times — one full cycle — must land back inside
+    // the dialog, never on something behind the backdrop.
+    for (let i = 0; i < focusablesInDialog; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await page.keyboard.press('Tab');
+    }
+    const activeIsInDialog = await page.evaluate(() => {
+      const el = document.activeElement;
+      return Boolean(el?.closest('[role="dialog"]'));
+    });
+    expect(activeIsInDialog).toBe(true);
+  });
+});
+
 test.describe('virtual scrolling', () => {
   test('a long channel history renders only a window of message rows, not all of them', async ({ page }) => {
     const seeded = await seedUserWithChannel('scroll');
@@ -1532,20 +1680,27 @@ test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
 
     await loginViaUi(page, admin.username, admin.password);
     await page.click(`button:has-text("${defaultOrg.name}")`);
-    await page.click('[role="menuitem"]:has-text("+ Create organization…")');
+    await page.click('[role="menuitem"]:has-text("Create organization…")');
     await page.fill('#new-org-name', orgName);
     await page.click('button:has-text("Create organization")');
 
     await expect(page.locator(`button:has-text("${orgName}")`)).toBeVisible({ timeout: 10_000 });
   });
 
-  test('a non-system-admin never sees "Create organization…" in the switcher', async ({ page }) => {
+  // FEATURE_REQUEST.md entry 2 (terminology/IA cleanup): organization
+  // controls are de-emphasized entirely for a user in exactly one
+  // organization with no org-admin access — there is nothing to switch to
+  // and nothing to manage, so the switcher itself (not just the
+  // system-admin-only "Create organization…" item inside it) no longer
+  // renders. This is a strictly stronger guarantee than the old
+  // menu-item-level assertion it replaces.
+  test('a non-system-admin, single-org member never sees the organization switcher at all', async ({ page }) => {
     const plain = await seedUserWithChannel('orgcreateplain');
     const [defaultOrg] = await getOrganizationsApi(plain.accessToken);
 
     await loginViaUi(page, plain.username, plain.password);
-    await page.click(`button:has-text("${defaultOrg.name}")`);
-    await expect(page.locator('text=+ Create organization…')).not.toBeVisible();
+    await expect(page.locator(`button:has-text("${defaultOrg.name}")`)).not.toBeVisible();
+    await expect(page.locator('text=Create organization…')).not.toBeVisible();
   });
 
   test('switching organizations filters the visible workspace list', async ({ page }) => {
@@ -1588,7 +1743,7 @@ test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
     await page.waitForSelector('text=Manage Organization', { timeout: 10_000 });
 
     // Add-by-username, then role change, then remove.
-    await page.fill('#org-add-username', target.username);
+    await pickPerson(page, 'Search people to add to organization', target.username, target.username);
     await page.click('button:has-text("Add member")');
     await expect(page.locator(`text=Added ${target.username} to the organization`)).toBeVisible({ timeout: 10_000 });
 

@@ -51,10 +51,24 @@ describe('POST /api/auth/login', () => {
     const res = await request(app).post('/api/auth/login').send({ username: 'erin', password: 'correct-horse-battery' });
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.user).toMatchObject({ username: 'erin', isSystemAdmin: false });
+    expect(res.body.user).toMatchObject({ username: 'erin', displayName: 'erin', isSystemAdmin: false });
 
     const row = await db('audit_logs').where({ action_type: 'AUTH_LOGIN' }).first();
     expect(row).toBeTruthy();
+  });
+
+  // FEATURE_REQUEST.md's "display names as the primary identity" entry:
+  // displayName must reflect the stored value, not just echo username back —
+  // this is the one test in the file that seeds a display name distinct from
+  // the username to actually prove that, rather than the two coincidentally
+  // matching everywhere else in this file.
+  test('returns a display name distinct from username when one is set', async () => {
+    await signup('distinctdn', { displayName: 'Distinct Display Name' });
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'distinctdn', password: 'correct-horse-battery' });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toMatchObject({ username: 'distinctdn', displayName: 'Distinct Display Name' });
   });
 
   // FEATURE_REQUEST.md entry 1, slice 3: the frontend needs isSystemAdmin to
@@ -234,7 +248,7 @@ describe('POST /api/auth/change-password', () => {
       .send({ currentPassword: 'correct-horse-battery', newPassword: 'a-brand-new-password' });
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.user).toMatchObject({ username: 'karl', isSystemAdmin: false });
+    expect(res.body.user).toMatchObject({ username: 'karl', displayName: 'karl', isSystemAdmin: false });
 
     const oldPasswordLogin = await request(app).post('/api/auth/login').send({ username: 'karl', password: 'correct-horse-battery' });
     expect(oldPasswordLogin.status).toBe(401);
@@ -286,7 +300,12 @@ describe('GET /api/auth/me', () => {
 
     const res = await request(app).get('/api/auth/me').set(authHeader(henry.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body.user).toMatchObject({ username: 'henry', email: 'henry@example.com', isSystemAdmin: false });
+    expect(res.body.user).toMatchObject({
+      username: 'henry',
+      displayName: 'henry',
+      email: 'henry@example.com',
+      isSystemAdmin: false,
+    });
   });
 
   test('reflects is_system_admin: true once a user is promoted', async () => {

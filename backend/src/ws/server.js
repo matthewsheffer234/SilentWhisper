@@ -40,6 +40,7 @@ export function attachWebSocketServer(httpServer) {
     ws.authenticated = false;
     ws.userId = null;
     ws.username = null;
+    ws.displayName = null;
     ws.tokenExp = null;
     ws.joinedChannels = new Set();
 
@@ -144,6 +145,7 @@ async function handleAuthenticate(ws, frame) {
   ws.authenticated = true;
   ws.userId = claims.userId;
   ws.username = claims.username;
+  ws.displayName = claims.displayName;
   ws.tokenExp = claims.exp;
 
   recordHeartbeat(ws.userId);
@@ -205,6 +207,7 @@ async function handleMessage(ws, frame) {
       channelId,
       userId: ws.userId,
       username: ws.username,
+      displayName: ws.displayName,
       content: frame.content,
       parentMessageId: frame.parentMessageId,
     });
@@ -244,6 +247,7 @@ async function handleMessage(ws, frame) {
         channelId,
         workspaceId: channel.workspace_id,
         mentionedBy: ws.username,
+        mentionedByDisplayName: ws.displayName,
         notificationId: notificationIdsByRecipient.get(mentionedUserId) ?? null,
       });
     }
