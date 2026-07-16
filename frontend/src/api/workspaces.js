@@ -57,6 +57,11 @@ export const joinChannel = (workspaceId, channelId) =>
 export const addChannelMember = (workspaceId, channelId, username) =>
   apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members`, { method: 'POST', body: { username } });
 
+// FEATURE_REQUEST.md's "channel details panel" entry — the full roster, not
+// the mention-autocomplete search endpoint above.
+export const listChannelMembers = (workspaceId, channelId) =>
+  apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members`);
+
 export const createDirectMessage = (targetUserId) =>
   apiFetch('/direct-messages', { method: 'POST', body: { targetUserId } });
 

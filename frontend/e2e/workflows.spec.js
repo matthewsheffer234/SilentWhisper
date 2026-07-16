@@ -743,6 +743,81 @@ test.describe('private channels', () => {
   });
 });
 
+// New (FEATURE_REQUEST.md's "channel details panel with private-channel
+// member management" entry).
+test.describe('channel details panel', () => {
+  test('the header and details panel show privacy and member count, and the panel lists the roster', async ({ page }) => {
+    const owner = await seedUserWithChannel('chandetailowner');
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`text=${owner.workspace.name}`);
+    await page.click(`text=${owner.channel.name}`);
+
+    await expect(page.locator(`button[aria-label="${owner.channel.name} channel details"]`)).toBeVisible({
+      timeout: 10_000,
+    });
+    // Header meta: an Open (PUBLIC) channel with just the owner in it.
+    await expect(page.locator('text=Open · 1 member')).toBeVisible();
+
+    await page.click(`button[aria-label="${owner.channel.name} channel details"]`);
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog.locator('text=Open · 1 member')).toBeVisible();
+    await expect(dialog.locator(`text=in ${owner.workspace.name}`)).toBeVisible();
+    await expect(dialog.getByText(owner.username, { exact: true })).toBeVisible();
+  });
+
+  test('adding a person through the details panel\'s Add People section adds them to the channel', async ({ page }) => {
+    const owner = await seedUserWithChannel('chandetailadd');
+    const invitee = await seedPlainUser('chandetailinvitee');
+    await inviteToWorkspace(owner.accessToken, owner.workspace.id, invitee.username);
+
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`text=${owner.workspace.name}`);
+    await page.click('text=New channel');
+    await page.fill('input[placeholder="Channel name"]', 'e2e-details-add-room');
+    await page.click('label:has-text("Private") input[type="checkbox"]');
+    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    await expect(page.locator('aside').getByText('e2e-details-add-room', { exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.click('button[aria-label="e2e-details-add-room channel details"]');
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await dialog
+      .locator('input[aria-label="Search workspace members to add to channel"]')
+      .fill(invitee.username);
+    await dialog.locator(`[role="option"]:has-text("${invitee.username}")`).first().click();
+    await dialog.locator('button:has-text("Add")').click();
+    await expect(dialog.locator(`text=Added ${invitee.username} to the channel`)).toBeVisible({ timeout: 10_000 });
+    await expect(dialog.getByText(invitee.username, { exact: true })).toBeVisible();
+  });
+
+  test('in an archived workspace, the details panel is read-only with no Add People section', async ({ page }) => {
+    const owner = await seedUserWithChannel('chandetailarchived');
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`text=${owner.workspace.name}`);
+    await page.click('text=New channel');
+    await page.fill('input[placeholder="Channel name"]', 'e2e-details-archived-room');
+    await page.click('label:has-text("Private") input[type="checkbox"]');
+    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    await expect(page.locator('aside').getByText('e2e-details-archived-room', { exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.click(`button[aria-label="${owner.workspace.name} options"]`);
+    await page.click('text=Archive workspace');
+    await expect(page.locator(`text=(archived — read only)`)).toBeVisible({ timeout: 10_000 });
+
+    await page.click('text=e2e-details-archived-room');
+    await page.click('button[aria-label="e2e-details-archived-room channel details"]');
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog.locator("text=This workspace is archived — read only. Membership can't be changed.")).toBeVisible();
+    await expect(dialog.locator('text=Add people')).not.toBeVisible();
+  });
+});
+
 test.describe('workspace discovery / self-service subscribe', () => {
   test('a public workspace is discoverable and joinable with no invite; a private one never appears', async ({ page }) => {
     const owner = await seedPlainUser('discoowner');

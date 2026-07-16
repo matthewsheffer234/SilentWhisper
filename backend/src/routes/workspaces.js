@@ -988,6 +988,11 @@ workspacesRouter.get('/:workspaceId/channels', async (req, res, next) => {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspaceMember(db, req.user.id, workspaceId);
 
+    // FEATURE_REQUEST.md's "channel details panel" entry: the channel
+    // header shows member count without a separate fetch, so it's a
+    // correlated subquery here rather than a second LEFT JOIN — that would
+    // multiply rows (one per member) and require an extra GROUP BY across
+    // every other already-selected column.
     const rows = await db('channels as c')
       .leftJoin('channel_members as cm', function joinMembership() {
         this.on('cm.channel_id', '=', 'c.id').andOn('cm.user_id', '=', db.raw('?', [req.user.id]));
@@ -996,6 +1001,11 @@ workspacesRouter.get('/:workspaceId/channels', async (req, res, next) => {
       .andWhere((builder) => builder.where('c.type', 'PUBLIC').orWhereNotNull('cm.user_id'))
       .select('c.id', 'c.name', 'c.type', 'c.created_at')
       .select(db.raw('(cm.user_id IS NOT NULL) as "isMember"'))
+      .select(
+        db.raw(
+          '(SELECT COUNT(*) FROM channel_members WHERE channel_members.channel_id = c.id)::int as "memberCount"',
+        ),
+      )
       .orderBy('c.created_at', 'asc');
 
     res.json(rows);
@@ -1032,6 +1042,34 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/join', async (req, res,
     }
 
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md's "channel details panel" entry: the full member
+// roster for the panel's own member list — deliberately not the
+// GET /channels/:channelId/members mention-autocomplete endpoint
+// (messages.js), which is search-driven and capped at 8 results by design.
+// This one is a plain, uncapped listing, gated the same as adding a member
+// (requireChannelMember) since seeing the full roster is no more sensitive
+// than being able to grow it.
+workspacesRouter.get('/:workspaceId/channels/:channelId/members', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const channelId = assertUuid(req.params.channelId, 'channelId');
+    const channel = await requireChannelMember(db, req.user.id, channelId);
+    if (channel.workspace_id !== workspaceId) {
+      throw new ValidationError('Channel not found in this workspace');
+    }
+
+    const rows = await db('channel_members as cm')
+      .join('users', 'users.id', 'cm.user_id')
+      .where('cm.channel_id', channelId)
+      .select('users.id', 'users.username', 'users.display_name')
+      .orderBy('users.username', 'asc');
+
+    res.json(rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name })));
   } catch (err) {
     next(err);
   }

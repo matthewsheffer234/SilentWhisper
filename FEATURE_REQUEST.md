@@ -46,22 +46,7 @@ Design:
 - **Audit and compatibility**: global admin-boundary tightening is a deliberate behavior change. Document it in `PROJECT_PLAN.md` Section 11 when shipped. Existing audit event types can remain; add new audit rows only for any new admin-scoped endpoint introduced, not for ordinary denied attempts.
 - **Tests**: add backend tests proving ordinary workspace owners/managers cannot access global audit/AI settings; system admins still can; mismatched workspace/channel member-add fails and does not create membership; disabled users cannot use REST or WS with still-unexpired access tokens; archived workspace/org invitations cannot be redeemed; oversized WebSocket frames are rejected; oversized group-DM member arrays 400. Regression-run existing auth, admin, workspace, invitations, WebSocket, audit, AI settings, and mention notification tests.
 
-### 2. Channel details panel with private-channel member management
-
-**Status**: Proposed
-**Utility**: High. Private-channel membership is currently hidden behind a channel row overflow menu and an inline username form. Users should manage channel membership and understand channel context from the channel they are viewing.
-**Origin**: `UI_UX_REVIEW.md` recommendations for private-channel membership, channel header context, breadcrumbs, and archived/read-only state. Merged because the same channel header/details surface should carry all of this context instead of creating two overlapping header refactors.
-
-Design:
-- **Entry point**: add a details/info button in `ChannelView.jsx`'s header. The header should show channel name, open/private state, member count, and archived/read-only state, with details opening a right-side panel or modal sheet.
-- **Panel content**: show channel name, privacy, optional description, member count, member list with display names/presence, and an "Add People" action when the caller can add members. Show current workspace context in or near the header when it is not visually obvious, especially after search or mention navigation jumps across workspaces.
-- **Add people**: use the unified people picker. For private channels, only eligible workspace members should be selectable. Public channels continue to support self-service join.
-- **Authorization**: reuse existing `requireChannelMember` and workspace membership checks. The UI should hide add controls when not allowed, but backend remains authoritative.
-- **Archived state**: archived workspace channels render details read-only, disable membership changes, and show read-only state in the header and composer, not only in the sidebar section label.
-- **Search/navigation consistency**: when navigating to a result from another workspace, update visible workspace/channel state consistently. Avoid the existing noted gap for workspace-less DM/group-DM channels once DM navigation exists.
-- **Tests**: backend tests for any new channel-members listing endpoint; frontend/e2e tests for viewing members, adding a person to a private channel, archived read-only behavior, cross-workspace search navigation, private vs. open channel header labels, and lack of leakage to non-members.
-
-### 3. Focused creation sheets for workspaces and channels
+### 2. Focused creation sheets for workspaces and channels
 
 **Status**: Proposed
 **Utility**: High. Inline creation forms compress important choices into the sidebar, making workspace/channel creation feel easy to misconfigure. Sheets give naming, visibility, and membership choices enough room to be understood.
@@ -75,7 +60,7 @@ Design:
 - **Compatibility**: keep existing create endpoints initially. Add description/initial-members support only if the backend schema/API is extended in the same feature slice.
 - **Tests**: e2e tests for creating listed/invite-only workspaces, open/private channels, cancellation, validation, and private channel creation with initial members if implemented.
 
-### 4. Dedicated admin/settings area
+### 3. Dedicated admin/settings area
 
 **Status**: Proposed
 **Utility**: Medium-high. Admin actions should not dominate daily chat navigation. Moving them into a distinct area lowers cognitive load while preserving privileged workflows.
@@ -89,7 +74,7 @@ Design:
 - **Navigation**: admin/settings surfaces may be modal sheets initially, but should share consistent layout and not live as permanent sidebar rows.
 - **Tests**: e2e tests for visibility by role: non-admin member, workspace manager/owner, organization admin, and system admin.
 
-### 5. Confirmation and recovery for destructive or high-impact actions
+### 4. Confirmation and recovery for destructive or high-impact actions
 
 **Status**: Proposed
 **Utility**: Medium-high. Archive, remove member, revoke invitation, transfer ownership, password reset, and account disable actions can surprise users if triggered by a single click.
@@ -102,7 +87,7 @@ Design:
 - **Audit**: no new audit event type required if the underlying action is already audited. Ensure cancelled confirmations do not audit.
 - **Tests**: e2e tests for each destructive flow proving cancel does nothing and confirm performs the action.
 
-### 6. Workspace home and actionable empty states
+### 5. Workspace home and actionable empty states
 
 **Status**: Proposed
 **Utility**: High. "Select a channel to get started" leaves new or lightly used workspaces feeling blank. A workspace home explains the current context and offers the next likely actions.
@@ -116,7 +101,7 @@ Design:
 - **Data**: use already-loaded workspace/channel data first; avoid adding a heavy dashboard query unless recent activity is included.
 - **Tests**: frontend/e2e coverage for no channel selected, empty new workspace, archived workspace, and member vs. manager/owner action visibility.
 
-### 7. Default workspace on login
+### 6. Default workspace on login
 
 **Status**: Proposed
 **Utility**: Medium. Today, `ChatShell.jsx`'s initial-load effect (`frontend/src/components/ChatShell.jsx:174-177`) auto-selects `ws[0].id` — whichever workspace `GET /workspaces` happens to return first (`ORDER BY created_at ASC`, i.e. oldest-joined), not a deliberate choice. For a user in exactly one workspace this is already a no-op (there's only one candidate), but for anyone in two or more it's arbitrary — the main window can land on a stale or rarely-used workspace, leaving the message pane empty until the user manually clicks the one they actually wanted. Letting them pin a specific workspace fixes that dead-space-on-startup gap directly.
@@ -132,7 +117,7 @@ Design:
 - **Frontend — applying it on load**: `ChatShell.jsx`'s initial-load effect (line 174-177 today) changes from unconditionally picking `ws[0].id` to: if `user.defaultWorkspaceId` is set *and* present in the just-fetched `ws` list (defends against a default pointing at a workspace the user has since lost membership in — no separate cleanup job needed, this check is cheap and already has the list in hand), select it; otherwise fall back to `ws[0].id` exactly as today.
 - **Tests**: setting a default on a workspace the caller belongs to succeeds and is reflected in `GET /api/auth/me`/login/signup responses; setting it on a workspace the caller isn't a member of 404s (existence-hiding, not 403); setting `null` clears it; a plain `MEMBER` (not just `ADMIN`) can set their own default; the frontend's initial-selection logic prefers a valid `defaultWorkspaceId` over `ws[0]` when both are present, and falls back to `ws[0]` when the stored default is no longer in the caller's workspace list (e.g. removed from that workspace since setting it).
 
-### 8. Direct Messages as a first-class navigation section
+### 7. Direct Messages as a first-class navigation section
 
 **Status**: Proposed
 **Utility**: High. The backend has direct-message and group-DM routes, but the UI has no DM browsing surface. A messaging product feels incomplete when person-to-person conversations are invisible in navigation.
@@ -146,7 +131,7 @@ Design:
 - **Privacy**: DMs and group DMs remain membership-only and workspace-independent per existing backend model.
 - **Tests**: backend tests for DM listing authorization; e2e tests for starting a DM, reopening an existing DM, starting a group DM, and navigating between workspace channels and DMs.
 
-### 9. Navigation-first sidebar redesign
+### 8. Navigation-first sidebar redesign
 
 **Status**: Proposed
 **Utility**: High. The sidebar currently mixes account controls, search, admin tools, organization switching, workspace navigation, workspace management, channel navigation, creation forms, invitations, and channel membership. Reducing it to navigation-first behavior directly addresses the user's workflow confusion.
@@ -160,7 +145,7 @@ Design:
 - **Responsive behavior**: maintain 44px minimum touch targets and ensure long names truncate predictably without hiding critical badges.
 - **Tests**: update e2e workflows that currently open inline sidebar forms. Add tests proving navigation remains usable with many workspaces/channels and admin controls do not appear for non-privileged users.
 
-### 10. Message presentation improvements for team scanability
+### 9. Message presentation improvements for team scanability
 
 **Status**: Proposed
 **Utility**: Medium. The current iMessage-style bubbles are friendly, but team channels need fast scanning by author, thread activity, and context. This entry tunes message presentation without undoing the existing bubble work prematurely.
@@ -174,7 +159,7 @@ Design:
 - **Data**: add reply counts/last reply metadata to message list responses if needed; keep pagination bounded.
 - **Tests**: frontend tests for grouping and author display; backend tests if reply-count metadata is added; visual/e2e checks for long names and mobile-width layouts.
 
-### 11. Contextual AI action menu and clearer AI output scope
+### 10. Contextual AI action menu and clearer AI output scope
 
 **Status**: Proposed
 **Utility**: Medium. Channel summaries and thread task extraction are useful, but direct header buttons compete with channel context controls. Grouping AI actions makes them available without making them the primary object of the interface.
@@ -189,7 +174,7 @@ Design:
 - **Audit/rate limits**: reuse existing AI audit and concurrency conventions.
 - **Tests**: frontend/e2e tests for menu placement, loading/unavailable states, scope text, streaming output, and dismissal.
 
-### 12. Cross-channel "Catch Me Up" workspace digests
+### 11. Cross-channel "Catch Me Up" workspace digests
 
 **Status**: Proposed
 **Utility**: High. This is a natural next step for the existing local AI features: it turns unread mentions and important channel activity into a short operational brief for someone returning from a multi-day break, instead of forcing them to manually scan every backlog thread.
@@ -208,6 +193,12 @@ Design:
 - **Tests**: endpoint selects only authorized unread mentions/starred-channel messages; time-window clamping works; long inputs are chunked below configured limits; provider streams are forwarded incrementally to the client; cancellation closes the upstream provider request; audit rows record metadata without raw content.
 
 ## Done
+
+### Channel details panel with private-channel member management
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Channel details panel with private-channel member management" (2026-07-16).
+
+New `ChannelDetailsPanel.jsx` (a `Sheet`) reachable from a new info-icon button in `ChannelView.jsx`'s header, alongside an inline "Private · N members" / "Open · N members" meta line. Shows privacy, member count, workspace context, the full roster (display name + presence), and an "Add people" section (`PeoplePicker`) for eligible callers; archived workspaces render read-only. Backend gained `memberCount` on the channel list and a new uncapped `GET /:workspaceId/channels/:channelId/members` roster endpoint, distinct from the existing capped mention-autocomplete search. `WorkspaceSidebar.jsx`'s existing "Invite to channel…" overflow item was deliberately left in place as a second entry point — removing it is the later, separate sidebar-redesign entry's job.
 
 ### Unified people picker for member, invite, ownership, DM, and mention flows
 

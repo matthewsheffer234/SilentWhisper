@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { X, Hash, Lock, Sparkles } from 'lucide-react';
+import { X, Hash, Lock, Sparkles, Info } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
@@ -22,6 +22,20 @@ const styles = {
     color: 'var(--text-1)',
   },
   headerTitle: { display: 'flex', alignItems: 'center', gap: 8 },
+  headerMeta: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-xs)', fontWeight: 400, color: 'var(--text-3)' },
+  headerActions: { display: 'flex', alignItems: 'center', gap: 6 },
+  detailsButton: {
+    minWidth: 44,
+    minHeight: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-3)',
+    cursor: 'pointer',
+    borderRadius: 8,
+  },
   // 44px minimum height on every standalone tap target, per PROJECT_PLAN.md
   // Section 7 (Apple HIG Alignment) and the Phase 5 accessibility pass that
   // caught this row of toolbar-style buttons rendering well under it.
@@ -175,7 +189,18 @@ const styles = {
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '20px 0' },
 };
 
-export default function ChannelView({ channel, messages, presence, currentUser, joined, archived, onSend, onOpenThread, mainContentId }) {
+export default function ChannelView({
+  channel,
+  messages,
+  presence,
+  currentUser,
+  joined,
+  archived,
+  onSend,
+  onOpenThread,
+  onOpenDetails,
+  mainContentId,
+}) {
   const [draft, setDraft] = useState('');
   const feedRef = useRef(null);
   const [summary, setSummary] = useState(null); // { loading, text, error }
@@ -389,11 +414,21 @@ export default function ChannelView({ channel, messages, presence, currentUser, 
         <span style={styles.headerTitle}>
           {channel.type === 'PRIVATE' ? <Lock size={16} aria-hidden="true" /> : <Hash size={16} aria-hidden="true" />}
           {channel.name}
+          <span style={styles.headerMeta}>
+            {channel.type === 'PRIVATE' ? 'Private' : 'Open'}
+            {typeof channel.memberCount === 'number' && ` · ${channel.memberCount} member${channel.memberCount === 1 ? '' : 's'}`}
+            {archived && ' · archived — read only'}
+          </span>
         </span>
-        <button type="button" style={styles.summarizeButton} onClick={handleSummarize} disabled={summary?.loading}>
-          <Sparkles size={14} aria-hidden="true" />
-          {summary?.loading ? 'Summarizing…' : 'Summarize'}
-        </button>
+        <span style={styles.headerActions}>
+          <button type="button" style={styles.summarizeButton} onClick={handleSummarize} disabled={summary?.loading}>
+            <Sparkles size={14} aria-hidden="true" />
+            {summary?.loading ? 'Summarizing…' : 'Summarize'}
+          </button>
+          <button type="button" style={styles.detailsButton} onClick={onOpenDetails} aria-label={`${channel.name} channel details`}>
+            <Info size={18} aria-hidden="true" />
+          </button>
+        </span>
       </div>
       {summary && (
         <div style={styles.summaryPanel}>

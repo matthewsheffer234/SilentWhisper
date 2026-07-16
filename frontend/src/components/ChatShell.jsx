@@ -17,6 +17,7 @@ import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import OrgManagementPanel from './OrgManagementPanel.jsx';
 import SystemAdminPanel from './SystemAdminPanel.jsx';
 import NotificationPanel from './NotificationPanel.jsx';
+import ChannelDetailsPanel from './ChannelDetailsPanel.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -68,6 +69,7 @@ export default function ChatShell() {
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [channelDetailsOpen, setChannelDetailsOpen] = useState(false);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
@@ -233,6 +235,14 @@ export default function ChatShell() {
     if (!selectedWorkspaceId) return;
     workspacesApi.listChannels(selectedWorkspaceId).then(setChannels);
   }, [selectedWorkspaceId]);
+
+  // A channel details panel belongs to the channel it was opened for —
+  // close it out on switch rather than leaving stale member data visible
+  // under a different channel's header (same reasoning ChannelView's own
+  // effect already applies to its Summarize panel).
+  useEffect(() => {
+    setChannelDetailsOpen(false);
+  }, [selectedChannelId]);
 
   const selectChannel = useCallback(
     (channelId) => {
@@ -417,6 +427,14 @@ export default function ChatShell() {
   // workspace's role.
   const canManageAi = hasSystemPermission(user?.isSystemAdmin, workspaces, PERMISSIONS.AI_SETTINGS_MANAGE);
   const isSelectedWorkspaceArchived = Boolean(workspaces.find((ws) => ws.id === selectedWorkspaceId)?.archivedAt);
+  const selectedWorkspaceName = workspaces.find((ws) => ws.id === selectedWorkspaceId)?.name ?? null;
+  // Same gate WorkspaceSidebar's own "Invite to channel…" overflow item uses
+  // (FEATURE_REQUEST.md's private-channel invite workflow entry) — any
+  // member of a PRIVATE channel can add someone else to it, no extra
+  // permission beyond membership.
+  const canAddChannelMembers = Boolean(
+    selectedChannel?.isMember && selectedChannel?.type === 'PRIVATE' && !isSelectedWorkspaceArchived,
+  );
 
   return (
     <div style={styles.shell}>
@@ -482,6 +500,7 @@ export default function ChatShell() {
         archived={isSelectedWorkspaceArchived}
         onSend={handleSend}
         onOpenThread={openThread}
+        onOpenDetails={() => setChannelDetailsOpen(true)}
       />
       <ThreadSidebar
         rootMessage={threadRoot}
@@ -491,6 +510,18 @@ export default function ChatShell() {
         onSendReply={handleSendReply}
         onClose={() => setThreadRoot(null)}
       />
+      {channelDetailsOpen && selectedChannel && (
+        <ChannelDetailsPanel
+          channel={selectedChannel}
+          workspaceId={selectedWorkspaceId}
+          workspaceName={selectedWorkspaceName}
+          presence={presence}
+          canAddMembers={canAddChannelMembers}
+          archived={isSelectedWorkspaceArchived}
+          onAddMember={handleInviteToChannel}
+          onClose={() => setChannelDetailsOpen(false)}
+        />
+      )}
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
