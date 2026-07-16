@@ -16,7 +16,6 @@ import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
-import WorkspaceSettingsSheet from './WorkspaceSettingsSheet.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import { searchWorkspaceMembers } from '../api/workspaces.js';
@@ -327,10 +326,7 @@ export default function WorkspaceSidebar({
   onLogout,
   canManageAi,
   onNavigateToSearchResult,
-  onInviteMember,
-  onCreateInviteLink,
   onOpenChangePassword,
-  onArchiveWorkspace,
   onUnarchiveWorkspace,
   onOpenBrowseWorkspaces,
   organizations,
@@ -339,16 +335,13 @@ export default function WorkspaceSidebar({
   isSystemAdmin,
   onOpenCreateOrganization,
   onOpenAdminPanel,
-  onTransferOwnership,
-  onChangeVisibility,
-  onToggleManagersCanArchive,
+  onOpenWorkspaceSettings,
   notificationSummary,
   onOpenNotifications,
   onOpenCreateWorkspace,
   onOpenCreateChannel,
 }) {
   const [inviteChannelFormId, setInviteChannelFormId] = useState(null);
-  const [workspaceSettingsId, setWorkspaceSettingsId] = useState(null);
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
 
@@ -556,25 +549,13 @@ export default function WorkspaceSidebar({
                     aria-label={`${ws.name} settings`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setWorkspaceSettingsId(ws.id);
+                      onOpenWorkspaceSettings(ws.id);
                     }}
                   >
                     <MoreHorizontal size={18} aria-hidden="true" />
                   </button>
                 )}
               </div>
-              {workspaceSettingsId === ws.id && (
-                <WorkspaceSettingsSheet
-                  workspace={ws}
-                  onClose={() => setWorkspaceSettingsId(null)}
-                  onInviteMember={(username, role) => onInviteMember(ws.id, username, role)}
-                  onCreateInviteLink={(email, role) => onCreateInviteLink(ws.id, email, role)}
-                  onTransferOwnership={(username) => onTransferOwnership(ws.id, username)}
-                  onChangeVisibility={(visibility) => onChangeVisibility(ws.id, visibility)}
-                  onToggleManagersCanArchive={(value) => onToggleManagersCanArchive(ws.id, value)}
-                  onArchiveWorkspace={() => onArchiveWorkspace(ws.id)}
-                />
-              )}
             </div>
           );
         })}

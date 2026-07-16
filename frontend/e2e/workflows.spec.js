@@ -102,6 +102,23 @@ async function seedUserWithChannel(label) {
   return { username, password: TEST_PASSWORD, accessToken, userId, workspace, channel };
 }
 
+// A workspace with no channels at all — FEATURE_REQUEST.md's "workspace
+// home and actionable empty states" entry's own first-run scenario.
+async function seedUserWithWorkspace(label) {
+  const username = uniqueUsername(label);
+  const userId = await withPgClient((pgClient) => insertUser(pgClient, username));
+  const accessToken = signAccessToken(userId, username);
+
+  const wsRes = await fetch(`${API_BASE}/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ name: `${username} empty workspace` }),
+  });
+  const workspace = await wsRes.json();
+
+  return { username, password: TEST_PASSWORD, accessToken, userId, workspace };
+}
+
 // Self-service workspace subscription (FEATURE_REQUEST.md): a workspace
 // created with visibility: 'PUBLIC', distinct from seedUserWithChannel's
 // default PRIVATE workspace. organizationId (FEATURE_REQUEST.md entry 1,
@@ -238,6 +255,25 @@ async function loginViaUi(page, username, password) {
   await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
 }
 
+// FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
+// the main pane now shows a WorkspaceHome overview (workspace name heading,
+// channel list) the instant a workspace is selected with no channel open —
+// which, combined with ChatShell.jsx's own initial-load effect auto-
+// selecting the first workspace, means the workspace's name (and, once
+// inside it, its channel names) are visible in *both* the sidebar row and
+// the main pane simultaneously from the moment the page loads. A bare
+// `text=` locator for either one is ambiguous the instant that happens —
+// scoping to `aside` (the sidebar) is this file's own established fix for
+// exactly this "same text in two places" shape (see the channel-details
+// panel test's own `aside`-scoping comment above).
+async function selectWorkspaceRow(page, workspaceName) {
+  await page.locator('aside').getByText(workspaceName, { exact: true }).click();
+}
+
+async function selectChannelRow(page, channelName) {
+  await page.locator('aside').getByText(channelName, { exact: true }).click();
+}
+
 // FEATURE_REQUEST.md's "unified people picker" entry replaced every
 // exact-username `<input>` (workspace invite, private-channel invite,
 // ownership transfer, org member add) with `PeoplePicker` — a search input
@@ -366,8 +402,8 @@ test.describe('markdown formatting', () => {
   }) => {
     const seeded = await seedUserWithChannel('markdown');
     await loginViaUi(page, seeded.username, seeded.password);
-    await page.click(`text=${seeded.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
     await page.fill(
@@ -397,8 +433,8 @@ test.describe('markdown formatting', () => {
   test('a mention still highlights inside bold text, in the real rendered feed', async ({ page }) => {
     const seeded = await seedUserWithChannel('markdownmention');
     await loginViaUi(page, seeded.username, seeded.password);
-    await page.click(`text=${seeded.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
     await page.fill('input[placeholder^="Message #"]', `**hey @${seeded.username} check this out**`);
@@ -420,8 +456,8 @@ test.describe('iMessage-style message bubble layout', () => {
     await joinChannelApi(other.accessToken, me.workspace.id, me.channel.id);
 
     await loginViaUi(page, me.username, me.password);
-    await page.click(`text=${me.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, me.workspace.name);
+    await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
     // Two consecutive messages from "me" (for the grouping check below),
@@ -490,8 +526,8 @@ test.describe('@mention autocomplete', () => {
     await joinChannelApi(other.accessToken, me.workspace.id, me.channel.id);
 
     await loginViaUi(page, me.username, me.password);
-    await page.click(`text=${me.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, me.workspace.name);
+    await selectChannelRow(page, 'general');
     const input = page.locator('input[placeholder^="Message #"]');
     await input.waitFor({ timeout: 10_000 });
     const partial = other.username.slice(0, 6);
@@ -550,8 +586,8 @@ test.describe('AI features (real Ollama inference — allow extra time)', () => 
     await sendMessage(seeded.accessToken, seeded.channel.id, 'I will handle the changelog.');
 
     await loginViaUi(page, seeded.username, seeded.password);
-    await page.click(`text=${seeded.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
     await page.click('button:has-text("Summarize")');
@@ -628,7 +664,7 @@ test.describe('workspace invite', () => {
     const invitee = await seedPlainUser('inviteuser');
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click(`text=${admin.workspace.name}`);
+    await selectWorkspaceRow(page, admin.workspace.name);
 
     // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: Invite
     // now lives inside the workspace row's own WorkspaceSettingsSheet
@@ -648,7 +684,7 @@ test.describe('workspace invite', () => {
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
-    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('aside').getByText(admin.workspace.name, { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(`button[aria-label="${admin.workspace.name} settings"]`)).not.toBeVisible();
   });
 
@@ -661,7 +697,7 @@ test.describe('workspace invite', () => {
   test('searching for a nonexistent person shows no results, and Add stays disabled', async ({ page }) => {
     const admin = await seedUserWithChannel('inviteadmin2');
     await loginViaUi(page, admin.username, admin.password);
-    await page.click(`text=${admin.workspace.name}`);
+    await selectWorkspaceRow(page, admin.workspace.name);
 
     await openWorkspaceSettings(page, admin.workspace.name);
     await page.fill('input[aria-label="Search people to invite"]', 'no-such-user-anywhere');
@@ -692,7 +728,7 @@ test.describe('workspace invite', () => {
     await seedPlainUser('racepickerother');
 
     await loginViaUi(page, admin.username, admin.password);
-    await page.click(`text=${admin.workspace.name}`);
+    await selectWorkspaceRow(page, admin.workspace.name);
     await openWorkspaceSettings(page, admin.workspace.name);
     // Query is the target's own full username — a prefix match for exactly
     // that account and nothing already on the unfiltered first page.
@@ -711,7 +747,7 @@ test.describe('private channels', () => {
     await inviteToWorkspace(owner.accessToken, owner.workspace.id, invitee.username);
 
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
 
     // The new-channel form's Private checkbox — unchecked by default so
     // existing "+ New channel" behavior (always PUBLIC) is unaffected;
@@ -745,7 +781,7 @@ test.describe('private channels', () => {
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
     await expect(page.locator('aside').getByText('e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
     // A channel member, not a pending invite: no "Join" pill on this
     // channel's own row (scoped to it, not the whole sidebar — the
@@ -761,7 +797,7 @@ test.describe('private channels', () => {
     await inviteToWorkspace(owner.accessToken, owner.workspace.id, bystander.username);
 
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
     await page.click('text=New channel');
     await page.fill('#new-channel-name', 'e2e-locked-room');
     await page.click('label:has-text("Private") input[type="radio"]');
@@ -774,7 +810,7 @@ test.describe('private channels', () => {
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
     await loginViaUi(page, bystander.username, bystander.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
     // A workspace member who isn't in the private channel doesn't even see
     // it listed (existence-hiding), so there's nothing to attach an
     // overflow trigger to in the first place.
@@ -788,8 +824,8 @@ test.describe('channel details panel', () => {
   test('the header and details panel show privacy and member count, and the panel lists the roster', async ({ page }) => {
     const owner = await seedUserWithChannel('chandetailowner');
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`text=${owner.workspace.name}`);
-    await page.click(`text=${owner.channel.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
+    await selectChannelRow(page, owner.channel.name);
 
     await expect(page.locator(`button[aria-label="${owner.channel.name} channel details"]`)).toBeVisible({
       timeout: 10_000,
@@ -811,7 +847,7 @@ test.describe('channel details panel', () => {
     await inviteToWorkspace(owner.accessToken, owner.workspace.id, invitee.username);
 
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
     await page.click('text=New channel');
     await page.fill('#new-channel-name', 'e2e-details-add-room');
     await page.click('label:has-text("Private") input[type="radio"]');
@@ -835,7 +871,7 @@ test.describe('channel details panel', () => {
   test('in an archived workspace, the details panel is read-only with no Add People section', async ({ page }) => {
     const owner = await seedUserWithChannel('chandetailarchived');
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
     await page.click('text=New channel');
     await page.fill('#new-channel-name', 'e2e-details-archived-room');
     await page.click('label:has-text("Private") input[type="radio"]');
@@ -855,6 +891,75 @@ test.describe('channel details panel', () => {
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await expect(dialog.locator("text=This workspace is archived — read only. Membership can't be changed.")).toBeVisible();
     await expect(dialog.locator('text=Add people')).not.toBeVisible();
+  });
+});
+
+// New (FEATURE_REQUEST.md's "workspace home and actionable empty states"
+// entry): WorkspaceHome.jsx replaces ChannelView.jsx's generic "Select a
+// channel to get started." fallback with an actual overview whenever a
+// workspace is selected and no channel is open.
+test.describe('workspace home', () => {
+  test('a workspace with channels lists them and shows admin actions for the owner', async ({ page }) => {
+    const owner = await seedUserWithChannel('homeowner');
+    await loginViaUi(page, owner.username, owner.password);
+    await selectWorkspaceRow(page, owner.workspace.name);
+
+    await expect(page.locator('#main').getByRole('heading', { name: owner.workspace.name })).toBeVisible({
+      timeout: 10_000,
+    });
+    const channelRow = page.locator('#main li', { hasText: owner.channel.name });
+    await expect(channelRow).toBeVisible();
+    // The owner is already a member of a channel they created — Open, not Join.
+    await expect(channelRow.locator('button:has-text("Open")')).toBeVisible();
+    await expect(page.locator('#main button:has-text("Create Channel")')).toBeVisible();
+    await expect(page.locator('#main button:has-text("Invite People")')).toBeVisible();
+
+    // The list is actionable, not just informational: Open really navigates.
+    await channelRow.locator('button:has-text("Open")').click();
+    await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('a brand-new workspace with no channels shows the first-run prompt', async ({ page }) => {
+    const owner = await seedUserWithWorkspace('homeempty');
+    await loginViaUi(page, owner.username, owner.password);
+    await selectWorkspaceRow(page, owner.workspace.name);
+
+    await expect(page.locator('#main').getByText("doesn't have any channels yet")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#main button:has-text("Create your first channel")')).toBeVisible();
+    await expect(page.locator('#main button:has-text("Invite teammates")')).toBeVisible();
+  });
+
+  test('an archived workspace shows the read-only note and hides admin actions', async ({ page }) => {
+    const owner = await seedUserWithChannel('homearchived');
+    await loginViaUi(page, owner.username, owner.password);
+    await selectWorkspaceRow(page, owner.workspace.name);
+    await expect(page.locator('#main').getByRole('heading', { name: owner.workspace.name })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await openWorkspaceSettings(page, owner.workspace.name);
+    await page.click('button:has-text("Archive workspace")');
+    await confirmDialogAction(page, 'Archive Workspace', 'Archive');
+
+    await expect(page.locator('#main').getByText('archived — read only')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#main button:has-text("Create Channel")')).not.toBeVisible();
+    await expect(page.locator('#main button:has-text("Invite People")')).not.toBeVisible();
+  });
+
+  test('a plain member sees Create Channel but not Invite People, and Join instead of Open for a channel they have not joined', async ({
+    page,
+  }) => {
+    const owner = await seedUserWithChannel('homemember');
+    const member = await seedPlainUser('homemembertarget');
+    await inviteToWorkspace(owner.accessToken, owner.workspace.id, member.username);
+
+    await loginViaUi(page, member.username, member.password);
+    await selectWorkspaceRow(page, owner.workspace.name);
+
+    await expect(page.locator('#main button:has-text("Create Channel")')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#main button:has-text("Invite People")')).not.toBeVisible();
+    const channelRow = page.locator('#main li', { hasText: owner.channel.name });
+    await expect(channelRow.locator('button:has-text("Join")')).toBeVisible();
   });
 });
 
@@ -880,6 +985,10 @@ test.describe('workspace and channel creation sheets', () => {
     await page.click('text=Sign out');
     await loginViaUi(page, seeker.username, seeker.password);
     await page.click('button:has-text("Join a workspace")');
+    // Inside the BrowseWorkspacesPanel dialog, not the sidebar — the seeker
+    // has no workspaces of their own yet, so there's no `aside` copy of
+    // this text to disambiguate against here (unlike the owner's own
+    // assertion above).
     await expect(page.locator(`text=${workspaceName}`)).toBeVisible({ timeout: 10_000 });
   });
 
@@ -908,12 +1017,15 @@ test.describe('workspace and channel creation sheets', () => {
   test('a channel name over the length limit shows inline validation and blocks submit', async ({ page }) => {
     const owner = await seedUserWithChannel('createsheettoolong');
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
 
     await page.click('text=New channel');
     await page.fill('#new-channel-name', 'x'.repeat(101));
     await expect(page.locator('text=Name must be at most 100 characters')).toBeVisible();
-    await expect(page.locator('button:has-text("Create Channel")')).toBeDisabled();
+    // Scoped to the sheet's own dialog — FEATURE_REQUEST.md's "workspace
+    // home and actionable empty states" entry gave WorkspaceHome its own,
+    // identically-labeled "Create Channel" button behind this one.
+    await expect(page.locator('[role="dialog"] button:has-text("Create Channel")')).toBeDisabled();
   });
 
   test('creating a private channel with an initial invitee adds them immediately, no separate invite step needed', async ({
@@ -924,12 +1036,12 @@ test.describe('workspace and channel creation sheets', () => {
     await inviteToWorkspace(owner.accessToken, owner.workspace.id, invitee.username);
 
     await loginViaUi(page, owner.username, owner.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
     await page.click('text=New channel');
     await page.fill('#new-channel-name', 'e2e-initial-invitee-room');
     await page.click('label:has-text("Private") input[type="radio"]');
     await pickPerson(page, 'Search workspace members to invite to new channel', invitee.username, invitee.username);
-    await page.click('button:has-text("Create Channel")');
+    await page.click('[role="dialog"] button:has-text("Create Channel")');
     await expect(page.locator('aside').getByText('e2e-initial-invitee-room', { exact: true })).toBeVisible({
       timeout: 10_000,
     });
@@ -939,7 +1051,7 @@ test.describe('workspace and channel creation sheets', () => {
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
-    await page.click(`text=${owner.workspace.name}`);
+    await selectWorkspaceRow(page, owner.workspace.name);
     await expect(page.locator('aside').getByText('e2e-initial-invitee-room', { exact: true })).toBeVisible({
       timeout: 10_000,
     });
@@ -1078,7 +1190,7 @@ test.describe('mentions', () => {
     await stubNotifications(page, { focused: false });
 
     await loginViaUi(page, recipient.username, recipient.password);
-    await page.click(`text=${sender.workspace.name}`);
+    await selectWorkspaceRow(page, sender.workspace.name);
     // Scoped to the channel's own row (div.sl-row's established pattern,
     // see the private-channel-membership test above) — a bare
     // `button:has-text("Join")` is ambiguous now that the sidebar also has
@@ -1251,8 +1363,8 @@ test.describe('workspace archive/unarchive', () => {
   test('an admin can archive a workspace into read-only mode and unarchive it back', async ({ page }) => {
     const seeded = await seedUserWithChannel('archive');
     await loginViaUi(page, seeded.username, seeded.password);
-    await page.click(`text=${seeded.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
     // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: Archive
@@ -1588,8 +1700,8 @@ test.describe('semantic search (real Ollama inference — allow extra time)', ()
     await sendMessage(seeded.accessToken, seeded.channel.id, 'I ordered pizza for the team lunch on Friday.');
 
     await loginViaUi(page, seeded.username, seeded.password);
-    await page.click(`text=${seeded.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
     // Scoped to the results listbox specifically, not a bare page-wide
@@ -1835,8 +1947,8 @@ test.describe('virtual scrolling', () => {
     }
 
     await loginViaUi(page, seeded.username, seeded.password);
-    await page.click(`text=${seeded.workspace.name}`);
-    await page.click('text=general');
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
     await expect(page.locator(`text=history message ${TOTAL_MESSAGES - 1}`)).toBeVisible({ timeout: 10_000 });
 
@@ -1915,7 +2027,7 @@ test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
     const wsB = await createWorkspaceApi(admin.accessToken, `Org B workspace ${Date.now()}`, undefined, orgB.id);
 
     await loginViaUi(page, admin.username, admin.password);
-    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('aside').getByText(admin.workspace.name, { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(`text=${wsB.name}`)).not.toBeVisible();
 
     await page.click(`button:has-text("${defaultOrg.name}")`);
@@ -2000,8 +2112,12 @@ test.describe('workspace token invitations (FEATURE_REQUEST.md entry 1, slice 3)
 test.describe('invitation redemption (public /invite/:token page)', () => {
   test('a fresh, unauthenticated visitor can redeem a workspace invitation and lands signed in', async ({ page }) => {
     const admin = await seedUserWithChannel('inviteredeem');
-    const invitation = await createWorkspaceInvitationApi(admin.accessToken, admin.workspace.id, 'redeeminvitee@example.com');
     const redeemedUsername = uniqueUsername('redeemed');
+    // RUNBOOK.md's own documented gotcha: this stack has no per-test data
+    // reset, so a hardcoded invitee email collides with a previous run's
+    // already-redeemed account on any repeat run — derived from the same
+    // unique username the account itself will use instead.
+    const invitation = await createWorkspaceInvitationApi(admin.accessToken, admin.workspace.id, `${redeemedUsername}@example.com`);
 
     await page.goto(`/invite/${invitation.token}`);
     // Exact match: a plain `text=${admin.username}` substring-matches both
@@ -2009,13 +2125,16 @@ test.describe('invitation redemption (public /invite/:token page)', () => {
     // names workspaces "<username> workspace"), a real ambiguity found
     // while writing this test, not a product bug.
     await expect(page.getByText(admin.username, { exact: true })).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    // Pre-sign-in InviteRedemptionPage.jsx has no sidebar to disambiguate
+    // against (unlike every ChatShell-rendered assertion below/elsewhere in
+    // this file) — a plain exact match is enough here.
+    await expect(page.getByText(admin.workspace.name, { exact: true })).toBeVisible({ timeout: 10_000 });
 
     await page.fill('#invite-username', redeemedUsername);
     await page.fill('#invite-password', 'correct-horse-battery');
     await page.click('button:has-text("Accept invitation")');
 
-    await expect(page.locator(`text=${admin.workspace.name}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('aside').getByText(admin.workspace.name, { exact: true })).toBeVisible({ timeout: 10_000 });
   });
 
   test('an invalid token shows a generic error, not a raw 404 or blank page', async ({ page }) => {

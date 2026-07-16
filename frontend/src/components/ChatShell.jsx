@@ -4,9 +4,10 @@ import { createSocket } from '../ws/socket.js';
 import * as workspacesApi from '../api/workspaces.js';
 import * as organizationsApi from '../api/organizations.js';
 import * as notificationsApi from '../api/notifications.js';
-import { PERMISSIONS, hasSystemPermission, hasOrgManagementAccess } from '../authz/permissions.js';
+import { PERMISSIONS, hasPermission, hasSystemPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
+import WorkspaceHome from './WorkspaceHome.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
 import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
@@ -17,6 +18,7 @@ import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import OrgManagementPanel from './OrgManagementPanel.jsx';
 import SystemAdminPanel from './SystemAdminPanel.jsx';
 import AdminPanel from './AdminPanel.jsx';
+import WorkspaceSettingsSheet from './WorkspaceSettingsSheet.jsx';
 import NotificationPanel from './NotificationPanel.jsx';
 import ChannelDetailsPanel from './ChannelDetailsPanel.jsx';
 import CreateWorkspaceSheet from './CreateWorkspaceSheet.jsx';
@@ -86,6 +88,12 @@ export default function ChatShell() {
   const [orgManagementOpen, setOrgManagementOpen] = useState(false);
   const [systemAdminOpen, setSystemAdminOpen] = useState(false);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
+  // lifted from WorkspaceSidebar.jsx's own local state (where it lived
+  // when the sheet was only ever opened from the workspace row's own
+  // overflow trigger) so WorkspaceHome's "Invite People" action can open
+  // the exact same sheet, not a second, duplicate invite surface.
+  const [workspaceSettingsId, setWorkspaceSettingsId] = useState(null);
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -241,6 +249,29 @@ export default function ChatShell() {
     if (!selectedWorkspaceId) return;
     workspacesApi.listChannels(selectedWorkspaceId).then(setChannels);
   }, [selectedWorkspaceId]);
+
+  // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry
+  // surfaced a real, pre-existing gap: WorkspaceSidebar.jsx's own org
+  // switcher has always filtered its *visible* workspace list client-side
+  // by `selectedOrganizationId`, but nothing ever cleared the *selected*
+  // workspace when it fell outside that filter — invisible before this
+  // entry, since the old "Select a channel to get started." fallback
+  // carried no workspace-specific data to look stale. Now that the main
+  // pane renders an actual WorkspaceHome for whatever `selectedWorkspaceId`
+  // still points at, an orphaned selection would keep showing a workspace
+  // the sidebar itself no longer lists as belonging to the current org.
+  // Deliberately clears rather than auto-picking a replacement — the org
+  // switch already happened by the time this runs, so there's no single
+  // "right" workspace to fall back to, and clearing matches this app's
+  // existing "no workspace selected" state exactly.
+  useEffect(() => {
+    if (!selectedOrganizationId || !selectedWorkspaceId) return;
+    const current = workspaces.find((ws) => ws.id === selectedWorkspaceId);
+    if (current && current.organizationId && current.organizationId !== selectedOrganizationId) {
+      setSelectedWorkspaceId(null);
+      setSelectedChannelId(null);
+    }
+  }, [selectedOrganizationId, selectedWorkspaceId, workspaces]);
 
   // A channel details panel belongs to the channel it was opened for —
   // close it out on switch rather than leaving stale member data visible
@@ -459,6 +490,14 @@ export default function ChatShell() {
   const canAddChannelMembers = Boolean(
     selectedChannel?.isMember && selectedChannel?.type === 'PRIVATE' && !isSelectedWorkspaceArchived,
   );
+  const selectedWorkspace = workspaces.find((ws) => ws.id === selectedWorkspaceId) ?? null;
+  // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
+  // WorkspaceHome's own "Invite People" action reuses this same gate
+  // WorkspaceSidebar's overflow menu already computes per-row.
+  const canInviteToSelectedWorkspace = Boolean(
+    selectedWorkspace && hasPermission(selectedWorkspace.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS),
+  );
+  const workspaceSettingsTarget = workspaces.find((ws) => ws.id === workspaceSettingsId) ?? null;
 
   return (
     <div style={styles.shell}>
@@ -476,10 +515,7 @@ export default function ChatShell() {
         onLogout={logout}
         canManageAi={canManageAi}
         onNavigateToSearchResult={handleNavigateToSearchResult}
-        onInviteMember={handleInviteMember}
-        onCreateInviteLink={handleCreateInviteLink}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
-        onArchiveWorkspace={handleArchiveWorkspace}
         onUnarchiveWorkspace={handleUnarchiveWorkspace}
         onOpenBrowseWorkspaces={() => setBrowseWorkspacesOpen(true)}
         organizations={organizations}
@@ -488,9 +524,7 @@ export default function ChatShell() {
         isSystemAdmin={Boolean(user?.isSystemAdmin)}
         onOpenCreateOrganization={() => setCreateOrgOpen(true)}
         onOpenAdminPanel={() => setAdminPanelOpen(true)}
-        onTransferOwnership={handleTransferOwnership}
-        onChangeVisibility={handleChangeVisibility}
-        onToggleManagersCanArchive={handleToggleManagersCanArchive}
+        onOpenWorkspaceSettings={setWorkspaceSettingsId}
         notificationSummary={notificationSummary}
         onOpenNotifications={() => setNotificationsOpen(true)}
         onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
@@ -510,18 +544,37 @@ export default function ChatShell() {
           perfectly focusable via script, just unreachable by pressing Tab
           at all, anywhere on the page. Caught by the accessibility e2e
           test, not by eye. */}
-      <ChannelView
-        mainContentId="main"
-        channel={selectedChannel}
-        messages={messagesByChannel[selectedChannelId] ?? []}
-        presence={presence}
-        currentUser={user}
-        joined={joinedChannels.has(selectedChannelId)}
-        archived={isSelectedWorkspaceArchived}
-        onSend={handleSend}
-        onOpenThread={openThread}
-        onOpenDetails={() => setChannelDetailsOpen(true)}
-      />
+      {selectedWorkspace && !selectedChannel ? (
+        // FEATURE_REQUEST.md's "workspace home and actionable empty states"
+        // entry: a workspace selected with no channel open gets an actual
+        // overview instead of ChannelView's generic "Select a channel to
+        // get started." fallback (still used below for the rarer case of
+        // no workspace existing/selected at all).
+        <WorkspaceHome
+          mainContentId="main"
+          workspace={selectedWorkspace}
+          channels={channels}
+          archived={isSelectedWorkspaceArchived}
+          canInvite={canInviteToSelectedWorkspace}
+          onSelectChannel={selectChannel}
+          onJoinChannel={handleJoinChannel}
+          onCreateChannel={() => setCreateChannelOpen(true)}
+          onOpenWorkspaceSettings={() => setWorkspaceSettingsId(selectedWorkspace.id)}
+        />
+      ) : (
+        <ChannelView
+          mainContentId="main"
+          channel={selectedChannel}
+          messages={messagesByChannel[selectedChannelId] ?? []}
+          presence={presence}
+          currentUser={user}
+          joined={joinedChannels.has(selectedChannelId)}
+          archived={isSelectedWorkspaceArchived}
+          onSend={handleSend}
+          onOpenThread={openThread}
+          onOpenDetails={() => setChannelDetailsOpen(true)}
+        />
+      )}
       <ThreadSidebar
         rootMessage={threadRoot}
         replies={threadReplies}
@@ -591,6 +644,18 @@ export default function ChatShell() {
           onOpenAuditLog={() => setAuditLogOpen(true)}
           onOpenOrgManagement={() => setOrgManagementOpen(true)}
           onOpenSystemAdmin={() => setSystemAdminOpen(true)}
+        />
+      )}
+      {workspaceSettingsTarget && (
+        <WorkspaceSettingsSheet
+          workspace={workspaceSettingsTarget}
+          onClose={() => setWorkspaceSettingsId(null)}
+          onInviteMember={(username, role) => handleInviteMember(workspaceSettingsTarget.id, username, role)}
+          onCreateInviteLink={(email, role) => handleCreateInviteLink(workspaceSettingsTarget.id, email, role)}
+          onTransferOwnership={(username) => handleTransferOwnership(workspaceSettingsTarget.id, username)}
+          onChangeVisibility={(visibility) => handleChangeVisibility(workspaceSettingsTarget.id, visibility)}
+          onToggleManagersCanArchive={(value) => handleToggleManagersCanArchive(workspaceSettingsTarget.id, value)}
+          onArchiveWorkspace={() => handleArchiveWorkspace(workspaceSettingsTarget.id)}
         />
       )}
       {notificationsOpen && (
