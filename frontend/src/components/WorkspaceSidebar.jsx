@@ -208,15 +208,6 @@ const styles = {
   },
   archivedBadge: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginLeft: 4 },
   addButtonRow: { display: 'flex', gap: 6, marginTop: 6 },
-  visibilityToggleLabel: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 4,
-    fontSize: 'var(--text-xs)',
-    color: 'var(--text-3)',
-    whiteSpace: 'nowrap',
-    cursor: 'pointer',
-  },
   // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — visually
   // compact text links, but the invisible hit area is full-size.
   aiSettingsButton: {
@@ -266,46 +257,6 @@ function activateOnKey(handler) {
       handler();
     }
   };
-}
-
-// `visibilityToggle` (self-service workspace subscription, FEATURE_REQUEST.md;
-// generalized for the private-channel toggle) is opt-in so a plain call site
-// with no toggle at all is unaffected — it calls `onSubmit(name)` with no
-// second argument either way, same as before either feature existed.
-// Shape: { label, onValue, offValue, defaultOn }. One shared checkbox control
-// for both call sites rather than two near-identical toggles, per this app's
-// existing consistency convention (PROJECT_PLAN.md Section 7 / FEATURE_REQUEST.md's
-// Apple HIG overhaul entry) — the same visible control should mean the same
-// thing everywhere it appears.
-function InlineCreateForm({ placeholder, onSubmit, extra, visibilityToggle }) {
-  const [value, setValue] = useState('');
-  const [toggleOn, setToggleOn] = useState(visibilityToggle?.defaultOn ?? false);
-  return (
-    <form
-      style={styles.inlineForm}
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!value.trim()) return;
-        onSubmit(value.trim(), visibilityToggle ? (toggleOn ? visibilityToggle.onValue : visibilityToggle.offValue) : undefined);
-        setValue('');
-        setToggleOn(visibilityToggle?.defaultOn ?? false);
-      }}
-    >
-      <input
-        style={styles.inlineInput}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-      />
-      {visibilityToggle && (
-        <label style={styles.visibilityToggleLabel} title={visibilityToggle.hint}>
-          <input type="checkbox" checked={toggleOn} onChange={(e) => setToggleOn(e.target.checked)} />
-          {visibilityToggle.label}
-        </label>
-      )}
-      {extra}
-    </form>
-  );
 }
 
 // PROJECT_PLAN.md Section 11's "Post-Phase-5 finding" — there was previously
@@ -527,11 +478,9 @@ export default function WorkspaceSidebar({
   workspaces,
   selectedWorkspaceId,
   onSelectWorkspace,
-  onCreateWorkspace,
   channels,
   selectedChannelId,
   onSelectChannel,
-  onCreateChannel,
   onJoinChannel,
   onInviteToChannel,
   onLogout,
@@ -558,9 +507,9 @@ export default function WorkspaceSidebar({
   onToggleManagersCanArchive,
   notificationSummary,
   onOpenNotifications,
+  onOpenCreateWorkspace,
+  onOpenCreateChannel,
 }) {
-  const [showNewWorkspace, setShowNewWorkspace] = useState(false);
-  const [showNewChannel, setShowNewChannel] = useState(false);
   const [inviteFormWorkspaceId, setInviteFormWorkspaceId] = useState(null);
   const [inviteLinkFormWorkspaceId, setInviteLinkFormWorkspaceId] = useState(null);
   const [transferFormWorkspaceId, setTransferFormWorkspaceId] = useState(null);
@@ -863,40 +812,23 @@ export default function WorkspaceSidebar({
             ))}
           </>
         )}
-        {showNewWorkspace ? (
-          <InlineCreateForm
-            placeholder="Workspace name"
-            visibilityToggle={{
-              label: 'Listed',
-              hint: 'Listed workspaces can be joined by anyone in your organization. Invite-only workspaces require an invitation.',
-              onValue: 'DISCOVERABLE',
-              offValue: 'PRIVATE',
-              defaultOn: false,
-            }}
-            onSubmit={(name, visibility) => {
-              onCreateWorkspace(name, visibility);
-              setShowNewWorkspace(false);
-            }}
-          />
-        ) : (
-          <div style={styles.addButtonRow}>
-            <button
-              type="button"
-              style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
-              onClick={() => setShowNewWorkspace(true)}
-            >
-              <Plus size={14} aria-hidden="true" />
-              New workspace
-            </button>
-            <button
-              type="button"
-              style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
-              onClick={onOpenBrowseWorkspaces}
-            >
-              Join a workspace
-            </button>
-          </div>
-        )}
+        <div style={styles.addButtonRow}>
+          <button
+            type="button"
+            style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
+            onClick={onOpenCreateWorkspace}
+          >
+            <Plus size={14} aria-hidden="true" />
+            New workspace
+          </button>
+          <button
+            type="button"
+            style={{ ...styles.addButton, flex: 1, marginTop: 0 }}
+            onClick={onOpenBrowseWorkspaces}
+          >
+            Join a workspace
+          </button>
+        </div>
 
         {selectedWorkspaceId && (
           <>
@@ -975,32 +907,12 @@ export default function WorkspaceSidebar({
                 </div>
               );
             })}
-            {!isSelectedWorkspaceArchived &&
-              (showNewChannel ? (
-                <InlineCreateForm
-                  placeholder="Channel name"
-                  visibilityToggle={{
-                    label: (
-                      <>
-                        <Lock size={12} aria-hidden="true" /> Private
-                      </>
-                    ),
-                    hint: 'Private channels are visible only to invited members. Open channels are visible to the whole workspace.',
-                    onValue: 'PRIVATE',
-                    offValue: 'PUBLIC',
-                    defaultOn: false,
-                  }}
-                  onSubmit={(name, type) => {
-                    onCreateChannel(name, type ?? 'PUBLIC');
-                    setShowNewChannel(false);
-                  }}
-                />
-              ) : (
-                <button type="button" style={styles.addButton} onClick={() => setShowNewChannel(true)}>
-                  <Plus size={14} aria-hidden="true" />
-                  New channel
-                </button>
-              ))}
+            {!isSelectedWorkspaceArchived && (
+              <button type="button" style={styles.addButton} onClick={onOpenCreateChannel}>
+                <Plus size={14} aria-hidden="true" />
+                New channel
+              </button>
+            )}
           </>
         )}
       </div>

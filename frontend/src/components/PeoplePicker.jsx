@@ -125,6 +125,17 @@ export default function PeoplePicker({
   // ones. Each search call captures the current sequence number; a response
   // is only applied if it's still the most recently issued one.
   const requestSeqRef = useRef(0);
+  // Real bug found by e2e testing, not by inspection: selecting a person in
+  // multi-select mode refocuses the input (so the user can immediately type
+  // to add another) — but that programmatic .focus() fires the same onFocus
+  // handler a real user's click would, which unconditionally reopened the
+  // dropdown showing stale results. Since the dropdown is `position:
+  // absolute`, it doesn't push page content down — it floats over whatever
+  // sits below the picker, which for both new call sites (channel-creation
+  // sheet) is the submit button, silently blocking it until the user clicked
+  // away first. Suppresses exactly the one focus event caused by that
+  // specific refocus, not real focus events from an actual click/Tab.
+  const suppressNextFocusOpenRef = useRef(false);
 
   const selectedList = mode === 'multi' ? (value ?? []) : value ? [value] : [];
   const selectedIds = new Set(selectedList.map((p) => p.userId));
@@ -171,6 +182,10 @@ export default function PeoplePicker({
   }
 
   function handleFocus() {
+    if (suppressNextFocusOpenRef.current) {
+      suppressNextFocusOpenRef.current = false;
+      return;
+    }
     setOpen(true);
     if (results === null) runSearch(query);
   }
@@ -181,7 +196,8 @@ export default function PeoplePicker({
       onChange([...(value ?? []), person]);
       setQuery('');
       setOpen(false);
-      runSearch('');
+      setResults(null);
+      suppressNextFocusOpenRef.current = true;
     } else {
       onChange(person);
       setQuery('');

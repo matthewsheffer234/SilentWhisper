@@ -18,6 +18,8 @@ import OrgManagementPanel from './OrgManagementPanel.jsx';
 import SystemAdminPanel from './SystemAdminPanel.jsx';
 import NotificationPanel from './NotificationPanel.jsx';
 import ChannelDetailsPanel from './ChannelDetailsPanel.jsx';
+import CreateWorkspaceSheet from './CreateWorkspaceSheet.jsx';
+import CreateChannelSheet from './CreateChannelSheet.jsx';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -70,6 +72,8 @@ export default function ChatShell() {
   const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [channelDetailsOpen, setChannelDetailsOpen] = useState(false);
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+  const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
@@ -262,11 +266,16 @@ export default function ChatShell() {
     [messagesByChannel, joinedChannels],
   );
 
-  async function handleCreateWorkspace(name, visibility) {
-    // Org picker (FEATURE_REQUEST.md entry 1, slice 3): a workspace created
-    // while org X is selected in the sidebar switcher belongs in org X — no
-    // second, redundant org control inside the creation form itself.
-    const ws = await workspacesApi.createWorkspace(name, visibility, selectedOrganizationId);
+  // FEATURE_REQUEST.md's "focused creation sheets" entry: organizationId is
+  // now an explicit field in CreateWorkspaceSheet itself (only shown when
+  // the caller belongs to more than one org), superseding the older
+  // slice-3 comment this replaced ("no second, redundant org control" — true
+  // when this was the only org-aware surface around, no longer true once the
+  // sheet has its own explicit picker). Falls back to the sidebar's
+  // currently-selected org when the sheet didn't show one (the single-org
+  // case, where there's nothing to pick).
+  async function handleCreateWorkspace(name, visibility, organizationId) {
+    const ws = await workspacesApi.createWorkspace(name, visibility, organizationId ?? selectedOrganizationId);
     setWorkspaces((prev) => [...prev, ws]);
     setSelectedWorkspaceId(ws.id);
   }
@@ -283,10 +292,18 @@ export default function ChatShell() {
     setSelectedWorkspaceId(ws.id);
   }
 
-  async function handleCreateChannel(name, type) {
+  // FEATURE_REQUEST.md's "focused creation sheets" entry: optional initial
+  // invitees for a private channel, added sequentially after creation via
+  // the existing add-member endpoint — no schema/API change needed for
+  // this, per the design's own "keep existing create endpoints" note.
+  async function handleCreateChannel(name, type, initialInviteeUsernames = []) {
     const ch = await workspacesApi.createChannel(selectedWorkspaceId, name, type);
-    setChannels((prev) => [...prev, { ...ch, isMember: true }]);
+    setChannels((prev) => [...prev, { ...ch, isMember: true, memberCount: 1 }]);
     selectChannel(ch.id);
+    for (const username of initialInviteeUsernames) {
+      // eslint-disable-next-line no-await-in-loop
+      await workspacesApi.addChannelMember(selectedWorkspaceId, ch.id, username).catch(() => {});
+    }
   }
 
   function handleInviteMember(workspaceId, username, role) {
@@ -444,11 +461,9 @@ export default function ChatShell() {
         workspaces={workspaces}
         selectedWorkspaceId={selectedWorkspaceId}
         onSelectWorkspace={setSelectedWorkspaceId}
-        onCreateWorkspace={handleCreateWorkspace}
         channels={channels}
         selectedChannelId={selectedChannelId}
         onSelectChannel={selectChannel}
-        onCreateChannel={handleCreateChannel}
         onJoinChannel={handleJoinChannel}
         onInviteToChannel={handleInviteToChannel}
         onLogout={logout}
@@ -475,6 +490,8 @@ export default function ChatShell() {
         onToggleManagersCanArchive={handleToggleManagersCanArchive}
         notificationSummary={notificationSummary}
         onOpenNotifications={() => setNotificationsOpen(true)}
+        onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
+        onOpenCreateChannel={() => setCreateChannelOpen(true)}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -510,6 +527,21 @@ export default function ChatShell() {
         onSendReply={handleSendReply}
         onClose={() => setThreadRoot(null)}
       />
+      {createWorkspaceOpen && (
+        <CreateWorkspaceSheet
+          organizations={organizations}
+          selectedOrganizationId={selectedOrganizationId}
+          onCreate={handleCreateWorkspace}
+          onClose={() => setCreateWorkspaceOpen(false)}
+        />
+      )}
+      {createChannelOpen && (
+        <CreateChannelSheet
+          workspaceId={selectedWorkspaceId}
+          onCreate={handleCreateChannel}
+          onClose={() => setCreateChannelOpen(false)}
+        />
+      )}
       {channelDetailsOpen && selectedChannel && (
         <ChannelDetailsPanel
           channel={selectedChannel}

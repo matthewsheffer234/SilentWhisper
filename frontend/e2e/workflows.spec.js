@@ -277,12 +277,12 @@ test.describe('core messaging workflow', () => {
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
 
     await page.click('text=New workspace');
-    await page.fill('input[placeholder="Workspace name"]', 'E2E Core Co');
+    await page.fill('#new-workspace-name', 'E2E Core Co');
     await page.keyboard.press('Enter');
     await page.waitForSelector('text=E2E Core Co', { timeout: 10_000 });
 
     await page.click('text=New channel');
-    await page.fill('input[placeholder="Channel name"]', 'general');
+    await page.fill('#new-channel-name', 'general');
     await page.keyboard.press('Enter');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
@@ -678,12 +678,12 @@ test.describe('private channels', () => {
     // existing "+ New channel" behavior (always PUBLIC) is unaffected;
     // checking it is what makes this a PRIVATE channel.
     await page.click('text=New channel');
-    await page.fill('input[placeholder="Channel name"]', 'e2e-secret-room');
-    await page.click('label:has-text("Private") input[type="checkbox"]');
+    await page.fill('#new-channel-name', 'e2e-secret-room');
+    await page.click('label:has-text("Private") input[type="radio"]');
     // Enter must target the name input specifically, not just the page:
     // checking the checkbox moved focus there, and a checkbox doesn't
     // trigger a form's implicit submit-on-Enter the way a text input does.
-    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    await page.locator('#new-channel-name').press('Enter');
     // Scoped to the sidebar (`aside`) and exact-matched: ChannelView's own
     // header repeats this same "🔒 name" text in #main once the new channel
     // auto-selects, and a bare page-wide `text=` locator matches both.
@@ -724,12 +724,12 @@ test.describe('private channels', () => {
     await loginViaUi(page, owner.username, owner.password);
     await page.click(`text=${owner.workspace.name}`);
     await page.click('text=New channel');
-    await page.fill('input[placeholder="Channel name"]', 'e2e-locked-room');
-    await page.click('label:has-text("Private") input[type="checkbox"]');
+    await page.fill('#new-channel-name', 'e2e-locked-room');
+    await page.click('label:has-text("Private") input[type="radio"]');
     // Enter must target the name input specifically, not just the page:
     // checking the checkbox moved focus there, and a checkbox doesn't
     // trigger a form's implicit submit-on-Enter the way a text input does.
-    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    await page.locator('#new-channel-name').press('Enter');
     await expect(page.locator('aside').getByText('e2e-locked-room', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="User menu"]');
@@ -774,9 +774,9 @@ test.describe('channel details panel', () => {
     await loginViaUi(page, owner.username, owner.password);
     await page.click(`text=${owner.workspace.name}`);
     await page.click('text=New channel');
-    await page.fill('input[placeholder="Channel name"]', 'e2e-details-add-room');
-    await page.click('label:has-text("Private") input[type="checkbox"]');
-    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    await page.fill('#new-channel-name', 'e2e-details-add-room');
+    await page.click('label:has-text("Private") input[type="radio"]');
+    await page.locator('#new-channel-name').press('Enter');
     await expect(page.locator('aside').getByText('e2e-details-add-room', { exact: true })).toBeVisible({
       timeout: 10_000,
     });
@@ -798,9 +798,9 @@ test.describe('channel details panel', () => {
     await loginViaUi(page, owner.username, owner.password);
     await page.click(`text=${owner.workspace.name}`);
     await page.click('text=New channel');
-    await page.fill('input[placeholder="Channel name"]', 'e2e-details-archived-room');
-    await page.click('label:has-text("Private") input[type="checkbox"]');
-    await page.locator('input[placeholder="Channel name"]').press('Enter');
+    await page.fill('#new-channel-name', 'e2e-details-archived-room');
+    await page.click('label:has-text("Private") input[type="radio"]');
+    await page.locator('#new-channel-name').press('Enter');
     await expect(page.locator('aside').getByText('e2e-details-archived-room', { exact: true })).toBeVisible({
       timeout: 10_000,
     });
@@ -815,6 +815,94 @@ test.describe('channel details panel', () => {
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     await expect(dialog.locator("text=This workspace is archived — read only. Membership can't be changed.")).toBeVisible();
     await expect(dialog.locator('text=Add people')).not.toBeVisible();
+  });
+});
+
+// New (FEATURE_REQUEST.md's "focused creation sheets for workspaces and
+// channels" entry). The core messaging workflow test above already covers
+// the default invite-only-workspace/open-channel path end to end; these
+// cover the sheets' own specific behaviors: Listed visibility, cancellation,
+// validation, and private-channel creation with initial invitees.
+test.describe('workspace and channel creation sheets', () => {
+  test('creating a Listed workspace makes it visible to another user via Join a workspace', async ({ page }) => {
+    const owner = await seedUserWithChannel('createsheetlisted');
+    const seeker = await seedPlainUser('createsheetseeker');
+
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click('text=New workspace');
+    const workspaceName = `E2E Listed Sheet ${Date.now()}`;
+    await page.fill('#new-workspace-name', workspaceName);
+    await page.click('label:has-text("Listed") input[type="radio"]');
+    await page.click('button:has-text("Create Workspace")');
+    await expect(page.locator('aside').getByText(workspaceName, { exact: true })).toBeVisible({ timeout: 10_000 });
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('text=Sign out');
+    await loginViaUi(page, seeker.username, seeker.password);
+    await page.click('button:has-text("Join a workspace")');
+    await expect(page.locator(`text=${workspaceName}`)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('cancelling the create-workspace sheet creates nothing', async ({ page }) => {
+    const owner = await seedUserWithChannel('createsheetcancel');
+    await loginViaUi(page, owner.username, owner.password);
+
+    const workspaceName = `E2E Cancelled Sheet ${Date.now()}`;
+    await page.click('text=New workspace');
+    await page.fill('#new-workspace-name', workspaceName);
+    await page.click('button:has-text("Cancel")');
+    await expect(page.locator('[role="dialog"]')).not.toBeVisible();
+    await expect(page.locator(`text=${workspaceName}`)).not.toBeVisible();
+  });
+
+  test('an empty workspace name keeps Create Workspace disabled', async ({ page }) => {
+    const owner = await seedUserWithChannel('createsheetempty');
+    await loginViaUi(page, owner.username, owner.password);
+
+    await page.click('text=New workspace');
+    await expect(page.locator('button:has-text("Create Workspace")')).toBeDisabled();
+    await page.fill('#new-workspace-name', '   ');
+    await expect(page.locator('button:has-text("Create Workspace")')).toBeDisabled();
+  });
+
+  test('a channel name over the length limit shows inline validation and blocks submit', async ({ page }) => {
+    const owner = await seedUserWithChannel('createsheettoolong');
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`text=${owner.workspace.name}`);
+
+    await page.click('text=New channel');
+    await page.fill('#new-channel-name', 'x'.repeat(101));
+    await expect(page.locator('text=Name must be at most 100 characters')).toBeVisible();
+    await expect(page.locator('button:has-text("Create Channel")')).toBeDisabled();
+  });
+
+  test('creating a private channel with an initial invitee adds them immediately, no separate invite step needed', async ({
+    page,
+  }) => {
+    const owner = await seedUserWithChannel('createsheetinitial');
+    const invitee = await seedPlainUser('createsheetinvitee');
+    await inviteToWorkspace(owner.accessToken, owner.workspace.id, invitee.username);
+
+    await loginViaUi(page, owner.username, owner.password);
+    await page.click(`text=${owner.workspace.name}`);
+    await page.click('text=New channel');
+    await page.fill('#new-channel-name', 'e2e-initial-invitee-room');
+    await page.click('label:has-text("Private") input[type="radio"]');
+    await pickPerson(page, 'Search workspace members to invite to new channel', invitee.username, invitee.username);
+    await page.click('button:has-text("Create Channel")');
+    await expect(page.locator('aside').getByText('e2e-initial-invitee-room', { exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Verified from the invitee's own session — added at creation time, not
+    // through a separate "Invite to channel…" step afterward.
+    await page.click('button[aria-label="User menu"]');
+    await page.click('text=Sign out');
+    await loginViaUi(page, invitee.username, invitee.password);
+    await page.click(`text=${owner.workspace.name}`);
+    await expect(page.locator('aside').getByText('e2e-initial-invitee-room', { exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
   });
 });
 
