@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
+import ConfirmDialog from './ConfirmDialog.jsx';
 import {
   createAdminUser,
   listAdminUsers,
@@ -206,11 +207,13 @@ function CreateAccountForm({ organizations, onSubmit }) {
 function ManageUserRow({ targetUser, organizations, onResetPassword, onAddOrg, onChangeOrgRole, onRemoveFromOrg }) {
   const [newPassword, setNewPassword] = useState('');
   const [resetStatus, setResetStatus] = useState(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const [userOrgs, setUserOrgs] = useState([]);
   const [orgsLoading, setOrgsLoading] = useState(true);
   const [orgsError, setOrgsError] = useState(null);
   const [addOrgId, setAddOrgId] = useState('');
   const [addOrgRole, setAddOrgRole] = useState('ORG_MEMBER');
+  const [confirmRemoveOrg, setConfirmRemoveOrg] = useState(null); // org membership pending removal
 
   function loadUserOrgs() {
     setOrgsLoading(true);
@@ -225,16 +228,17 @@ function ManageUserRow({ targetUser, organizations, onResetPassword, onAddOrg, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetUser.userId]);
 
-  async function handleResetPassword(e) {
+  function handleResetPassword(e) {
     e.preventDefault();
+    if (!newPassword) return;
     setResetStatus(null);
-    try {
-      await onResetPassword(targetUser.userId, newPassword);
-      setResetStatus({ type: 'success', message: 'Password reset' });
-      setNewPassword('');
-    } catch (err) {
-      setResetStatus({ type: 'error', message: err.message || 'Failed to reset password' });
-    }
+    setConfirmingReset(true);
+  }
+
+  async function handleConfirmReset() {
+    await onResetPassword(targetUser.userId, newPassword);
+    setResetStatus({ type: 'success', message: 'Password reset' });
+    setNewPassword('');
   }
 
   async function handleAddOrg(e) {
@@ -319,7 +323,7 @@ function ManageUserRow({ targetUser, organizations, onResetPassword, onAddOrg, o
                   <option value="ORG_MEMBER">Member</option>
                   <option value="ORG_ADMIN">Admin</option>
                 </select>
-                <button type="button" style={styles.rowButton} onClick={() => handleRemove(uo.organizationId)}>
+                <button type="button" style={styles.rowButton} onClick={() => setConfirmRemoveOrg(uo)}>
                   Remove
                 </button>
               </div>
@@ -345,6 +349,24 @@ function ManageUserRow({ targetUser, organizations, onResetPassword, onAddOrg, o
             <button type="submit" style={styles.rowButton} disabled={!addOrgId}>Add</button>
           </form>
         </div>
+        {confirmingReset && (
+          <ConfirmDialog
+            title="Reset Password"
+            message={`Reset the password for ${targetUser.displayName || targetUser.username}? They'll be signed out of every session and must use the new password to sign in again.`}
+            confirmLabel="Reset Password"
+            onConfirm={handleConfirmReset}
+            onClose={() => setConfirmingReset(false)}
+          />
+        )}
+        {confirmRemoveOrg && (
+          <ConfirmDialog
+            title="Remove Member"
+            message={`Remove ${targetUser.displayName || targetUser.username} from ${confirmRemoveOrg.organizationName}? They will lose access to every workspace they hold through it.`}
+            confirmLabel="Remove"
+            onConfirm={() => handleRemove(confirmRemoveOrg.organizationId)}
+            onClose={() => setConfirmRemoveOrg(null)}
+          />
+        )}
       </td>
     </tr>
   );
@@ -428,6 +450,7 @@ export default function SystemAdminPanel({ onClose }) {
   const [allWorkspaces, setAllWorkspaces] = useState([]);
   const [managingUserId, setManagingUserId] = useState(null);
   const [orgsError, setOrgsError] = useState(null);
+  const [confirmDisable, setConfirmDisable] = useState(null); // account pending disable
 
   function loadAccounts() {
     setAccountsLoading(true);
@@ -586,7 +609,7 @@ export default function SystemAdminPanel({ onClose }) {
                               Enable
                             </button>
                           ) : (
-                            <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => handleDisable(a.userId)}>
+                            <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => setConfirmDisable(a)}>
                               Disable
                             </button>
                           )}
@@ -680,6 +703,15 @@ export default function SystemAdminPanel({ onClose }) {
               ))}
             </tbody>
           </table>
+        )}
+        {confirmDisable && (
+          <ConfirmDialog
+            title="Disable Account"
+            message={`Disable ${confirmDisable.displayName || confirmDisable.username}'s account? They'll be signed out of every session immediately and won't be able to sign in again until re-enabled.`}
+            confirmLabel="Disable"
+            onConfirm={() => handleDisable(confirmDisable.userId)}
+            onClose={() => setConfirmDisable(null)}
+          />
         )}
     </Sheet>
   );

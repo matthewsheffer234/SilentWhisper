@@ -82,6 +82,16 @@ export default function Sheet({ ariaLabel, title, subtitle, onClose, width = 480
 
   useEffect(() => {
     function handleKeyDown(e) {
+      // ConfirmDialog.jsx (and any other Sheet opened from within an
+      // already-open one, e.g. Reset Password launched from inside Manage
+      // Users) isn't portaled — it mounts as a DOM descendant of the outer
+      // Sheet, so both panels' keydown listeners are simultaneously live on
+      // `document`. Without this guard, Escape on the inner dialog would
+      // also fire the outer panel's own handler and close it too. Since
+      // each Sheet moves focus into itself on mount and traps it there,
+      // "is activeElement inside my own panel" is exactly "am I the
+      // topmost/focused one" — the only Sheet that should react.
+      if (!panelRef.current?.contains(document.activeElement)) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         requestClose();

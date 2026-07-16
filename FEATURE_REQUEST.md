@@ -60,20 +60,7 @@ Design:
 - **Navigation**: admin/settings surfaces may be modal sheets initially, but should share consistent layout and not live as permanent sidebar rows.
 - **Tests**: e2e tests for visibility by role: non-admin member, workspace manager/owner, organization admin, and system admin.
 
-### 3. Confirmation and recovery for destructive or high-impact actions
-
-**Status**: Proposed
-**Utility**: Medium-high. Archive, remove member, revoke invitation, transfer ownership, password reset, and account disable actions can surprise users if triggered by a single click.
-**Origin**: `UI_UX_REVIEW.md` recommendation.
-
-Design:
-- **Confirmations**: require confirmation for destructive/high-impact actions with specific object names and consequences, e.g. "Archive Workspace," "Remove Maria Chen," "Revoke Invitation," "Transfer Ownership," "Reset Password," and "Disable Account."
-- **Action taxonomy**: use confirmation for irreversible or security-impacting actions; use undo/toast for lower-risk reversible changes where feasible.
-- **Copy**: avoid vague labels like "Remove" without context. Confirmation body should explain what changes and who is affected.
-- **Audit**: no new audit event type required if the underlying action is already audited. Ensure cancelled confirmations do not audit.
-- **Tests**: e2e tests for each destructive flow proving cancel does nothing and confirm performs the action.
-
-### 4. Workspace home and actionable empty states
+### 3. Workspace home and actionable empty states
 
 **Status**: Proposed
 **Utility**: High. "Select a channel to get started" leaves new or lightly used workspaces feeling blank. A workspace home explains the current context and offers the next likely actions.
@@ -87,7 +74,7 @@ Design:
 - **Data**: use already-loaded workspace/channel data first; avoid adding a heavy dashboard query unless recent activity is included.
 - **Tests**: frontend/e2e coverage for no channel selected, empty new workspace, archived workspace, and member vs. manager/owner action visibility.
 
-### 5. Default workspace on login
+### 4. Default workspace on login
 
 **Status**: Proposed
 **Utility**: Medium. Today, `ChatShell.jsx`'s initial-load effect (`frontend/src/components/ChatShell.jsx:174-177`) auto-selects `ws[0].id` — whichever workspace `GET /workspaces` happens to return first (`ORDER BY created_at ASC`, i.e. oldest-joined), not a deliberate choice. For a user in exactly one workspace this is already a no-op (there's only one candidate), but for anyone in two or more it's arbitrary — the main window can land on a stale or rarely-used workspace, leaving the message pane empty until the user manually clicks the one they actually wanted. Letting them pin a specific workspace fixes that dead-space-on-startup gap directly.
@@ -103,7 +90,7 @@ Design:
 - **Frontend — applying it on load**: `ChatShell.jsx`'s initial-load effect (line 174-177 today) changes from unconditionally picking `ws[0].id` to: if `user.defaultWorkspaceId` is set *and* present in the just-fetched `ws` list (defends against a default pointing at a workspace the user has since lost membership in — no separate cleanup job needed, this check is cheap and already has the list in hand), select it; otherwise fall back to `ws[0].id` exactly as today.
 - **Tests**: setting a default on a workspace the caller belongs to succeeds and is reflected in `GET /api/auth/me`/login/signup responses; setting it on a workspace the caller isn't a member of 404s (existence-hiding, not 403); setting `null` clears it; a plain `MEMBER` (not just `ADMIN`) can set their own default; the frontend's initial-selection logic prefers a valid `defaultWorkspaceId` over `ws[0]` when both are present, and falls back to `ws[0]` when the stored default is no longer in the caller's workspace list (e.g. removed from that workspace since setting it).
 
-### 6. Direct Messages as a first-class navigation section
+### 5. Direct Messages as a first-class navigation section
 
 **Status**: Proposed
 **Utility**: High. The backend has direct-message and group-DM routes, but the UI has no DM browsing surface. A messaging product feels incomplete when person-to-person conversations are invisible in navigation.
@@ -117,7 +104,7 @@ Design:
 - **Privacy**: DMs and group DMs remain membership-only and workspace-independent per existing backend model.
 - **Tests**: backend tests for DM listing authorization; e2e tests for starting a DM, reopening an existing DM, starting a group DM, and navigating between workspace channels and DMs.
 
-### 7. Navigation-first sidebar redesign
+### 6. Navigation-first sidebar redesign
 
 **Status**: Proposed
 **Utility**: High. The sidebar currently mixes account controls, search, admin tools, organization switching, workspace navigation, workspace management, channel navigation, creation forms, invitations, and channel membership. Reducing it to navigation-first behavior directly addresses the user's workflow confusion.
@@ -131,7 +118,7 @@ Design:
 - **Responsive behavior**: maintain 44px minimum touch targets and ensure long names truncate predictably without hiding critical badges.
 - **Tests**: update e2e workflows that currently open inline sidebar forms. Add tests proving navigation remains usable with many workspaces/channels and admin controls do not appear for non-privileged users.
 
-### 8. Message presentation improvements for team scanability
+### 7. Message presentation improvements for team scanability
 
 **Status**: Proposed
 **Utility**: Medium. The current iMessage-style bubbles are friendly, but team channels need fast scanning by author, thread activity, and context. This entry tunes message presentation without undoing the existing bubble work prematurely.
@@ -145,7 +132,7 @@ Design:
 - **Data**: add reply counts/last reply metadata to message list responses if needed; keep pagination bounded.
 - **Tests**: frontend tests for grouping and author display; backend tests if reply-count metadata is added; visual/e2e checks for long names and mobile-width layouts.
 
-### 9. Contextual AI action menu and clearer AI output scope
+### 8. Contextual AI action menu and clearer AI output scope
 
 **Status**: Proposed
 **Utility**: Medium. Channel summaries and thread task extraction are useful, but direct header buttons compete with channel context controls. Grouping AI actions makes them available without making them the primary object of the interface.
@@ -160,7 +147,7 @@ Design:
 - **Audit/rate limits**: reuse existing AI audit and concurrency conventions.
 - **Tests**: frontend/e2e tests for menu placement, loading/unavailable states, scope text, streaming output, and dismissal.
 
-### 10. Cross-channel "Catch Me Up" workspace digests
+### 9. Cross-channel "Catch Me Up" workspace digests
 
 **Status**: Proposed
 **Utility**: High. This is a natural next step for the existing local AI features: it turns unread mentions and important channel activity into a short operational brief for someone returning from a multi-day break, instead of forcing them to manually scan every backlog thread.
@@ -179,6 +166,12 @@ Design:
 - **Tests**: endpoint selects only authorized unread mentions/starred-channel messages; time-window clamping works; long inputs are chunked below configured limits; provider streams are forwarded incrementally to the client; cancellation closes the upstream provider request; audit rows record metadata without raw content.
 
 ## Done
+
+### Confirmation and recovery for destructive or high-impact actions
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Confirmation and recovery for destructive or high-impact actions" (2026-07-16).
+
+New `ConfirmDialog.jsx` (a `Sheet` naming the object and consequence, danger-styled confirm, error shown inline on failure rather than closing) wired into all six named actions: Archive Workspace and Transfer Ownership (`WorkspaceSidebar.jsx`), Remove Member and Revoke Invitation (`UserManagementPanel.jsx`, `OrgManagementPanel.jsx`, and — for the same underlying org-membership removal reachable a second way — `SystemAdminPanel.jsx`'s per-account "Manage" row), and Reset Password and Disable Account (`UserManagementPanel.jsx`, `SystemAdminPanel.jsx`). Two real bugs found and fixed by e2e testing: `Sheet.jsx`'s document-level Escape/Tab handling didn't account for `ConfirmDialog` opening non-portaled *inside* an already-open `Sheet` (e.g. Reset Password launched from Manage Users) — pressing Escape closed both panels at once, fixed by scoping each `Sheet`'s keydown handling to only fire when it currently contains focus; and the running `frontend` container had no source volume mount and needed an explicit rebuild (plus a confirmed `wireservice-nginx-1` reload) to pick up the change at all, the same class of gap previously found for `backend`.
 
 ### Focused creation sheets for workspaces and channels
 

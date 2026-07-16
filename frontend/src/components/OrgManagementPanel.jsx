@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
+import ConfirmDialog from './ConfirmDialog.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
 import {
   listOrgMembers,
@@ -225,6 +226,8 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [invitations, setInvitations] = useState([]);
+  const [confirmRemove, setConfirmRemove] = useState(null); // member pending removal
+  const [confirmRevoke, setConfirmRevoke] = useState(null); // invitation pending revocation
 
   function loadMembers(orgId) {
     if (!orgId) return;
@@ -343,7 +346,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
                     </select>
                   </td>
                   <td style={styles.td}>
-                    <button type="button" style={styles.rowButton} onClick={() => handleRemove(m.userId)}>
+                    <button type="button" style={styles.rowButton} onClick={() => setConfirmRemove(m)}>
                       Remove
                     </button>
                   </td>
@@ -377,7 +380,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
                   <td style={styles.td}>{inv.email}</td>
                   <td style={styles.td}>{inv.invitedRole}</td>
                   <td style={styles.td}>
-                    <button type="button" style={styles.rowButton} onClick={() => handleRevokeInvitation(inv.id)}>
+                    <button type="button" style={styles.rowButton} onClick={() => setConfirmRevoke(inv)}>
                       Revoke
                     </button>
                   </td>
@@ -385,6 +388,24 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
               ))}
             </tbody>
           </table>
+        )}
+        {confirmRemove && (
+          <ConfirmDialog
+            title="Remove Member"
+            message={`Remove ${confirmRemove.displayName || confirmRemove.username} from this organization? They will lose access to every workspace they hold through it.`}
+            confirmLabel="Remove"
+            onConfirm={() => handleRemove(confirmRemove.userId)}
+            onClose={() => setConfirmRemove(null)}
+          />
+        )}
+        {confirmRevoke && (
+          <ConfirmDialog
+            title="Revoke Invitation"
+            message={`Revoke the pending invitation for ${confirmRevoke.email}? The invite link will stop working immediately.`}
+            confirmLabel="Revoke"
+            onConfirm={() => handleRevokeInvitation(confirmRevoke.id)}
+            onClose={() => setConfirmRevoke(null)}
+          />
         )}
     </Sheet>
   );

@@ -16,6 +16,7 @@ import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
+import ConfirmDialog from './ConfirmDialog.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import { searchWorkspacePeople, searchWorkspaceMembers } from '../api/workspaces.js';
@@ -369,21 +370,28 @@ function InviteToChannelForm({ onSubmit, workspaceId, channelId }) {
 // New (FEATURE_REQUEST.md entry 1, slice 4). Candidate pool is current
 // workspace members only, matching POST /:workspaceId/transfer-ownership's
 // own requirement that the target already be a member.
-function TransferOwnershipForm({ onSubmit, workspaceId }) {
+// FEATURE_REQUEST.md's "confirmation and recovery for destructive or
+// high-impact actions" entry: picking a person and clicking Transfer no
+// longer calls the API directly — it opens a ConfirmDialog naming the
+// target and the workspace, since ownership transfer also demotes the
+// caller's own role and can't be undone except by the new owner
+// transferring back.
+function TransferOwnershipForm({ onSubmit, workspaceId, workspaceName }) {
   const [person, setPerson] = useState(null);
   const [status, setStatus] = useState(null);
+  const [confirming, setConfirming] = useState(null); // person pending confirmation
 
-  async function handleSubmit(e) {
+  function handleSubmit(e) {
     e.preventDefault();
     if (!person) return;
     setStatus(null);
-    try {
-      await onSubmit(person.username);
-      setStatus({ type: 'success', message: `Ownership transferred to ${person.displayName || person.username}` });
-      setPerson(null);
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message || 'Failed to transfer ownership' });
-    }
+    setConfirming(person);
+  }
+
+  async function handleConfirm() {
+    await onSubmit(confirming.username);
+    setStatus({ type: 'success', message: `Ownership transferred to ${confirming.displayName || confirming.username}` });
+    setPerson(null);
   }
 
   return (
@@ -405,6 +413,15 @@ function TransferOwnershipForm({ onSubmit, workspaceId }) {
         <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
           {status.message}
         </div>
+      )}
+      {confirming && (
+        <ConfirmDialog
+          title="Transfer Ownership"
+          message={`Transfer ownership of "${workspaceName}" to ${confirming.displayName || confirming.username}? You will become a Manager and lose owner-only controls such as archiving and future ownership transfers.`}
+          confirmLabel="Transfer"
+          onConfirm={handleConfirm}
+          onClose={() => setConfirming(null)}
+        />
       )}
     </div>
   );
@@ -514,6 +531,7 @@ export default function WorkspaceSidebar({
   const [inviteLinkFormWorkspaceId, setInviteLinkFormWorkspaceId] = useState(null);
   const [transferFormWorkspaceId, setTransferFormWorkspaceId] = useState(null);
   const [inviteChannelFormId, setInviteChannelFormId] = useState(null);
+  const [confirmArchiveWs, setConfirmArchiveWs] = useState(null);
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
 
@@ -706,7 +724,7 @@ export default function WorkspaceSidebar({
                 ]
               : []),
             ...(canArchive
-              ? [{ key: 'archive', label: 'Archive workspace', separatorBefore: canInvite, onSelect: () => onArchiveWorkspace(ws.id) }]
+              ? [{ key: 'archive', label: 'Archive workspace', separatorBefore: canInvite, onSelect: () => setConfirmArchiveWs(ws) }]
               : []),
             ...(canTransferOwnership
               ? [
@@ -777,7 +795,11 @@ export default function WorkspaceSidebar({
                 <InviteLinkForm onSubmit={(email, role) => onCreateInviteLink(ws.id, email, role)} />
               )}
               {transferFormWorkspaceId === ws.id && (
-                <TransferOwnershipForm workspaceId={ws.id} onSubmit={(username) => onTransferOwnership(ws.id, username)} />
+                <TransferOwnershipForm
+                  workspaceId={ws.id}
+                  workspaceName={ws.name}
+                  onSubmit={(username) => onTransferOwnership(ws.id, username)}
+                />
               )}
             </div>
           );
@@ -916,6 +938,15 @@ export default function WorkspaceSidebar({
           </>
         )}
       </div>
+      {confirmArchiveWs && (
+        <ConfirmDialog
+          title="Archive Workspace"
+          message={`Archive "${confirmArchiveWs.name}"? Members will keep read access to existing messages, but no one will be able to post, create channels, or invite anyone until it's unarchived.`}
+          confirmLabel="Archive"
+          onConfirm={() => onArchiveWorkspace(confirmArchiveWs.id)}
+          onClose={() => setConfirmArchiveWs(null)}
+        />
+      )}
     </aside>
   );
 }

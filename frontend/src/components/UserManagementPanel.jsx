@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
+import ConfirmDialog from './ConfirmDialog.jsx';
 import {
   listWorkspaceMembers,
   changeWorkspaceMemberRole,
@@ -108,22 +109,29 @@ const styles = {
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '8px 0' },
 };
 
+// FEATURE_REQUEST.md's "confirmation and recovery for destructive or
+// high-impact actions" entry: entering a new password and submitting the
+// inline form no longer resets it directly — it opens a ConfirmDialog
+// naming the target and the consequence (every other session of theirs is
+// revoked), and only the dialog's own confirm click calls the API.
 function ResetPasswordRow({ member, onReset }) {
   const [open, setOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
+  const [confirming, setConfirming] = useState(false);
 
-  async function handleSubmit(e) {
+  function handleSubmit(e) {
     e.preventDefault();
+    if (!newPassword) return;
     setStatus(null);
-    try {
-      await onReset(member.userId, newPassword);
-      setStatus({ type: 'success', message: 'Password reset' });
-      setNewPassword('');
-      setOpen(false);
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message || 'Failed to reset password' });
-    }
+    setConfirming(true);
+  }
+
+  async function handleConfirm() {
+    await onReset(member.userId, newPassword);
+    setStatus({ type: 'success', message: 'Password reset' });
+    setNewPassword('');
+    setOpen(false);
   }
 
   return (
@@ -156,6 +164,15 @@ function ResetPasswordRow({ member, onReset }) {
           {status.message}
         </div>
       )}
+      {confirming && (
+        <ConfirmDialog
+          title="Reset Password"
+          message={`Reset the password for ${member.displayName || member.username}? They'll be signed out of every session and must use the new password to sign in again.`}
+          confirmLabel="Reset Password"
+          onConfirm={handleConfirm}
+          onClose={() => setConfirming(false)}
+        />
+      )}
     </div>
   );
 }
@@ -167,6 +184,8 @@ export default function UserManagementPanel({ workspaces, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [invitations, setInvitations] = useState([]);
+  const [confirmRemove, setConfirmRemove] = useState(null); // member pending removal
+  const [confirmRevoke, setConfirmRevoke] = useState(null); // invitation pending revocation
 
   function loadMembers(workspaceId) {
     if (!workspaceId) return;
@@ -282,7 +301,7 @@ export default function UserManagementPanel({ workspaces, onClose }) {
                     <ResetPasswordRow member={m} onReset={handleResetPassword} />
                   </td>
                   <td style={styles.td}>
-                    <button type="button" style={styles.rowButton} onClick={() => handleRemove(m.userId)}>
+                    <button type="button" style={styles.rowButton} onClick={() => setConfirmRemove(m)}>
                       Remove
                     </button>
                   </td>
@@ -310,7 +329,7 @@ export default function UserManagementPanel({ workspaces, onClose }) {
                   <td style={styles.td}>{inv.email}</td>
                   <td style={styles.td}>{inv.invitedRole}</td>
                   <td style={styles.td}>
-                    <button type="button" style={styles.rowSelect} onClick={() => handleRevokeInvitation(inv.id)}>
+                    <button type="button" style={styles.rowSelect} onClick={() => setConfirmRevoke(inv)}>
                       Revoke
                     </button>
                   </td>
@@ -318,6 +337,24 @@ export default function UserManagementPanel({ workspaces, onClose }) {
               ))}
             </tbody>
           </table>
+        )}
+        {confirmRemove && (
+          <ConfirmDialog
+            title="Remove Member"
+            message={`Remove ${confirmRemove.displayName || confirmRemove.username} from this workspace? They will immediately lose access to every channel here.`}
+            confirmLabel="Remove"
+            onConfirm={() => handleRemove(confirmRemove.userId)}
+            onClose={() => setConfirmRemove(null)}
+          />
+        )}
+        {confirmRevoke && (
+          <ConfirmDialog
+            title="Revoke Invitation"
+            message={`Revoke the pending invitation for ${confirmRevoke.email}? The invite link will stop working immediately.`}
+            confirmLabel="Revoke"
+            onConfirm={() => handleRevokeInvitation(confirmRevoke.id)}
+            onClose={() => setConfirmRevoke(null)}
+          />
         )}
     </Sheet>
   );

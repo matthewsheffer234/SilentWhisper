@@ -251,6 +251,23 @@ async function pickPerson(page, pickerAriaLabel, query, matchUsername) {
   await option.first().click({ timeout: 10_000 });
 }
 
+// FEATURE_REQUEST.md's "confirmation and recovery for destructive or
+// high-impact actions" entry: Archive/Remove/Revoke/Transfer/Reset/Disable
+// all now open a ConfirmDialog.jsx sheet (its own `[role="dialog"]`) instead
+// of acting immediately. ConfirmDialog.jsx isn't portaled, so when it's
+// opened from inside another Sheet (e.g. Reset Password from within Manage
+// Users) it renders as a DOM *descendant* of that outer dialog — a
+// `hasText` filter on the outer dialog would also match, since hasText
+// checks full descendant text content, not just the element's own label.
+// Matching on the accessible name (Sheet's `aria-label`, exactly the dialog
+// title) instead of content text sidesteps that, since each dialog's own
+// aria-label is unique even when nested.
+async function confirmDialogAction(page, dialogTitle, buttonText) {
+  const dialog = page.getByRole('dialog', { name: dialogTitle, exact: true });
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await dialog.locator(`button:has-text("${buttonText}")`).click();
+}
+
 test.describe('core messaging workflow', () => {
   // Self-service signup is closed (FEATURE_REQUEST.md entry 1, slice 4) —
   // exercises the already-shipped InviteRedemptionPage.jsx end-to-end
@@ -807,6 +824,7 @@ test.describe('channel details panel', () => {
 
     await page.click(`button[aria-label="${owner.workspace.name} options"]`);
     await page.click('text=Archive workspace');
+    await confirmDialogAction(page, 'Archive Workspace', 'Archive');
     await expect(page.locator(`text=(archived — read only)`)).toBeVisible({ timeout: 10_000 });
 
     await page.click('text=e2e-details-archived-room');
@@ -1183,6 +1201,7 @@ test.describe('admin user management', () => {
     await memberRow.locator('button:has-text("Reset password")').click();
     await page.fill('input[placeholder="New password"]', 'a-brand-new-password');
     await memberRow.locator('button:has-text("Confirm")').click();
+    await confirmDialogAction(page, 'Reset Password', 'Reset Password');
     await expect(page.locator('text=Password reset')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="Close manage users"]');
@@ -1219,6 +1238,7 @@ test.describe('workspace archive/unarchive', () => {
     // Invite rather than sitting as a permanent inline pill.
     await page.click(`button[aria-label="${seeded.workspace.name} options"]`);
     await page.click('text=Archive workspace');
+    await confirmDialogAction(page, 'Archive Workspace', 'Archive');
 
     await expect(page.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('text=(archived — read only)')).toBeVisible({ timeout: 10_000 });
@@ -1250,6 +1270,7 @@ test.describe('workspace ownership transfer', () => {
     await page.click('text=Transfer ownership…');
     await pickPerson(page, 'Search workspace members for ownership transfer', target.username, target.username);
     await page.click('button:has-text("Transfer")');
+    await confirmDialogAction(page, 'Transfer Ownership', 'Transfer');
     await expect(page.locator(`text=Ownership transferred to ${target.username}`)).toBeVisible({ timeout: 10_000 });
 
     // The old owner is now a MANAGER, not OWNER — Transfer ownership… no
@@ -1316,6 +1337,7 @@ test.describe('managers_can_archive delegation', () => {
     await loginViaUi(managerPage, manager.username, manager.password);
     await managerPage.click(`button[aria-label="${owner.workspace.name} options"]`);
     await managerPage.click('text=Archive workspace');
+    await confirmDialogAction(managerPage, 'Archive Workspace', 'Archive');
     await expect(managerPage.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
     await managerPage.close();
   });
@@ -1336,6 +1358,7 @@ test.describe('workspace member removal', () => {
 
     const memberRow = page.locator('tr', { has: page.locator(`td:has-text("${member.username}")`) });
     await memberRow.locator('button:has-text("Remove")').click();
+    await confirmDialogAction(page, 'Remove Member', 'Remove');
     await expect(page.locator(`td:has-text("${member.username}")`)).not.toBeVisible({ timeout: 10_000 });
   });
 });
@@ -1356,6 +1379,7 @@ test.describe('system admin: disable/enable accounts', () => {
     const targetRow = page.locator('tr', { has: page.locator(`td:has-text("${target.username}")`) });
     await expect(targetRow).toBeVisible({ timeout: 10_000 });
     await targetRow.locator('button:has-text("Disable")').click();
+    await confirmDialogAction(page, 'Disable Account', 'Disable');
     await expect(targetRow.locator('button:has-text("Enable")')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="Close system admin"]');
@@ -1441,6 +1465,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     await targetRow.locator('button:has-text("Manage")').click();
     await page.fill('input[placeholder="New password"]', 'a-brand-new-password');
     await page.click('button:has-text("Reset")');
+    await confirmDialogAction(page, 'Reset Password', 'Reset Password');
     await expect(page.locator('text=Password reset')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button[aria-label="Close system admin"]');
@@ -1516,6 +1541,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     await expect(roleSelect).toHaveValue('ORG_ADMIN', { timeout: 10_000 });
 
     await page.locator(`[data-testid="org-membership-${orgB.id}"]`).locator('button:has-text("Remove")').click();
+    await confirmDialogAction(page, 'Remove Member', 'Remove');
     await expect(roleSelect).toHaveCount(0);
     // The Default Organization membership from seeding is still there.
     await expect(userOrgsList.getByText('Default Organization')).toBeVisible();
@@ -1915,6 +1941,7 @@ test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
 
     const memberRow = page.locator('tr', { hasText: target.username });
     await memberRow.locator('button:has-text("Remove")').click();
+    await confirmDialogAction(page, 'Remove Member', 'Remove');
     await expect(page.locator(`td:has-text("${target.username}")`)).not.toBeVisible({ timeout: 10_000 });
 
     // Create an invitation, see it pending, then revoke it.
@@ -1926,6 +1953,7 @@ test.describe('organizations (FEATURE_REQUEST.md entry 1, slice 3)', () => {
     const invitationRow = page.locator('tr', { hasText: email });
     await expect(invitationRow).toBeVisible({ timeout: 10_000 });
     await invitationRow.locator('button:has-text("Revoke")').click();
+    await confirmDialogAction(page, 'Revoke Invitation', 'Revoke');
     await expect(page.locator(`td:has-text("${email}")`)).not.toBeVisible({ timeout: 10_000 });
   });
 });
@@ -1949,6 +1977,7 @@ test.describe('workspace token invitations (FEATURE_REQUEST.md entry 1, slice 3)
     const invitationRow = page.locator('tr', { hasText: email });
     await expect(invitationRow).toBeVisible({ timeout: 10_000 });
     await invitationRow.locator('button:has-text("Revoke")').click();
+    await confirmDialogAction(page, 'Revoke Invitation', 'Revoke');
     await expect(page.locator(`td:has-text("${email}")`)).not.toBeVisible({ timeout: 10_000 });
   });
 });
