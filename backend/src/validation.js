@@ -40,6 +40,7 @@ export const MAX_MESSAGE_LENGTH = 10_000;
 export const MAX_NAME_LENGTH = 100; // workspaces.name / channels.name are VARCHAR(100)
 export const MAX_USERNAME_LENGTH = 50; // users.username is VARCHAR(50)
 export const MAX_EMAIL_LENGTH = 255; // users.email is VARCHAR(255)
+export const MAX_DISPLAY_NAME_LENGTH = 100; // users.display_name is VARCHAR(100)
 
 export function assertUuid(value, label = 'id') {
   if (typeof value !== 'string' || !UUID_RE.test(value)) {
@@ -67,6 +68,17 @@ export function assertEmail(value) {
 export function assertName(value, label = 'name') {
   if (typeof value !== 'string' || value.trim().length === 0 || value.length > MAX_NAME_LENGTH) {
     throw new ValidationError(`${label} must be 1-${MAX_NAME_LENGTH} characters`);
+  }
+  return value;
+}
+
+// Mirrors assertUsername's length/non-empty checks but permits spaces/mixed
+// case/punctuation — a display name is not a login handle
+// (FEATURE_REQUEST.md's "display names settable in the admin
+// account-creation worksheet" entry).
+export function assertDisplayName(value) {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > MAX_DISPLAY_NAME_LENGTH) {
+    throw new ValidationError(`displayName must be 1-${MAX_DISPLAY_NAME_LENGTH} characters`);
   }
   return value;
 }

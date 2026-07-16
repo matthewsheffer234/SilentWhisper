@@ -49,6 +49,56 @@ describe('POST /api/admin/users', () => {
     expect(row.payload).toMatchObject({ username: 'newbare0', email: 'newbare0@example.com' });
   });
 
+  // FEATURE_REQUEST.md's "display names settable in the admin
+  // account-creation worksheet" entry.
+  test('an explicit displayName is stored and returned, distinct from username', async () => {
+    const admin = await seedSystemAdmin('adminusersdn0');
+
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set(authHeader(admin.accessToken))
+      .send({
+        username: 'newbaredn0',
+        email: 'newbaredn0@example.com',
+        password: 'correct-horse-battery',
+        displayName: 'Brand New Person',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ username: 'newbaredn0', displayName: 'Brand New Person' });
+
+    const row = await db('users').where({ id: res.body.userId }).first('display_name');
+    expect(row.display_name).toBe('Brand New Person');
+
+    const auditRow = await db('audit_logs').where({ action_type: 'USER_ACCOUNT_CREATED' }).first();
+    expect(auditRow.payload).toMatchObject({ displayName: 'Brand New Person' });
+  });
+
+  test('omitting displayName falls back to username, preserving prior behavior', async () => {
+    const admin = await seedSystemAdmin('adminusersdn1');
+
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'newbaredn1', email: 'newbaredn1@example.com', password: 'correct-horse-battery' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ username: 'newbaredn1', displayName: 'newbaredn1' });
+  });
+
+  test('an empty displayName 400s', async () => {
+    const admin = await seedSystemAdmin('adminusersdn2');
+
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set(authHeader(admin.accessToken))
+      .send({
+        username: 'newbaredn2',
+        email: 'newbaredn2@example.com',
+        password: 'correct-horse-battery',
+        displayName: '',
+      });
+    expect(res.status).toBe(400);
+  });
+
   test('omitting organizationId auto-enrolls into the earliest-created organization', async () => {
     const admin = await seedSystemAdmin('adminusers1');
     const earliestOrg = await db('organizations').orderBy('created_at', 'asc').first('id');

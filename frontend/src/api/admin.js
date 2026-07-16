@@ -6,8 +6,17 @@ import { apiFetch } from './client.js';
 // only ever being rendered for a system admin is a UI convenience, never
 // the actual enforcement boundary, same as every other admin panel in this
 // app.
-export const createAdminUser = ({ username, email, password, organizationId }) =>
-  apiFetch('/admin/users', { method: 'POST', body: { username, email, password, ...(organizationId ? { organizationId } : {}) } });
+export const createAdminUser = ({ username, email, password, displayName, organizationId }) =>
+  apiFetch('/admin/users', {
+    method: 'POST',
+    body: {
+      username,
+      email,
+      password,
+      ...(displayName ? { displayName } : {}),
+      ...(organizationId ? { organizationId } : {}),
+    },
+  });
 export const listAdminUsers = () => apiFetch('/admin/users');
 export const disableUser = (userId) => apiFetch(`/admin/users/${userId}/disable`, { method: 'POST' });
 export const enableUser = (userId) => apiFetch(`/admin/users/${userId}/enable`, { method: 'POST' });

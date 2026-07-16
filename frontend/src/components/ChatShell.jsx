@@ -13,6 +13,7 @@ import ThreadSidebar from './ThreadSidebar.jsx';
 import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
 import ChangePasswordPanel from './ChangePasswordPanel.jsx';
+import DisplayNamePanel from './DisplayNamePanel.jsx';
 import UserManagementPanel from './UserManagementPanel.jsx';
 import BrowseWorkspacesPanel from './BrowseWorkspacesPanel.jsx';
 import CreateOrganizationModal from './CreateOrganizationModal.jsx';
@@ -91,6 +92,7 @@ export default function ChatShell() {
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [displayNameOpen, setDisplayNameOpen] = useState(false);
   const [channelDetailsOpen, setChannelDetailsOpen] = useState(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
@@ -576,6 +578,7 @@ export default function ChatShell() {
         canManageAi={canManageAi}
         onNavigateToSearchResult={handleNavigateToSearchResult}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
+        onOpenDisplayName={() => setDisplayNameOpen(true)}
         onUnarchiveWorkspace={handleUnarchiveWorkspace}
         onOpenBrowseWorkspaces={() => setBrowseWorkspacesOpen(true)}
         organizations={organizations}
@@ -682,6 +685,7 @@ export default function ChatShell() {
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
+      {displayNameOpen && <DisplayNamePanel onClose={() => setDisplayNameOpen(false)} />}
       {userManagementOpen && <UserManagementPanel workspaces={workspaces} onClose={() => setUserManagementOpen(false)} />}
       {browseWorkspacesOpen && (
         <BrowseWorkspacesPanel

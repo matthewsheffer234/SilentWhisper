@@ -12,6 +12,11 @@ export async function changePassword({ currentPassword, newPassword }) {
   return data.user;
 }
 
+export async function updateDisplayName(displayName) {
+  const data = await apiFetch('/auth/me/display-name', { method: 'PATCH', body: { displayName } });
+  return data.user;
+}
+
 export async function logout() {
   await apiFetch('/auth/logout', { method: 'POST' });
   setAccessToken(null);

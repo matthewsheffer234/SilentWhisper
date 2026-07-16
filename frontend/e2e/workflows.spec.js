@@ -1656,6 +1656,58 @@ test.describe('system admin: manage organizations and existing users', () => {
     await expect(orgRow.locator('td:has-text("Archived")')).toHaveCount(0);
   });
 
+  // FEATURE_REQUEST.md's "display names settable in the admin
+  // account-creation worksheet" entry: the create-user form's new optional
+  // Display name field.
+  test('creating an account with a display name distinct from username renders it distinctly in the accounts table', async ({
+    page,
+  }) => {
+    const admin = await seedUserWithChannel('dnadmin');
+    await promoteToSystemAdmin(admin.userId);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await openAdminPanelItem(page, 'System Admin');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const newUsername = `dn_created_${Date.now()}`;
+    await page.fill('#sysadmin-new-username', newUsername);
+    await page.fill('#sysadmin-new-email', `${newUsername}@example.com`);
+    await page.fill('#sysadmin-new-password', 'correct-horse-battery');
+    await page.fill('#sysadmin-new-displayname', 'A Distinct Display Name');
+    await page.click('button:has-text("Create account")');
+    await expect(page.locator(`text=Created ${newUsername}`)).toBeVisible({ timeout: 10_000 });
+
+    // Table renders display name first, with @username as a secondary
+    // disambiguator only when it differs (established convention from
+    // FEATURE_REQUEST.md's "display names as the primary identity" entry).
+    await expect(page.locator('td:has-text("A Distinct Display Name")').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`td:has-text("@${newUsername}")`).first()).toBeVisible({ timeout: 10_000 });
+  });
+
+  // FEATURE_REQUEST.md's "manage organizations (create, modify, delete) in
+  // the frontend" entry: create is now reachable from the same panel as
+  // rename/archive/unarchive, not just the workspace switcher.
+  test('creating an organization directly from SystemAdminPanel adds a new row without reopening via the switcher', async ({
+    page,
+  }) => {
+    const admin = await seedUserWithChannel('orgcreateadmin');
+    await promoteToSystemAdmin(admin.userId);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await openAdminPanelItem(page, 'System Admin');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+
+    const orgName = `Panel Created Org ${Date.now()}`;
+    await page.click('button:has-text("Create organization…")');
+    const createOrgDialog = page.locator('[role="dialog"][aria-label="Create organization"]');
+    await expect(createOrgDialog).toBeVisible({ timeout: 10_000 });
+    await page.fill('#new-org-name', orgName);
+    await createOrgDialog.locator('button[type="submit"]').click();
+
+    await expect(createOrgDialog).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`td:has-text("${orgName}")`)).toBeVisible({ timeout: 10_000 });
+  });
+
   test('moving a user between two organizations via Manage', async ({ page }) => {
     const admin = await seedUserWithChannel('orgmoveadmin');
     await promoteToSystemAdmin(admin.userId);
@@ -1818,6 +1870,35 @@ test.describe('menus (Apple HIG overhaul: pull-down buttons + progressive disclo
     const adminDialog = await openAdminHub(page);
     await page.click('body', { position: { x: 5, y: 5 } });
     await expect(adminDialog).not.toBeVisible();
+  });
+
+  // FEATURE_REQUEST.md's "display names settable in the admin
+  // account-creation worksheet" entry: the self-edit "Display Name" control,
+  // placed next to Change Password in the user menu, same "available to
+  // every user" precedent.
+  test('selecting "Display Name" from the user menu opens the panel and saving updates the sidebar immediately', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('dnmenuselect');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    await expect(page.locator('span', { hasText: seeded.username }).first()).toBeVisible();
+
+    await page.click('button[aria-label="User menu"]');
+    await page.click('[role="menuitem"]:has-text("Display Name")');
+    await expect(page.locator('[role="dialog"][aria-label="display name"]')).toBeVisible({ timeout: 10_000 });
+
+    const nameInput = page.locator('#display-name-input');
+    await nameInput.fill('Renamed Via Panel');
+    await page.click('button:has-text("Save")');
+    await expect(page.locator('text=Saved')).toBeVisible({ timeout: 10_000 });
+    await page.click('button[aria-label="Close display name"]');
+
+    // AuthContext's user state (and every place it feeds, e.g. the sidebar's
+    // own user-row label) updates immediately, with no page reload needed —
+    // the same "no token change, just swap in the response" property
+    // changePassword's own tests rely on.
+    await expect(page.locator('span', { hasText: 'Renamed Via Panel' }).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('the Admin hub opens the same three existing panels', async ({ page }) => {

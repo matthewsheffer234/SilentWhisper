@@ -77,9 +77,18 @@ export function AuthProvider({ children }) {
     await authApi.changePassword(credentials);
   }, []);
 
+  // Cosmetic-only self-edit (FEATURE_REQUEST.md's "display names settable in
+  // the admin account-creation worksheet" entry) — unlike changePassword, no
+  // token rotation happens server-side, so this updates user state directly
+  // from the response rather than relying on a side effect in api/auth.js.
+  const setDisplayName = useCallback(async (displayName) => {
+    const updatedUser = await authApi.updateDisplayName(displayName);
+    setUser(updatedUser);
+  }, []);
+
   const value = useMemo(
-    () => ({ user, status, login, logout, changePassword, completeAuth }),
-    [user, status, login, logout, changePassword, completeAuth],
+    () => ({ user, status, login, logout, changePassword, setDisplayName, completeAuth }),
+    [user, status, login, logout, changePassword, setDisplayName, completeAuth],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

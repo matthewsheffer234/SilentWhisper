@@ -250,6 +250,7 @@ export default function WorkspaceSidebar({
   canManageAi,
   onNavigateToSearchResult,
   onOpenChangePassword,
+  onOpenDisplayName,
   onUnarchiveWorkspace,
   onOpenBrowseWorkspaces,
   organizations,
@@ -389,6 +390,7 @@ export default function WorkspaceSidebar({
           },
         ]
       : []),
+    { key: 'display-name', label: 'Display Name', onSelect: onOpenDisplayName },
     { key: 'change-password', label: 'Change Password', onSelect: onOpenChangePassword },
     { key: 'sign-out', label: 'Sign out', separatorBefore: true, onSelect: onLogout },
   ];

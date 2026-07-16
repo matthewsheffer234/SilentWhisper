@@ -294,6 +294,72 @@ describe('POST /api/auth/change-password', () => {
   });
 });
 
+// FEATURE_REQUEST.md's "display names settable in the admin account-creation
+// worksheet" entry: closes the gap where a system admin could set a display
+// name at account-creation time but the account holder had no way to ever
+// change it themselves.
+describe('PATCH /api/auth/me/display-name', () => {
+  test("updates only the caller's own row and is reflected in a subsequent GET /auth/me", async () => {
+    const mia = await signup('mia');
+    const other = await signup('miaother');
+
+    const res = await request(app)
+      .patch('/api/auth/me/display-name')
+      .set(authHeader(mia.accessToken))
+      .send({ displayName: 'Mia Updated' });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toMatchObject({ username: 'mia', displayName: 'Mia Updated' });
+
+    const meRes = await request(app).get('/api/auth/me').set(authHeader(mia.accessToken));
+    expect(meRes.body.user.displayName).toBe('Mia Updated');
+
+    // The other account's row is untouched.
+    const otherRow = await db('users').where({ id: other.userId }).first('display_name');
+    expect(otherRow.display_name).toBe('miaother');
+  });
+
+  // Structural: the route has no :userId param at all — it can only ever
+  // act on the caller's own row, the same "personal profile data" class as
+  // POST /auth/change-password. There is no way to pass a target id.
+  test('accepts no target-user parameter — always acts on the caller alone', async () => {
+    const nina = await signup('nina');
+    const res = await request(app)
+      .patch('/api/auth/me/display-name')
+      .set(authHeader(nina.accessToken))
+      .send({ displayName: 'Nina Renamed', userId: '00000000-0000-0000-0000-000000000000' });
+    expect(res.status).toBe(200);
+
+    const row = await db('users').where({ id: nina.userId }).first('display_name');
+    expect(row.display_name).toBe('Nina Renamed');
+  });
+
+  test('rejects an empty displayName', async () => {
+    const oscar = await signup('oscar');
+    const res = await request(app)
+      .patch('/api/auth/me/display-name')
+      .set(authHeader(oscar.accessToken))
+      .send({ displayName: '' });
+    expect(res.status).toBe(400);
+
+    const row = await db('users').where({ id: oscar.userId }).first('display_name');
+    expect(row.display_name).toBe('oscar');
+  });
+
+  test('rejects an over-length displayName', async () => {
+    const petra = await signup('petra');
+    const res = await request(app)
+      .patch('/api/auth/me/display-name')
+      .set(authHeader(petra.accessToken))
+      .send({ displayName: 'x'.repeat(101) });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects an unauthenticated request', async () => {
+    const res = await request(app).patch('/api/auth/me/display-name').send({ displayName: 'Nobody' });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('GET /api/auth/me', () => {
   test('returns the current user for a valid access token', async () => {
     const henry = await signup('henry');

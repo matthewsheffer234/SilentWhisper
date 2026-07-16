@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertUsername, assertEmail } from '../validation.js';
+import { assertUuid, assertUsername, assertEmail, assertDisplayName } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
 import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateLimit.js';
@@ -47,6 +47,8 @@ adminRouter.post('/users', adminUserCreateLimiter, async (req, res, next) => {
     const email = assertEmail(req.body?.email);
     const passwordError = assertValidPassword(req.body?.password);
     if (passwordError) throw new ValidationError(passwordError);
+    const displayName =
+      req.body?.displayName !== undefined ? assertDisplayName(req.body.displayName) : username;
     const requestedOrgId =
       req.body?.organizationId !== undefined ? assertUuid(req.body.organizationId, 'organizationId') : null;
 
@@ -60,7 +62,7 @@ adminRouter.post('/users', adminUserCreateLimiter, async (req, res, next) => {
     const passwordHash = await bcrypt.hash(req.body.password, config.auth.bcryptSaltRounds);
     const newUser = await db.transaction(async (trx) => {
       const [user] = await trx('users')
-        .insert({ username, email, password_hash: passwordHash, display_name: username })
+        .insert({ username, email, password_hash: passwordHash, display_name: displayName })
         .returning(['id', 'username', 'display_name', 'email']);
 
       let organizationId = requestedOrgId;
@@ -86,7 +88,13 @@ adminRouter.post('/users', adminUserCreateLimiter, async (req, res, next) => {
       actorIp: req.ip,
       actionType: 'USER_ACCOUNT_CREATED',
       targetResource: newUser.id,
-      payload: { newUserId: newUser.id, username: newUser.username, email: newUser.email, organizationId: newUser.organizationId },
+      payload: {
+        newUserId: newUser.id,
+        username: newUser.username,
+        displayName: newUser.display_name,
+        email: newUser.email,
+        organizationId: newUser.organizationId,
+      },
     });
 
     res.status(201).json({

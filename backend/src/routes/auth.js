@@ -4,6 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { appendAuditEvent, ANONYMOUS_ACTOR_ID } from '../audit/auditService.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
+import { assertDisplayName } from '../validation.js';
 import { signAccessToken } from '../auth/jwt.js';
 import {
   issueRefreshToken,
@@ -65,6 +66,39 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
     if (!user) {
       throw new UnauthorizedError('User no longer exists');
     }
+    res.json({
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        email: user.email,
+        isSystemAdmin: user.is_system_admin,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Self-service display-name edit (FEATURE_REQUEST.md's "display names
+// settable in the admin account-creation worksheet" entry) — closes the gap
+// left by "Display names as the primary identity": a system admin can set a
+// display name at account-creation time (POST /api/admin/users, above), but
+// until this route existed nothing let the account holder ever change it
+// themselves. No :userId param by design — this can only ever act on the
+// caller's own row, the same "personal profile data" class as
+// POST /auth/change-password. Not audited/rate-limited: cosmetic, same
+// reasoning already applied to the default-workspace preference.
+authRouter.patch('/me/display-name', requireAuth, async (req, res, next) => {
+  try {
+    const displayName = assertDisplayName(req.body?.displayName);
+
+    await db('users').where({ id: req.user.id }).update({ display_name: displayName });
+
+    const user = await db('users')
+      .where({ id: req.user.id })
+      .first(['id', 'username', 'display_name', 'email', 'is_system_admin']);
+
     res.json({
       user: {
         id: user.id,

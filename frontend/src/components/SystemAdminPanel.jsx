@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
+import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import {
   createAdminUser,
   listAdminUsers,
@@ -14,6 +15,7 @@ import {
 import { listAllWorkspacesAdmin } from '../api/workspaces.js';
 import {
   listOrganizations,
+  createOrganization,
   addOrgMember,
   changeOrgMemberRole,
   removeOrgMember,
@@ -124,6 +126,7 @@ function CreateAccountForm({ organizations, onSubmit }) {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [organizationId, setOrganizationId] = useState('');
   const [status, setStatus] = useState(null);
 
@@ -133,11 +136,18 @@ function CreateAccountForm({ organizations, onSubmit }) {
     e.preventDefault();
     setStatus(null);
     try {
-      await onSubmit({ username, email, password, organizationId: organizationId || undefined });
+      await onSubmit({
+        username,
+        email,
+        password,
+        displayName: displayName || undefined,
+        organizationId: organizationId || undefined,
+      });
       setStatus({ type: 'success', message: `Created ${username} — share the password with them out of band.` });
       setUsername('');
       setEmail('');
       setPassword('');
+      setDisplayName('');
       setOrganizationId('');
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Failed to create account' });
@@ -176,6 +186,18 @@ function CreateAccountForm({ organizations, onSubmit }) {
           />
         </div>
         <div style={{ ...styles.field, flex: 1 }}>
+          <label style={styles.label} htmlFor="sysadmin-new-displayname">Display name (optional)</label>
+          <input
+            id="sysadmin-new-displayname"
+            style={styles.input}
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder={username || 'Defaults to username'}
+          />
+        </div>
+      </div>
+      <div style={styles.row}>
+        <div style={{ ...styles.field, flex: 1 }}>
           <label style={styles.label} htmlFor="sysadmin-new-org">Organization</label>
           <select
             id="sysadmin-new-org"
@@ -189,6 +211,7 @@ function CreateAccountForm({ organizations, onSubmit }) {
             ))}
           </select>
         </div>
+        <div style={{ flex: 1 }} />
       </div>
       <button type="submit" style={styles.submitButton}>Create account</button>
       {status && (
@@ -451,6 +474,7 @@ export default function SystemAdminPanel({ onClose }) {
   const [managingUserId, setManagingUserId] = useState(null);
   const [orgsError, setOrgsError] = useState(null);
   const [confirmDisable, setConfirmDisable] = useState(null); // account pending disable
+  const [createOrgOpen, setCreateOrgOpen] = useState(false);
 
   function loadAccounts() {
     setAccountsLoading(true);
@@ -526,6 +550,17 @@ export default function SystemAdminPanel({ onClose }) {
 
   function handleRemoveUserFromOrg(orgId, userId) {
     return removeOrgMember(orgId, userId);
+  }
+
+  // FEATURE_REQUEST.md's "manage organizations (create, modify, delete) in
+  // the frontend" entry: opens the same CreateOrganizationModal the
+  // workspace switcher's "+ Create organization…" item already uses (same
+  // onCreate prop shape), refreshing the same organizations list state the
+  // table already reloads after rename/archive/unarchive.
+  async function handleCreateOrg(name) {
+    await createOrganization(name);
+    loadOrganizations();
+    setCreateOrgOpen(false);
   }
 
   async function handleRenameOrg(orgId, name) {
@@ -650,7 +685,12 @@ export default function SystemAdminPanel({ onClose }) {
           </table>
         )}
 
-        <div style={styles.sectionTitle}>Organizations</div>
+        <div style={{ ...styles.row, alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={styles.sectionTitle}>Organizations</div>
+          <button type="button" style={styles.rowButton} onClick={() => setCreateOrgOpen(true)}>
+            Create organization…
+          </button>
+        </div>
         {orgsError && <div style={styles.error}>{orgsError}</div>}
         {organizations.length === 0 ? (
           <div style={styles.empty}>No organizations yet.</div>
@@ -712,6 +752,9 @@ export default function SystemAdminPanel({ onClose }) {
             onConfirm={() => handleDisable(confirmDisable.userId)}
             onClose={() => setConfirmDisable(null)}
           />
+        )}
+        {createOrgOpen && (
+          <CreateOrganizationModal onClose={() => setCreateOrgOpen(false)} onCreate={handleCreateOrg} />
         )}
     </Sheet>
   );
