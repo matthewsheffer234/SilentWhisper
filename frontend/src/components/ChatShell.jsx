@@ -4,6 +4,7 @@ import { createSocket } from '../ws/socket.js';
 import * as workspacesApi from '../api/workspaces.js';
 import * as organizationsApi from '../api/organizations.js';
 import * as notificationsApi from '../api/notifications.js';
+import * as directMessagesApi from '../api/directMessages.js';
 import { PERMISSIONS, hasPermission, hasSystemPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
@@ -23,6 +24,8 @@ import NotificationPanel from './NotificationPanel.jsx';
 import ChannelDetailsPanel from './ChannelDetailsPanel.jsx';
 import CreateWorkspaceSheet from './CreateWorkspaceSheet.jsx';
 import CreateChannelSheet from './CreateChannelSheet.jsx';
+import NewMessageSheet from './NewMessageSheet.jsx';
+import { directMessageLabel } from '../directMessages.js';
 import mentionIcon from '../assets/mention-icon.svg';
 
 const styles = {
@@ -59,6 +62,20 @@ function toDisplayMessage(m) {
   return { ...m, pending: false };
 }
 
+// Normalizes a /direct-messages list entry into the same shape channels[]
+// entries already have (name/memberCount/isMember), so ChannelView and the
+// canAddChannelMembers-style gates below don't need a second code path for
+// "is this a DM or a workspace channel."
+function toChannelViewShape(dm) {
+  return {
+    id: dm.id,
+    type: dm.type,
+    name: directMessageLabel(dm),
+    memberCount: dm.members.length + 1,
+    isMember: true,
+  };
+}
+
 export default function ChatShell() {
   const { user, logout } = useAuth();
 
@@ -77,6 +94,8 @@ export default function ChatShell() {
   const [channelDetailsOpen, setChannelDetailsOpen] = useState(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
+  const [directMessages, setDirectMessages] = useState([]);
+  const [newMessageOpen, setNewMessageOpen] = useState(false);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
@@ -245,6 +264,19 @@ export default function ChatShell() {
     notificationsApi.getNotificationSummary().then(setNotificationSummary).catch(() => {});
   }, []);
 
+  // FEATURE_REQUEST.md entry 3 (Direct Messages navigation): loaded once up
+  // front, independent of the currently-selected workspace — DMs are
+  // workspace-independent (channels.workspace_id is NULL for DIRECT/
+  // GROUP_DM, PROJECT_PLAN.md Section 4), so there's no per-workspace
+  // refetch trigger the way channels[] has.
+  const refreshDirectMessages = useCallback(() => {
+    directMessagesApi.listDirectMessages().then(setDirectMessages).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshDirectMessages();
+  }, [refreshDirectMessages]);
+
   useEffect(() => {
     if (!selectedWorkspaceId) return;
     workspacesApi.listChannels(selectedWorkspaceId).then(setChannels);
@@ -337,6 +369,22 @@ export default function ChatShell() {
       // eslint-disable-next-line no-await-in-loop
       await workspacesApi.addChannelMember(selectedWorkspaceId, ch.id, username).catch(() => {});
     }
+  }
+
+  // FEATURE_REQUEST.md entry 3: "One selected person creates/opens a direct
+  // DM; multiple selected people create a group DM." POST /direct-messages
+  // itself is idempotent (reopens the existing DIRECT channel rather than
+  // creating a duplicate) — group DMs have no such reuse concept (every
+  // create is a new channel, matching POST /group-direct-messages's own
+  // behavior), so only the single-person path can ever resolve to a channel
+  // already in `directMessages`.
+  async function handleCreateDirectMessage(memberIds) {
+    const result =
+      memberIds.length === 1
+        ? await directMessagesApi.createDirectMessage(memberIds[0])
+        : await directMessagesApi.createGroupDirectMessage(memberIds);
+    refreshDirectMessages();
+    selectChannel(result.id);
   }
 
   function handleInviteMember(workspaceId, username, role) {
@@ -439,12 +487,13 @@ export default function ChatShell() {
   // thread here needs no extra fetch — openThread only ever reads
   // rootMessage.id/username/content. workspaceId is left untouched when a
   // hit has none (DM/group-DM channels, workspace_id nullable per schema) —
-  // selectChannel still works, it just isn't reflected in the sidebar's
-  // currently-selected-workspace highlight, a pre-existing gap (no DM-
-  // browsing UI exists yet) this inherits rather than introduces. Called
-  // from SearchBar (the HIG overhaul entry's persistent search field), which
-  // closes/resets its own popover state itself on navigate — this function
-  // only owns cross-component navigation, not that component's local UI state.
+  // selectChannel still works and (entry 3) now correctly highlights the
+  // matching row in the sidebar's own Direct Messages section, since
+  // selectedChannel resolves against directMessages[] as well as channels[]
+  // below. Called from SearchBar (the HIG overhaul entry's persistent search
+  // field), which closes/resets its own popover state itself on navigate —
+  // this function only owns cross-component navigation, not that
+  // component's local UI state.
   function handleNavigateToSearchResult(hit) {
     if (hit.workspaceId && hit.workspaceId !== selectedWorkspaceId) {
       setSelectedWorkspaceId(hit.workspaceId);
@@ -469,7 +518,15 @@ export default function ChatShell() {
     }
   }
 
-  const selectedChannel = channels.find((c) => c.id === selectedChannelId) ?? null;
+  // FEATURE_REQUEST.md entry 3 (Direct Messages navigation): a DM/group-DM
+  // isn't in channels[] (that list is fetched per-workspace) — falls back to
+  // directMessages[] so selecting one still resolves to a real channel
+  // object for ChannelView, without requiring a workspace to be selected at
+  // all (design: "should not require a workspace highlight").
+  const selectedDirectMessage = directMessages.find((d) => d.id === selectedChannelId) ?? null;
+  const selectedChannel =
+    channels.find((c) => c.id === selectedChannelId) ??
+    (selectedDirectMessage ? toChannelViewShape(selectedDirectMessage) : null);
   // The AI settings surface is admin-only (PROJECT_PLAN.md Section 6); the
   // backend gates it on "system admin, or OWNER/MANAGER in at least one
   // workspace" (see requireSystemPermission's doc comment), so the entry
@@ -482,13 +539,17 @@ export default function ChatShell() {
   // itself already has its own manageable-org selector once opened).
   const canManageOrg = organizations.some((org) => hasOrgManagementAccess(user?.isSystemAdmin, org.role));
   const isSelectedWorkspaceArchived = Boolean(workspaces.find((ws) => ws.id === selectedWorkspaceId)?.archivedAt);
+  // A DM/group-DM has no workspace of its own to be archived — never
+  // read-only on account of whatever workspace happens to still be
+  // selected in the background.
+  const isSelectedChannelArchived = isSelectedWorkspaceArchived && !selectedDirectMessage;
   const selectedWorkspaceName = workspaces.find((ws) => ws.id === selectedWorkspaceId)?.name ?? null;
-  // Same gate WorkspaceSidebar's own "Invite to channel…" overflow item uses
+  // Same gate ChannelDetailsPanel's "Add people" section uses
   // (FEATURE_REQUEST.md's private-channel invite workflow entry) — any
   // member of a PRIVATE channel can add someone else to it, no extra
   // permission beyond membership.
   const canAddChannelMembers = Boolean(
-    selectedChannel?.isMember && selectedChannel?.type === 'PRIVATE' && !isSelectedWorkspaceArchived,
+    selectedChannel?.isMember && selectedChannel?.type === 'PRIVATE' && !isSelectedChannelArchived,
   );
   const selectedWorkspace = workspaces.find((ws) => ws.id === selectedWorkspaceId) ?? null;
   // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
@@ -511,7 +572,6 @@ export default function ChatShell() {
         selectedChannelId={selectedChannelId}
         onSelectChannel={selectChannel}
         onJoinChannel={handleJoinChannel}
-        onInviteToChannel={handleInviteToChannel}
         onLogout={logout}
         canManageAi={canManageAi}
         onNavigateToSearchResult={handleNavigateToSearchResult}
@@ -529,6 +589,8 @@ export default function ChatShell() {
         onOpenNotifications={() => setNotificationsOpen(true)}
         onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
         onOpenCreateChannel={() => setCreateChannelOpen(true)}
+        directMessages={directMessages}
+        onOpenNewMessage={() => setNewMessageOpen(true)}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -569,7 +631,7 @@ export default function ChatShell() {
           presence={presence}
           currentUser={user}
           joined={joinedChannels.has(selectedChannelId)}
-          archived={isSelectedWorkspaceArchived}
+          archived={isSelectedChannelArchived}
           onSend={handleSend}
           onOpenThread={openThread}
           onOpenDetails={() => setChannelDetailsOpen(true)}
@@ -596,6 +658,13 @@ export default function ChatShell() {
           workspaceId={selectedWorkspaceId}
           onCreate={handleCreateChannel}
           onClose={() => setCreateChannelOpen(false)}
+        />
+      )}
+      {newMessageOpen && (
+        <NewMessageSheet
+          organizationId={selectedOrganizationId}
+          onCreate={handleCreateDirectMessage}
+          onClose={() => setNewMessageOpen(false)}
         />
       )}
       {channelDetailsOpen && selectedChannel && (

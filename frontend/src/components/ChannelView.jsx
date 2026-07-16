@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { X, Hash, Lock, Sparkles, Info } from 'lucide-react';
+import { X, Hash, Lock, Sparkles, Info, User, Users } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
@@ -309,6 +309,14 @@ export default function ChannelView({
     );
   }
 
+  // FEATURE_REQUEST.md entry 3 (Direct Messages navigation): "Header copy
+  // should reflect people, not #channel." DIRECT/GROUP_DM channels have no
+  // workspace-scoped membership-management surface (ChannelDetailsPanel
+  // talks to a workspace-scoped members endpoint), so the details button is
+  // channel/private-channel-only — Summarize stays available for DMs too,
+  // since the backend's summarize route is channel-generic.
+  const isDirectConversation = channel.type === 'DIRECT' || channel.type === 'GROUP_DM';
+
   function handleSubmit(e) {
     e.preventDefault();
     if (!draft.trim()) return;
@@ -412,11 +420,25 @@ export default function ChannelView({
     <div id={mainContentId} tabIndex={-1} style={styles.wrapper}>
       <div style={styles.header}>
         <span style={styles.headerTitle}>
-          {channel.type === 'PRIVATE' ? <Lock size={16} aria-hidden="true" /> : <Hash size={16} aria-hidden="true" />}
+          {isDirectConversation ? (
+            channel.type === 'GROUP_DM' ? <Users size={16} aria-hidden="true" /> : <User size={16} aria-hidden="true" />
+          ) : channel.type === 'PRIVATE' ? (
+            <Lock size={16} aria-hidden="true" />
+          ) : (
+            <Hash size={16} aria-hidden="true" />
+          )}
           {channel.name}
           <span style={styles.headerMeta}>
-            {channel.type === 'PRIVATE' ? 'Private' : 'Open'}
-            {typeof channel.memberCount === 'number' && ` · ${channel.memberCount} member${channel.memberCount === 1 ? '' : 's'}`}
+            {isDirectConversation
+              ? channel.type === 'GROUP_DM'
+                ? `${channel.memberCount} people`
+                : 'Direct message'
+              : channel.type === 'PRIVATE'
+                ? 'Private'
+                : 'Open'}
+            {!isDirectConversation &&
+              typeof channel.memberCount === 'number' &&
+              ` · ${channel.memberCount} member${channel.memberCount === 1 ? '' : 's'}`}
             {archived && ' · archived — read only'}
           </span>
         </span>
@@ -425,9 +447,11 @@ export default function ChannelView({
             <Sparkles size={14} aria-hidden="true" />
             {summary?.loading ? 'Summarizing…' : 'Summarize'}
           </button>
-          <button type="button" style={styles.detailsButton} onClick={onOpenDetails} aria-label={`${channel.name} channel details`}>
-            <Info size={18} aria-hidden="true" />
-          </button>
+          {!isDirectConversation && (
+            <button type="button" style={styles.detailsButton} onClick={onOpenDetails} aria-label={`${channel.name} channel details`}>
+              <Info size={18} aria-hidden="true" />
+            </button>
+          )}
         </span>
       </div>
       {summary && (
@@ -515,7 +539,13 @@ export default function ChannelView({
             value={draft}
             onChange={handleComposerChange}
             onKeyDown={handleComposerKeyDown}
-            placeholder={archived ? 'This workspace is archived — read only' : joined ? `Message #${channel.name}` : 'Joining channel…'}
+            placeholder={
+              archived
+                ? 'This workspace is archived — read only'
+                : joined
+                  ? `Message ${isDirectConversation ? channel.name : `#${channel.name}`}`
+                  : 'Joining channel…'
+            }
             disabled={!joined || archived}
             maxLength={10000}
             role="combobox"

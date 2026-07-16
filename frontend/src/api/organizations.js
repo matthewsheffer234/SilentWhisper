@@ -29,3 +29,13 @@ export const searchOrgPeople = (orgId, query) => {
   const qs = params.toString();
   return apiFetch(`/organizations/${orgId}/people-search${qs ? `?${qs}` : ''}`);
 };
+
+// FEATURE_REQUEST.md entry 3 (Direct Messages navigation): candidate pool
+// for the "New Message" people picker — the org's own roster, gated on
+// plain membership rather than searchOrgPeople's ORG_MANAGE_MEMBERS.
+export const searchOrgMembers = (orgId, query) => {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  const qs = params.toString();
+  return apiFetch(`/organizations/${orgId}/members-search${qs ? `?${qs}` : ''}`);
+};

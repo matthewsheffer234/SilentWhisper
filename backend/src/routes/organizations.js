@@ -14,7 +14,7 @@ import {
 } from '../validation.js';
 import { invitationCreateLimiter, memberSearchLimiter } from '../auth/rateLimit.js';
 import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
-import { requireOrgPermission, requireOrgNotArchived, isSystemAdminUser } from '../authz/membershipService.js';
+import { requireOrgPermission, requireOrgMember, requireOrgNotArchived, isSystemAdminUser } from '../authz/membershipService.js';
 import { PERMISSIONS } from '../authz/permissions.js';
 import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from '../errors.js';
 
@@ -247,6 +247,51 @@ organizationsRouter.get('/:orgId/people-search', memberSearchLimiter, async (req
         alreadyMember: r.memberUserId != null,
       })),
     );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 3 (Direct Messages navigation): candidate pool
+// for the "New Message" people picker — an org's own roster, not every
+// account system-wide (unlike people-search above). Gated on plain
+// requireOrgMember rather than ORG_MANAGE_MEMBERS, mirroring workspaces.js's
+// members-search reasoning exactly: every field returned here is already
+// visible to any org-mate through workspace rosters/message authorship once
+// they share a workspace, and starting a DM is an ordinary member action,
+// not an admin one. Excludes the caller — you can't start a DM with
+// yourself (POST /direct-messages already rejects it; no point suggesting it).
+organizationsRouter.get('/:orgId/members-search', memberSearchLimiter, async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    await requireOrgMember(db, req.user.id, orgId);
+
+    const limit =
+      req.query.limit !== undefined ? assertBoundedInt(req.query.limit, { min: 1, max: 20 }, 'limit') : 8;
+    let q = '';
+    if (req.query.q !== undefined) {
+      q = String(req.query.q);
+      if (q.length > MAX_USERNAME_LENGTH) {
+        throw new ValidationError(`q must be at most ${MAX_USERNAME_LENGTH} characters`);
+      }
+    }
+
+    let query = db('organization_members as om')
+      .join('users', 'users.id', 'om.user_id')
+      .where('om.organization_id', orgId)
+      .whereNot('users.id', req.user.id);
+    if (q) {
+      query = query.andWhere((builder) => {
+        builder.orWhere('users.username', 'ilike', `${q}%`).orWhere('users.display_name', 'ilike', `${q}%`);
+      });
+    }
+
+    const rows = await query
+      .orderBy('users.username', 'asc')
+      .limit(limit)
+      .select('users.id', 'users.username', 'users.display_name as displayName');
+
+    res.json(rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.displayName })));
   } catch (err) {
     next(err);
   }

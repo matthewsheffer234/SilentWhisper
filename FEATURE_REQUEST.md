@@ -27,8 +27,6 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-Dependency note: the UI/UX entries below are ordered so low-risk language cleanup and shared primitives land before larger workflow rewrites. In particular, display names should land before people picker work; the people picker should land before private-channel membership, direct messages, and private-channel creation flows; the shared modal/sheet primitive should land before moving inline sidebar forms into sheets; and the broad sidebar redesign should land after the destination surfaces it depends on exist.
-
 ### 1. Security hardening from 2026-07-15 audit
 
 **Status**: Proposed
@@ -62,35 +60,7 @@ Design:
 - **Frontend — applying it on load**: `ChatShell.jsx`'s initial-load effect (line 174-177 today) changes from unconditionally picking `ws[0].id` to: if `user.defaultWorkspaceId` is set *and* present in the just-fetched `ws` list (defends against a default pointing at a workspace the user has since lost membership in — no separate cleanup job needed, this check is cheap and already has the list in hand), select it; otherwise fall back to `ws[0].id` exactly as today.
 - **Tests**: setting a default on a workspace the caller belongs to succeeds and is reflected in `GET /api/auth/me`/login/signup responses; setting it on a workspace the caller isn't a member of 404s (existence-hiding, not 403); setting `null` clears it; a plain `MEMBER` (not just `ADMIN`) can set their own default; the frontend's initial-selection logic prefers a valid `defaultWorkspaceId` over `ws[0]` when both are present, and falls back to `ws[0]` when the stored default is no longer in the caller's workspace list (e.g. removed from that workspace since setting it).
 
-### 3. Direct Messages as a first-class navigation section
-
-**Status**: Proposed
-**Utility**: High. The backend has direct-message and group-DM routes, but the UI has no DM browsing surface. A messaging product feels incomplete when person-to-person conversations are invisible in navigation.
-**Origin**: `UI_UX_REVIEW.md` recommendation and existing `ChatShell.jsx` comment noting no DM-browsing UI exists yet.
-
-Design:
-- **Navigation**: add a "Direct Messages" section below channels or in a separate sidebar segment. Rows should show display names for one-to-one DMs and member names for group DMs.
-- **New message flow**: add a "New Message" action using the people picker. One selected person creates/opens a direct DM; multiple selected people create a group DM.
-- **API support**: add listing endpoints if missing, returning DM/group-DM channels the caller belongs to, member summaries, last activity, unread counts when available, and display names.
-- **Selection behavior**: selecting a DM uses the existing `ChannelView` message surface but should not require a workspace highlight. Header copy should reflect people, not `#channel`.
-- **Privacy**: DMs and group DMs remain membership-only and workspace-independent per existing backend model.
-- **Tests**: backend tests for DM listing authorization; e2e tests for starting a DM, reopening an existing DM, starting a group DM, and navigating between workspace channels and DMs.
-
-### 4. Navigation-first sidebar redesign
-
-**Status**: Proposed
-**Utility**: High. The sidebar currently mixes account controls, search, admin tools, organization switching, workspace navigation, workspace management, channel navigation, creation forms, invitations, and channel membership. Reducing it to navigation-first behavior directly addresses the user's workflow confusion.
-**Origin**: `UI_UX_REVIEW.md` recommendation after reviewing `WorkspaceSidebar.jsx`.
-
-Design:
-- **Primary purpose**: keep the sidebar focused on "where am I?" and "where can I go?" Keep account menu, search, workspace switcher/list, channels, DMs, unread/mention indicators, and minimal create/join entry points.
-- **Move actions out**: remove inline invite forms, ownership transfer forms, workspace settings toggles, private-channel member add forms, and destructive actions from the visible sidebar body. These move to workspace settings, channel details, or admin/settings surfaces.
-- **Workspace row menu**: keep a compact overflow menu for low-frequency workspace actions, but route actions to full sheets rather than expanding inline forms under rows.
-- **Admin controls**: remove the always-visible `Admin Tools` row from ordinary navigation rhythm; expose it through a distinct admin/settings area.
-- **Responsive behavior**: maintain 44px minimum touch targets and ensure long names truncate predictably without hiding critical badges.
-- **Tests**: update e2e workflows that currently open inline sidebar forms. Add tests proving navigation remains usable with many workspaces/channels and admin controls do not appear for non-privileged users.
-
-### 5. Message presentation improvements for team scanability
+### 3. Message presentation improvements for team scanability
 
 **Status**: Proposed
 **Utility**: Medium. The current iMessage-style bubbles are friendly, but team channels need fast scanning by author, thread activity, and context. This entry tunes message presentation without undoing the existing bubble work prematurely.
@@ -104,7 +74,7 @@ Design:
 - **Data**: add reply counts/last reply metadata to message list responses if needed; keep pagination bounded.
 - **Tests**: frontend tests for grouping and author display; backend tests if reply-count metadata is added; visual/e2e checks for long names and mobile-width layouts.
 
-### 6. Contextual AI action menu and clearer AI output scope
+### 4. Contextual AI action menu and clearer AI output scope
 
 **Status**: Proposed
 **Utility**: Medium. Channel summaries and thread task extraction are useful, but direct header buttons compete with channel context controls. Grouping AI actions makes them available without making them the primary object of the interface.
@@ -119,7 +89,7 @@ Design:
 - **Audit/rate limits**: reuse existing AI audit and concurrency conventions.
 - **Tests**: frontend/e2e tests for menu placement, loading/unavailable states, scope text, streaming output, and dismissal.
 
-### 7. Cross-channel "Catch Me Up" workspace digests
+### 5. Cross-channel "Catch Me Up" workspace digests
 
 **Status**: Proposed
 **Utility**: High. This is a natural next step for the existing local AI features: it turns unread mentions and important channel activity into a short operational brief for someone returning from a multi-day break, instead of forcing them to manually scan every backlog thread.
@@ -138,6 +108,18 @@ Design:
 - **Tests**: endpoint selects only authorized unread mentions/starred-channel messages; time-window clamping works; long inputs are chunked below configured limits; provider streams are forwarded incrementally to the client; cancellation closes the upstream provider request; audit rows record metadata without raw content.
 
 ## Done
+
+### Direct Messages as a first-class navigation section
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Direct Messages navigation and navigation-first sidebar redesign" (2026-07-16).
+
+New `GET /api/direct-messages` (member/last-message summaries for every DIRECT/GROUP_DM channel the caller belongs to) and `GET /api/organizations/:orgId/members-search` (plain-member-gated roster search backing the picker). New `NewMessageSheet.jsx` (a multi-select `PeoplePicker`; one person starts/reopens a 1:1 DM, more than one starts a group DM), an always-visible "Direct Messages" section in `WorkspaceSidebar.jsx` (not gated on a workspace being selected), and `ChannelView.jsx` header copy that reflects people ("Direct message" / "N people", a person/people icon, no `#`) instead of a channel. Selecting a DM resolves through `ChatShell.jsx`'s existing channel-selection path with no workspace highlight required. 10 new backend tests, 3 new e2e tests.
+
+### Navigation-first sidebar redesign
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Direct Messages navigation and navigation-first sidebar redesign" (2026-07-16).
+
+Removed `WorkspaceSidebar.jsx`'s inline `InviteToChannelForm` and its channel-row "•••" > "Invite to channel…" overflow item — `ChannelDetailsPanel`'s "Add people" section (already shipped as a second entry point) is now the sole one. Moved the "Admin" hub trigger out of its own always-visible top-of-sidebar row into the user menu, opened on demand rather than sitting in the same permanent vertical rhythm as search/workspaces/channels. Two existing e2e tests rewritten off the removed sidebar flow onto the channel details panel; every e2e call site opening the Admin hub updated to go through the user menu first.
 
 ### Workspace home and actionable empty states
 

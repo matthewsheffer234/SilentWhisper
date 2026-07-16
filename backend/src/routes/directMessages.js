@@ -9,6 +9,92 @@ export const directMessagesRouter = Router();
 
 directMessagesRouter.use(requireAuth);
 
+// FEATURE_REQUEST.md entry 3 (Direct Messages as a first-class navigation
+// section): the first "list my DMs" read endpoint — POST / above only ever
+// created or reopened a single DIRECT channel; nothing returned the set of
+// DIRECT/GROUP_DM channels a caller belongs to, since no DM-browsing UI
+// existed yet. Both types share one list (rather than two separate
+// endpoints under directMessages/group-direct-messages) because the sidebar
+// renders them as a single "Direct Messages" section — the frontend
+// shouldn't have to issue two requests and merge them itself. Membership
+// itself is the only authorization check: DIRECT/GROUP_DM channels have no
+// workspace_id to defer to (Section 4), so "is a member of this channel" is
+// the complete story, same as every other channel-membership-gated route.
+directMessagesRouter.get('/', async (req, res, next) => {
+  try {
+    const channelRows = await db('channels as c')
+      .join('channel_members as cm', 'cm.channel_id', 'c.id')
+      .where('cm.user_id', req.user.id)
+      .whereIn('c.type', ['DIRECT', 'GROUP_DM'])
+      .select('c.id', 'c.type', 'c.created_at');
+
+    if (channelRows.length === 0) {
+      res.json([]);
+      return;
+    }
+    const channelIds = channelRows.map((c) => c.id);
+
+    // Every other member (never the caller themselves) — a one-to-one DIRECT
+    // channel's `members` array is always exactly one person; GROUP_DM's has
+    // every other participant, matching the design's "member names, not
+    // 'Group Direct Message'" requirement.
+    const memberRows = await db('channel_members as cm')
+      .join('users', 'users.id', 'cm.user_id')
+      .whereIn('cm.channel_id', channelIds)
+      .whereNot('users.id', req.user.id)
+      .orderBy('users.username', 'asc')
+      .select('cm.channel_id as channelId', 'users.id as userId', 'users.username', 'users.display_name as displayName');
+
+    const membersByChannel = new Map();
+    for (const row of memberRows) {
+      const list = membersByChannel.get(row.channelId) ?? [];
+      list.push({ userId: row.userId, username: row.username, displayName: row.displayName });
+      membersByChannel.set(row.channelId, list);
+    }
+
+    // Last main-feed message per channel (thread replies excluded — a
+    // digest of "what's the most recent thing in this conversation" cares
+    // about the top-level feed, same scope messages.js's own channel-history
+    // endpoint defaults to). DISTINCT ON is Postgres-specific and not a
+    // first-class knex builder concept, so this goes through db.raw the same
+    // way embeddingWorker.js's claimBatch already does for its own
+    // Postgres-specific query.
+    const lastMessageResult = await db.raw(
+      `SELECT DISTINCT ON (channel_id) channel_id, content, created_at, user_id
+       FROM messages
+       WHERE channel_id = ANY(?) AND parent_message_id IS NULL
+       ORDER BY channel_id, created_at DESC`,
+      [channelIds],
+    );
+    const lastMessageByChannel = new Map(
+      lastMessageResult.rows.map((r) => [
+        r.channel_id,
+        { content: r.content, createdAt: r.created_at, userId: r.user_id },
+      ]),
+    );
+
+    const result = channelRows
+      .map((c) => ({
+        id: c.id,
+        type: c.type,
+        members: membersByChannel.get(c.id) ?? [],
+        lastMessage: lastMessageByChannel.get(c.id) ?? null,
+        createdAt: c.created_at,
+      }))
+      // Most recent activity first — falls back to the channel's own
+      // created_at for a DM that's never had a message sent in it yet.
+      .sort((a, b) => {
+        const aTime = new Date(a.lastMessage?.createdAt ?? a.createdAt).getTime();
+        const bTime = new Date(b.lastMessage?.createdAt ?? b.createdAt).getTime();
+        return bTime - aTime;
+      });
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 async function findExistingDirectChannel(trx, userA, userB) {
   const row = await trx('channels as c')
     .where('c.type', 'DIRECT')

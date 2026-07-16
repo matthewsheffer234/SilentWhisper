@@ -62,9 +62,6 @@ export const addChannelMember = (workspaceId, channelId, username) =>
 export const listChannelMembers = (workspaceId, channelId) =>
   apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members`);
 
-export const createDirectMessage = (targetUserId) =>
-  apiFetch('/direct-messages', { method: 'POST', body: { targetUserId } });
-
 export const listMessages = (channelId, { limit, before, parentMessageId } = {}) => {
   const params = new URLSearchParams();
   if (limit) params.set('limit', limit);

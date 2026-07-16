@@ -318,14 +318,23 @@ async function openWorkspaceSettings(page, workspaceName) {
 }
 
 // Same entry: "Admin Tools" (a dropdown Menu opening a panel directly per
-// item) is now a single "Admin" button opening one AdminPanel.jsx hub sheet
-// (aria-label "admin") whose own rows — plain buttons, not
-// `[role="menuitem"]` — each open the real destination panel and close the
-// hub itself first.
-async function openAdminPanelItem(page, itemTitle) {
-  await page.click('button:has-text("Admin")');
+// item) collapsed to a single AdminPanel.jsx hub sheet (aria-label "admin")
+// whose own rows — plain buttons, not `[role="menuitem"]` — each open the
+// real destination panel and close the hub itself first. FEATURE_REQUEST.md
+// entry 4 (navigation-first sidebar redesign) then moved the hub's own
+// trigger out of its own always-visible sidebar row and into the user menu
+// (`[role="menuitem"]:has-text("Admin")`), alongside Change Password/Sign
+// out — reopened via the menu on every call, same as any other menu item.
+async function openAdminHub(page) {
+  await page.click('button[aria-label="User menu"]');
+  await page.click('[role="menuitem"]:has-text("Admin")');
   const dialog = page.getByRole('dialog', { name: 'admin', exact: true });
   await expect(dialog).toBeVisible({ timeout: 10_000 });
+  return dialog;
+}
+
+async function openAdminPanelItem(page, itemTitle) {
+  const dialog = await openAdminHub(page);
   await dialog.locator(`button:has-text("${itemTitle}")`).click();
 }
 
@@ -739,7 +748,15 @@ test.describe('workspace invite', () => {
 });
 
 test.describe('private channels', () => {
-  test('creating a channel with the Private toggle checked hides it from a non-member, and the "Invite to channel…" overflow item adds a real user who can then see it', async ({
+  // FEATURE_REQUEST.md entry 4 (navigation-first sidebar redesign) removed
+  // the channel row's own "•••" > "Invite to channel…" overflow item —
+  // ChannelDetailsPanel's "Add people" section (opened from the channel
+  // header's info button) is now the only add-member entry point; see the
+  // "channel details panel" describe block below for that flow's own
+  // dedicated coverage. This test keeps its "creating a Private channel
+  // hides it from a non-member" half and switches its "add a member" half
+  // to that surface instead of asserting the same interaction twice.
+  test('creating a channel with the Private toggle checked hides it from a non-member, and adding them via channel details makes it visible', async ({
     page,
   }) => {
     const owner = await seedUserWithChannel('privchanowner');
@@ -764,11 +781,10 @@ test.describe('private channels', () => {
     // auto-selects, and a bare page-wide `text=` locator matches both.
     await expect(page.locator('aside').getByText('e2e-secret-room', { exact: true })).toBeVisible({ timeout: 10_000 });
 
-    // Invite the existing workspace member via the channel row's own "•••"
-    // overflow menu — the same pull-down-button pattern the workspace row
-    // already uses for its own Invite item.
-    await page.click('button[aria-label="e2e-secret-room options"]');
-    await page.click('text=Invite to channel…');
+    // Invite the existing workspace member via the channel header's details
+    // panel — the sole add-member entry point now that the sidebar's own
+    // inline overflow form is gone.
+    await page.click('button[aria-label="e2e-secret-room channel details"]');
     await pickPerson(page, 'Search workspace members to add to channel', invitee.username, invitee.username);
     await page.click('button:has-text("Add")');
     await expect(page.locator(`text=Added ${invitee.username} to the channel`)).toBeVisible({ timeout: 10_000 });
@@ -778,6 +794,7 @@ test.describe('private channels', () => {
     // never be listed for them (Section 3's "never joinable, listable, or
     // readable by non-members" rule) — this is the same double-check
     // pattern the "workspace invite" test above uses.
+    await page.click('button[aria-label="Close e2e-secret-room channel details"]');
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
@@ -791,7 +808,7 @@ test.describe('private channels', () => {
     await expect(secretRoomRow.locator('button:has-text("Join")')).toHaveCount(0);
   });
 
-  test('a non-member of a private channel never sees an "Invite to channel…" option for it', async ({ page }) => {
+  test('a non-member of a private channel never sees it listed, so there is no way to open its details at all', async ({ page }) => {
     const owner = await seedUserWithChannel('privchanowner2');
     const bystander = await seedPlainUser('privchanbystander2');
     await inviteToWorkspace(owner.accessToken, owner.workspace.id, bystander.username);
@@ -812,8 +829,8 @@ test.describe('private channels', () => {
     await loginViaUi(page, bystander.username, bystander.password);
     await selectWorkspaceRow(page, owner.workspace.name);
     // A workspace member who isn't in the private channel doesn't even see
-    // it listed (existence-hiding), so there's nothing to attach an
-    // overflow trigger to in the first place.
+    // it listed (existence-hiding), so there's no details button to open
+    // for it in the first place.
     await expect(page.locator('text=e2e-locked-room')).not.toBeVisible();
   });
 });
@@ -1347,12 +1364,14 @@ test.describe('admin user management', () => {
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
     // The role promotion took effect: this account is now a MANAGER and
     // sees the same admin-only controls the original admin does — the
-    // "Admin" hub trigger itself (canManageAi-gated via requireSystemPermission's
-    // OWNER/MANAGER-of-any-workspace fallback), not a bare button for each
-    // individual tool. It must not see "System Admin" though — that row is
-    // gated on isSystemAdmin specifically, which this account never held.
-    await expect(page.locator('button:has-text("Admin")')).toBeVisible({ timeout: 10_000 });
-    await page.click('button:has-text("Admin")');
+    // "Admin" user-menu entry itself (canManageAi-gated via
+    // requireSystemPermission's OWNER/MANAGER-of-any-workspace fallback),
+    // not a bare button for each individual tool. It must not see "System
+    // Admin" though — that row is gated on isSystemAdmin specifically,
+    // which this account never held.
+    await page.click('button[aria-label="User menu"]');
+    await expect(page.locator('[role="menuitem"]:has-text("Admin")')).toBeVisible({ timeout: 10_000 });
+    await page.click('[role="menuitem"]:has-text("Admin")');
     const adminDialog = page.getByRole('dialog', { name: 'admin', exact: true });
     await expect(adminDialog).toBeVisible({ timeout: 10_000 });
     await expect(adminDialog.locator('button:has-text("System Admin")')).not.toBeVisible();
@@ -1796,9 +1815,7 @@ test.describe('menus (Apple HIG overhaul: pull-down buttons + progressive disclo
     await expect(page.locator('text=Change Password').first()).toBeVisible({ timeout: 10_000 });
     await page.click('button[aria-label="Close change password"]');
 
-    await page.click('button:has-text("Admin")');
-    const adminDialog = page.getByRole('dialog', { name: 'admin', exact: true });
-    await expect(adminDialog).toBeVisible({ timeout: 5_000 });
+    const adminDialog = await openAdminHub(page);
     await page.click('body', { position: { x: 5, y: 5 } });
     await expect(adminDialog).not.toBeVisible();
   });
@@ -2140,5 +2157,95 @@ test.describe('invitation redemption (public /invite/:token page)', () => {
   test('an invalid token shows a generic error, not a raw 404 or blank page', async ({ page }) => {
     await page.goto('/invite/not-a-real-token-at-all');
     await expect(page.locator('text=This invitation link is invalid or has expired.')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// FEATURE_REQUEST.md entry 3 (Direct Messages as a first-class navigation
+// section). seedPlainUser/seedUserWithChannel both auto-enroll into the
+// earliest-created organization (insertUser), so every seeded user here
+// shares one org without any extra wiring — exactly the pool the "New
+// Message" people picker (organizations.js's members-search) searches.
+test.describe('direct messages (FEATURE_REQUEST.md entry 3)', () => {
+  test('starting a new DM shows people-based header copy, not #channel, and the conversation is reachable again from its own sidebar row', async ({
+    page,
+  }) => {
+    const me = await seedUserWithChannel('dmstart');
+    const friend = await seedPlainUser('dmstartfriend');
+
+    await loginViaUi(page, me.username, me.password);
+    await page.click('text=New message');
+    await pickPerson(page, 'Search people to message', friend.username, friend.username);
+    await page.click('button:has-text("Start Message")');
+
+    // People-based header copy: the composer placeholder is "Message
+    // <name>", never "Message #<name>" — proves both that the right
+    // conversation opened and that it isn't rendered as a #channel.
+    const composer = page.locator(`#main input[placeholder="Message ${friend.username}"]`);
+    await expect(composer).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#main').getByText('Direct message', { exact: true })).toBeVisible();
+
+    await composer.fill('hey there');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('text=hey there')).toBeVisible({ timeout: 10_000 });
+
+    // Switch to the workspace's own channel and back — selecting a DM
+    // doesn't require a workspace to be highlighted, and the message pane
+    // correctly swaps between a #channel and a person-based conversation.
+    await selectChannelRow(page, 'general');
+    await expect(page.locator('#main input[placeholder="Message #general"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=hey there')).not.toBeVisible();
+
+    await selectChannelRow(page, friend.username);
+    await expect(composer).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=hey there')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('starting a DM with the same person twice reopens the existing conversation instead of creating a duplicate', async ({
+    page,
+  }) => {
+    const me = await seedUserWithChannel('dmreopen');
+    const friend = await seedPlainUser('dmreopenfriend');
+
+    await loginViaUi(page, me.username, me.password);
+    await page.click('text=New message');
+    await pickPerson(page, 'Search people to message', friend.username, friend.username);
+    await page.click('button:has-text("Start Message")');
+    await page.fill(`#main input[placeholder="Message ${friend.username}"]`, 'first message');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('text=first message')).toBeVisible({ timeout: 10_000 });
+
+    await page.click('text=New message');
+    await pickPerson(page, 'Search people to message', friend.username, friend.username);
+    await page.click('button:has-text("Start Message")');
+
+    // Same conversation, not a fresh empty one — its earlier history is
+    // still there — and only one sidebar row for this person exists.
+    await expect(page.locator('text=first message')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('aside').getByText(friend.username, { exact: true })).toHaveCount(1);
+  });
+
+  test('starting a group message with more than one person shows every member\'s name, not "Group Direct Message"', async ({
+    page,
+  }) => {
+    const me = await seedUserWithChannel('dmgroup');
+    const friendA = await seedPlainUser('dmgroupa');
+    const friendB = await seedPlainUser('dmgroupb');
+
+    await loginViaUi(page, me.username, me.password);
+    await page.click('text=New message');
+    await pickPerson(page, 'Search people to message', friendA.username, friendA.username);
+    await pickPerson(page, 'Search people to message', friendB.username, friendB.username);
+    await page.click('button:has-text("Start Group Message")');
+
+    const groupLabel = `${friendA.username}, ${friendB.username}`;
+    // The header title span isn't its own isolated text node (it also wraps
+    // the headerMeta sub-span), so an *exact* text match against the whole
+    // span would never equal just the name — toContainText against the
+    // header row is the robust check here, unlike the sidebar row below,
+    // whose label span really does contain nothing else.
+    const header = page.locator('#main > div').first();
+    await expect(header).toContainText(groupLabel, { timeout: 10_000 });
+    await expect(header).toContainText('3 people');
+    await expect(page.locator('aside').getByText(groupLabel, { exact: true })).toBeVisible();
   });
 });

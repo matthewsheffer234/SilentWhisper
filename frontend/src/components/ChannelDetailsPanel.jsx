@@ -7,12 +7,11 @@ import { listChannelMembers, searchWorkspaceMembers } from '../api/workspaces.js
 
 // FEATURE_REQUEST.md's "channel details panel with private-channel member
 // management" entry: makes channel membership a channel-level detail,
-// reachable from the channel header, instead of only from the sidebar's own
-// per-row overflow menu (WorkspaceSidebar.jsx's InviteToChannelForm, kept
-// as-is — this is an additional, more discoverable entry point to the same
-// underlying add-member action, not a replacement; consolidating the
-// sidebar itself onto this surface is the later, explicitly separate
-// "navigation-first sidebar redesign" entry).
+// reachable from the channel header. Originally shipped alongside the
+// sidebar's own per-row "Invite to channel…" overflow item as a second entry
+// point to the same underlying add-member action; the "navigation-first
+// sidebar redesign" entry later removed that inline sidebar form, leaving
+// this panel as the sole add-member surface.
 
 const styles = {
   section: { marginBottom: 18 },

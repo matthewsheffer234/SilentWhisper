@@ -11,14 +11,15 @@ import {
   Moon,
   SunMoon,
   Plus,
+  User,
+  Users,
 } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
-import PeoplePicker from './PeoplePicker.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
-import { searchWorkspaceMembers } from '../api/workspaces.js';
+import { directMessageLabel } from '../directMessages.js';
 
 // Menu.jsx renders `item.label` as arbitrary children, not just text — this
 // composes an icon + text pair with the same layout Menu.jsx's own item row
@@ -117,40 +118,6 @@ const styles = {
     fontSize: 'var(--text-sm)',
     cursor: 'pointer',
   },
-  inlineForm: { display: 'flex', gap: 6, padding: '6px 8px' },
-  inlineInput: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 36,
-    padding: '6px 8px',
-    borderRadius: 6,
-    border: '1px solid var(--border)',
-    background: 'var(--surface)',
-    color: 'var(--text-1)',
-    fontSize: 'var(--text-sm)',
-  },
-  roleSelect: {
-    minHeight: 36,
-    borderRadius: 6,
-    border: '1px solid var(--border)',
-    background: 'var(--surface)',
-    color: 'var(--text-1)',
-    fontSize: 'var(--text-sm)',
-  },
-  inviteSubmit: {
-    minHeight: 36,
-    padding: '0 10px',
-    borderRadius: 6,
-    border: 'none',
-    background: 'var(--brg)',
-    color: '#fff',
-    fontWeight: 600,
-    fontSize: 'var(--text-sm)',
-    cursor: 'pointer',
-  },
-  inviteFeedback: { padding: '4px 8px', fontSize: 'var(--text-xs)' },
-  inviteError: { color: '#c0392b' },
-  inviteSuccess: { color: 'var(--brg)' },
   joinPill: {
     fontSize: 'var(--text-xs)',
     color: 'var(--brg)',
@@ -207,6 +174,16 @@ const styles = {
     pointerEvents: 'none',
   },
   archivedBadge: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginLeft: 4 },
+  dmRowLabel: {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   addButtonRow: { display: 'flex', gap: 6, marginTop: 6 },
   // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — visually
   // compact text links, but the invisible hit area is full-size.
@@ -259,59 +236,6 @@ function activateOnKey(handler) {
   };
 }
 
-// Private-channel invite workflow — cloned from the workspace-level invite
-// form's shape (moved into `WorkspaceSettingsSheet.jsx` as part of
-// FEATURE_REQUEST.md's "dedicated admin/settings area" entry — this one
-// stays here since it's channel-, not workspace-, scoped),
-// minus the role select (channel membership carries no role, unlike
-// workspace membership). Only ever rendered for a PRIVATE channel the caller
-// already belongs to (see the channel row below) — a public channel's
-// self-service "Join" pill already covers the public case, so this control
-// only needs to exist for the one case self-join can't handle. Candidate
-// pool is current workspace members only (searchWorkspaceMembers), not
-// every account — matches the add-to-channel endpoint's own requirement
-// that the target already belong to the workspace.
-function InviteToChannelForm({ onSubmit, workspaceId, channelId }) {
-  const [person, setPerson] = useState(null);
-  const [status, setStatus] = useState(null); // { type: 'error' | 'success', message }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!person) return;
-    setStatus(null);
-    try {
-      await onSubmit(person.username);
-      setStatus({ type: 'success', message: `Added ${person.displayName || person.username} to the channel` });
-      setPerson(null);
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message || 'Failed to add member' });
-    }
-  }
-
-  return (
-    <div>
-      <form style={styles.inlineForm} onSubmit={handleSubmit}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <PeoplePicker
-            searchFn={(q) => searchWorkspaceMembers(workspaceId, q, { channelId })}
-            value={person}
-            onChange={setPerson}
-            placeholder="Search workspace members to add"
-            ariaLabel="Search workspace members to add to channel"
-            isIneligible={(p) => (p.alreadyInChannel ? 'Already in this channel' : null)}
-          />
-        </div>
-        <button type="submit" style={styles.inviteSubmit} disabled={!person}>Add</button>
-      </form>
-      {status && (
-        <div style={{ ...styles.inviteFeedback, ...(status.type === 'error' ? styles.inviteError : styles.inviteSuccess) }}>
-          {status.message}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function WorkspaceSidebar({
   user,
   presence,
@@ -322,7 +246,6 @@ export default function WorkspaceSidebar({
   selectedChannelId,
   onSelectChannel,
   onJoinChannel,
-  onInviteToChannel,
   onLogout,
   canManageAi,
   onNavigateToSearchResult,
@@ -340,8 +263,9 @@ export default function WorkspaceSidebar({
   onOpenNotifications,
   onOpenCreateWorkspace,
   onOpenCreateChannel,
+  directMessages,
+  onOpenNewMessage,
 }) {
-  const [inviteChannelFormId, setInviteChannelFormId] = useState(null);
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
 
@@ -449,6 +373,22 @@ export default function WorkspaceSidebar({
       checked: theme === 'system',
       onSelect: () => setTheme('system'),
     },
+    // FEATURE_REQUEST.md entry 4 (navigation-first sidebar redesign):
+    // previously its own always-visible `adminToolsRow` sitting in the same
+    // vertical rhythm as search/workspaces/channels — moved into the user
+    // menu (opened on demand, not rendered permanently) so ordinary,
+    // non-admin messaging doesn't carry a constant reminder that privileged
+    // controls exist. Still opens the same AdminPanel.jsx hub.
+    ...(showAdminButton
+      ? [
+          {
+            key: 'admin',
+            label: <IconLabel icon={<Settings size={14} aria-hidden="true" />}>Admin</IconLabel>,
+            separatorBefore: true,
+            onSelect: onOpenAdminPanel,
+          },
+        ]
+      : []),
     { key: 'change-password', label: 'Change Password', onSelect: onOpenChangePassword },
     { key: 'sign-out', label: 'Sign out', separatorBefore: true, onSelect: onLogout },
   ];
@@ -477,23 +417,6 @@ export default function WorkspaceSidebar({
       </div>
 
       <SearchBar onNavigate={onNavigateToSearchResult} />
-
-      {/* FEATURE_REQUEST.md's "dedicated admin/settings area" entry: this
-          used to be a dropdown Menu opening each admin panel directly
-          (AI Settings, Audit Log, Manage Users, System Admin) plus a
-          separate "Manage organization members…" item tucked into the org
-          switcher below. One trigger now opens one AdminPanel.jsx hub
-          (rendered by ChatShell.jsx) that lists all five destinations —
-          same low-frequency, non-permanent-sidebar-row placement, but a
-          single consistent entry point instead of two unrelated ones. */}
-      {showAdminButton && (
-        <div style={styles.adminToolsRow}>
-          <button type="button" style={styles.aiSettingsButton} onClick={onOpenAdminPanel}>
-            <Settings size={14} aria-hidden="true" />
-            Admin
-          </button>
-        </div>
-      )}
 
       {showOrgRow && (
         <div style={styles.adminToolsRow}>
@@ -614,13 +537,6 @@ export default function WorkspaceSidebar({
               {isSelectedWorkspaceArchived && <span style={styles.archivedBadge}>(archived — read only)</span>}
             </div>
             {channels.map((ch) => {
-              // Invite only makes sense for a PRIVATE channel the caller
-              // already belongs to: a PUBLIC channel is already reachable via
-              // the self-service "Join" pill above, and requireChannelMember
-              // (backend/src/authz/membershipService.js) rejects the add-
-              // member call from anyone who isn't already a member anyway, so
-              // there's no point offering the control to a non-member.
-              const canInviteToChannel = ch.isMember && ch.type === 'PRIVATE' && !isSelectedWorkspaceArchived;
               return (
                 <div key={ch.id}>
                   <div
@@ -647,40 +563,7 @@ export default function WorkspaceSidebar({
                         Join
                       </button>
                     )}
-                    {canInviteToChannel && (
-                      <Menu
-                        ariaLabel={`${ch.name} options`}
-                        items={[
-                          {
-                            key: 'invite-to-channel',
-                            label: 'Invite to channel…',
-                            onSelect: () => setInviteChannelFormId(ch.id),
-                          },
-                        ]}
-                        renderTrigger={({ onClick, ...triggerProps }) => (
-                          <button
-                            type="button"
-                            {...triggerProps}
-                            style={styles.overflowTrigger}
-                            aria-label={`${ch.name} options`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onClick();
-                            }}
-                          >
-                            <MoreHorizontal size={18} aria-hidden="true" />
-                          </button>
-                        )}
-                      />
-                    )}
                   </div>
-                  {inviteChannelFormId === ch.id && (
-                    <InviteToChannelForm
-                      workspaceId={selectedWorkspaceId}
-                      channelId={ch.id}
-                      onSubmit={(username) => onInviteToChannel(ch.id, username)}
-                    />
-                  )}
                 </div>
               );
             })}
@@ -692,6 +575,33 @@ export default function WorkspaceSidebar({
             )}
           </>
         )}
+
+        {/* FEATURE_REQUEST.md entry 3 (Direct Messages navigation): not
+            gated on selectedWorkspaceId — DMs are workspace-independent
+            (channels.workspace_id is NULL for DIRECT/GROUP_DM, PROJECT_PLAN.md
+            Section 4), so this section is always visible, matching
+            UI_UX_REVIEW.md's suggested "Direct Messages" nav section. */}
+        <div style={{ ...styles.sectionTitle, marginTop: 18 }}>Direct Messages</div>
+        {directMessages.map((dm) => (
+          <div
+            key={dm.id}
+            className="sl-row"
+            role="button"
+            tabIndex={0}
+            style={{ ...styles.row, ...(dm.id === selectedChannelId ? styles.rowActive : {}) }}
+            onClick={() => onSelectChannel(dm.id)}
+            onKeyDown={activateOnKey(() => onSelectChannel(dm.id))}
+          >
+            <span style={styles.dmRowLabel}>
+              {dm.type === 'GROUP_DM' ? <Users size={14} aria-hidden="true" /> : <User size={14} aria-hidden="true" />}
+              {directMessageLabel(dm)}
+            </span>
+          </div>
+        ))}
+        <button type="button" style={styles.addButton} onClick={onOpenNewMessage}>
+          <Plus size={14} aria-hidden="true" />
+          New message
+        </button>
       </div>
     </aside>
   );
