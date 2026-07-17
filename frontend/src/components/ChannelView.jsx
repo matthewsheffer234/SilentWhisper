@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { X, Hash, Lock, Sparkles, Info, User, Users, MessageSquare } from 'lucide-react';
+import { X, Hash, Lock, Sparkles, Info, User, Users, MessageSquare, ChevronDown } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
+import Menu from './Menu.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
 import { searchEntities } from '../api/entities.js';
 import { renderMessageContent } from '../markdown.jsx';
+import { AI_SUMMARY_LIMIT, AI_SUMMARY_SCOPE, formatAiActionError } from '../aiPresentation.js';
 
 // FEATURE_REQUEST.md's @mention autocomplete entry.
 const AUTOCOMPLETE_DEBOUNCE_MS = 200;
@@ -68,7 +70,7 @@ const styles = {
   // 44px minimum height on every standalone tap target, per PROJECT_PLAN.md
   // Section 7 (Apple HIG Alignment) and the Phase 5 accessibility pass that
   // caught this row of toolbar-style buttons rendering well under it.
-  summarizeButton: {
+  aiMenuButton: {
     minHeight: 44,
     display: 'inline-flex',
     alignItems: 'center',
@@ -82,6 +84,9 @@ const styles = {
     padding: '0 16px',
     cursor: 'pointer',
   },
+  menuItemLabel: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
+  menuItemTitle: { fontWeight: 600, color: 'var(--text-1)' },
+  menuItemDescription: { fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
   summaryPanel: {
     margin: '12px 20px 0',
     padding: '12px 16px',
@@ -116,6 +121,11 @@ const styles = {
     fontSize: 'var(--text-md)',
   },
   summaryError: { color: '#c0392b' },
+  summaryScope: {
+    marginBottom: 8,
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-3)',
+  },
   feed: { flex: 1, overflowY: 'auto', padding: '16px 20px', position: 'relative' },
   feedInner: { position: 'relative', width: '100%' },
   // FEATURE_REQUEST.md's iMessage-style bubble layout entry: an outer
@@ -258,7 +268,7 @@ export default function ChannelView({
 }) {
   const [draft, setDraft] = useState('');
   const feedRef = useRef(null);
-  const [summary, setSummary] = useState(null); // { loading, text, error }
+  const [summary, setSummary] = useState(null); // { loading, text, error, scope }
 
   // @mention autocomplete (FEATURE_REQUEST.md). One object rather than
   // several separate useState calls — start/query/suggestions/highlightIndex
@@ -539,16 +549,34 @@ export default function ChannelView({
   }
 
   async function handleSummarize() {
-    setSummary({ loading: true, text: '', error: null });
+    setSummary({ loading: true, text: '', error: null, scope: AI_SUMMARY_SCOPE });
     try {
-      await summarizeChannel(channel.id, (chunk) => {
-        setSummary((prev) => (prev ? { ...prev, text: prev.text + chunk } : prev));
-      });
+      await summarizeChannel(
+        channel.id,
+        (chunk) => {
+          setSummary((prev) => (prev ? { ...prev, text: prev.text + chunk } : prev));
+        },
+        { limit: AI_SUMMARY_LIMIT },
+      );
       setSummary((prev) => (prev ? { ...prev, loading: false } : prev));
     } catch (err) {
-      setSummary({ loading: false, text: '', error: err.message || 'Failed to summarize channel' });
+      setSummary({ loading: false, text: '', error: formatAiActionError(err, 'Failed to summarize recent messages'), scope: AI_SUMMARY_SCOPE });
     }
   }
+
+  const aiMenuItems = [
+    {
+      key: 'summarize-recent-messages',
+      label: (
+        <span style={styles.menuItemLabel}>
+          <span style={styles.menuItemTitle}>Summarize Recent Messages</span>
+          <span style={styles.menuItemDescription}>{AI_SUMMARY_SCOPE}</span>
+        </span>
+      ),
+      onSelect: handleSummarize,
+      disabled: summary?.loading,
+    },
+  ];
 
   return (
     <div id={mainContentId} tabIndex={-1} style={styles.wrapper}>
@@ -577,10 +605,17 @@ export default function ChannelView({
           </span>
         </span>
         <span style={styles.headerActions}>
-          <button type="button" style={styles.summarizeButton} onClick={handleSummarize} disabled={summary?.loading}>
-            <Sparkles size={14} aria-hidden="true" />
-            {summary?.loading ? 'Summarizing…' : 'Summarize'}
-          </button>
+          <Menu
+            ariaLabel="AI actions"
+            items={aiMenuItems}
+            renderTrigger={(triggerProps) => (
+              <button type="button" {...triggerProps} style={styles.aiMenuButton} aria-label="AI actions">
+                <Sparkles size={14} aria-hidden="true" />
+                <span>{summary?.loading ? 'Running AI…' : 'AI Actions'}</span>
+                <ChevronDown size={14} aria-hidden="true" />
+              </button>
+            )}
+          />
           {!isDirectConversation && (
             <button type="button" style={styles.detailsButton} onClick={onOpenDetails} aria-label={`${channel.name} channel details`}>
               <Info size={18} aria-hidden="true" />
@@ -591,11 +626,12 @@ export default function ChannelView({
       {summary && (
         <div style={styles.summaryPanel}>
           <div style={styles.summaryPanelHeader}>
-            <span>Channel summary</span>
+            <span>Summary</span>
             <button type="button" style={styles.summaryClose} onClick={() => setSummary(null)} aria-label="Close summary">
               <X size={16} aria-hidden="true" />
             </button>
           </div>
+          <div style={styles.summaryScope}>{summary.scope}</div>
           {summary.error ? (
             <div style={styles.summaryError}>{summary.error}</div>
           ) : (

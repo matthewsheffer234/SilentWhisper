@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { X, Sparkles } from 'lucide-react';
+import { X, Sparkles, ChevronDown } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
+import Menu from './Menu.jsx';
 import { extractTasks } from '../api/ai.js';
 import { renderMessageContent } from '../markdown.jsx';
 import { isFirstInRun, initials } from './ChannelView.jsx';
+import { AI_THREAD_SCOPE, formatAiActionError } from '../aiPresentation.js';
 
 const styles = {
   sidebar: {
@@ -28,7 +30,7 @@ const styles = {
   // 44px minimum tap target height (PROJECT_PLAN.md Section 7) — this
   // sidebar header is visually compact, but the button itself still needs
   // the full hit area even though it doesn't need to look 44px tall.
-  extractButton: {
+  aiMenuButton: {
     minHeight: 44,
     display: 'inline-flex',
     alignItems: 'center',
@@ -42,6 +44,9 @@ const styles = {
     padding: '0 12px',
     cursor: 'pointer',
   },
+  menuItemLabel: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
+  menuItemTitle: { fontWeight: 600, color: 'var(--text-1)' },
+  menuItemDescription: { fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
   taskPanel: {
     margin: '12px 16px 0',
     padding: '10px 12px',
@@ -64,6 +69,11 @@ const styles = {
     letterSpacing: '0.04em',
   },
   taskError: { color: '#c0392b' },
+  taskScope: {
+    marginBottom: 8,
+    fontSize: 'var(--text-xs)',
+    color: 'var(--text-3)',
+  },
   closeButton: {
     minWidth: 44,
     minHeight: 44,
@@ -144,7 +154,7 @@ export default function ThreadSidebar({
   onOpenEntity,
 }) {
   const [draft, setDraft] = useState('');
-  const [tasks, setTasks] = useState(null); // { loading, text, error }
+  const [tasks, setTasks] = useState(null); // { loading, text, error, scope }
 
   useEffect(() => {
     setTasks(null);
@@ -160,26 +170,47 @@ export default function ThreadSidebar({
   }
 
   async function handleExtractTasks() {
-    setTasks({ loading: true, text: '', error: null });
+    setTasks({ loading: true, text: '', error: null, scope: AI_THREAD_SCOPE });
     try {
       await extractTasks(rootMessage.id, (chunk) => {
         setTasks((prev) => (prev ? { ...prev, text: prev.text + chunk } : prev));
       });
       setTasks((prev) => (prev ? { ...prev, loading: false } : prev));
     } catch (err) {
-      setTasks({ loading: false, text: '', error: err.message || 'Failed to extract tasks' });
+      setTasks({ loading: false, text: '', error: formatAiActionError(err, 'Failed to find action items'), scope: AI_THREAD_SCOPE });
     }
   }
+
+  const aiMenuItems = [
+    {
+      key: 'find-action-items',
+      label: (
+        <span style={styles.menuItemLabel}>
+          <span style={styles.menuItemTitle}>Find Action Items</span>
+          <span style={styles.menuItemDescription}>{AI_THREAD_SCOPE}</span>
+        </span>
+      ),
+      onSelect: handleExtractTasks,
+      disabled: tasks?.loading,
+    },
+  ];
 
   return (
     <aside style={styles.sidebar}>
       <div style={styles.header}>
         Thread
         <div style={styles.headerActions}>
-          <button type="button" style={styles.extractButton} onClick={handleExtractTasks} disabled={tasks?.loading}>
-            <Sparkles size={14} aria-hidden="true" />
-            {tasks?.loading ? 'Extracting…' : 'Extract Tasks'}
-          </button>
+          <Menu
+            ariaLabel="Thread AI actions"
+            items={aiMenuItems}
+            renderTrigger={(triggerProps) => (
+              <button type="button" {...triggerProps} style={styles.aiMenuButton} aria-label="Thread AI actions">
+                <Sparkles size={14} aria-hidden="true" />
+                <span>{tasks?.loading ? 'Running AI…' : 'AI Actions'}</span>
+                <ChevronDown size={14} aria-hidden="true" />
+              </button>
+            )}
+          />
           <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close thread">
             <X size={18} aria-hidden="true" />
           </button>
@@ -193,10 +224,11 @@ export default function ThreadSidebar({
               <X size={16} aria-hidden="true" />
             </button>
           </div>
+          <div style={styles.taskScope}>{tasks.scope}</div>
           {tasks.error ? (
             <div style={styles.taskError}>{tasks.error}</div>
           ) : (
-            <div>{tasks.text || (tasks.loading ? 'Reading thread…' : '')}</div>
+            <div>{tasks.text || (tasks.loading ? 'Reading this thread…' : '')}</div>
           )}
         </div>
       )}

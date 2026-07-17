@@ -574,6 +574,16 @@ Reuse this token system directly rather than redefining equivalent tokens under 
 
 Every implemented element is logged here as it lands, per-phase, with the files touched and what was actually verified (not just written) — so this section is a record of what's real, not a restatement of the roadmap above.
 
+### Contextual AI action menu and clearer AI output scope (2026-07-17)
+
+Implemented from `FEATURE_REQUEST.md` backlog item 5.
+
+- **Channel AI action placement**: `ChannelView.jsx` no longer puts a standalone `Summarize` pill directly in the channel header. It now uses the shared `Menu.jsx` popover pattern behind an `AI Actions` trigger with the scoped menu item `Summarize Recent Messages`. The request explicitly sends `limit: 50`, matching the visible scope text rather than relying on an implicit backend default.
+- **Thread AI action placement**: `ThreadSidebar.jsx` no longer exposes a standalone `Extract Tasks` pill. It uses the same `AI Actions` menu pattern, with the clearer action label `Find Action Items` and scope text `This thread`.
+- **Output scope and state**: generated panels now show their scope before the streamed output (`Last 50 messages` or `This thread`). While a request is streaming, the trigger reads `Running AI...` and the menu item is disabled. Backend `429` and `503` failures are presented as queued/unavailable provider states via `aiPresentation.js`; other server messages still pass through, so validation errors like an empty channel remain specific.
+- **No backend change**: the existing AI proxy routes, audit events, per-user AI rate limiter, and global LLM concurrency gate already provided the required behavior. No schema, route, or audit-shape change was needed.
+- **Tests and verification**: added `frontend/src/aiPresentation.test.js` for scope constants and queued/unavailable error labels. Verified with `npm run test:unit` (63/63 passing) and `npm run build` (Vite production build clean).
+
 ### Double-bracket entity registry, autocomplete, and entity detail pages (2026-07-17)
 
 Implemented from `FEATURE_REQUEST.md` backlog items 2 and 3 together, since clickable entity profiles depend on the workspace-scoped registry and `message_entities` extraction shipped by item 2.
