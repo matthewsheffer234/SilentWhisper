@@ -394,6 +394,23 @@ export default function ChatShell() {
     [messagesByChannel, joinedChannels],
   );
 
+  // Clicking a workspace that's already selected returns to its home screen
+  // instead of being a no-op — otherwise there was no way back to
+  // WorkspaceHome once a channel was open, short of switching to a
+  // different workspace and back (which doesn't actually clear the old
+  // channel selection either). Same "re-clicking the active section goes
+  // home" pattern the org switcher already relies on implicitly.
+  const handleSelectWorkspace = useCallback(
+    (workspaceId) => {
+      if (workspaceId === selectedWorkspaceId) {
+        setSelectedChannelId(null);
+        setThreadRoot(null);
+      }
+      setSelectedWorkspaceId(workspaceId);
+    },
+    [selectedWorkspaceId],
+  );
+
   // FEATURE_REQUEST.md's "focused creation sheets" entry: organizationId is
   // now an explicit field in CreateWorkspaceSheet itself (only shown when
   // the caller belongs to more than one org), superseding the older
@@ -649,7 +666,7 @@ export default function ChatShell() {
         presence={presence}
         workspaces={workspaces}
         selectedWorkspaceId={selectedWorkspaceId}
-        onSelectWorkspace={setSelectedWorkspaceId}
+        onSelectWorkspace={handleSelectWorkspace}
         channels={channels}
         selectedChannelId={selectedChannelId}
         onSelectChannel={selectChannel}
