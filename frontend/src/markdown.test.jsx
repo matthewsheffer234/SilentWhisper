@@ -132,6 +132,58 @@ describe('composes with mentions', () => {
   });
 });
 
+describe('entities', () => {
+  test('double-bracket entity renders as a span by default', () => {
+    const nodes = renderMessageContent('deploy [[Server Alpha]] today');
+    const spans = elementsOfType(nodes, 'span');
+    expect(spans).toHaveLength(1);
+    expect(spans[0].props.children).toBe('[[Server Alpha]]');
+    expect(spans[0].props.style.color).toBe('var(--brg)');
+  });
+
+  test('entity can render as a clickable button when a callback is provided', () => {
+    let clicked = null;
+    const nodes = renderMessageContent('deploy [[Server Alpha]] today', {
+      onEntityClick: (label) => {
+        clicked = label;
+      },
+    });
+    const [button] = elementsOfType(nodes, 'button');
+    expect(button.props.children).toBe('[[Server Alpha]]');
+    expect(button.props['aria-label']).toBe('Open entity Server Alpha');
+    button.props.onClick();
+    expect(clicked).toBe('Server Alpha');
+  });
+
+  test('entity and markdown link render independently', () => {
+    const nodes = renderMessageContent('see [[Server Alpha]] and [docs](https://example.com)');
+    expect(elementsOfType(nodes, 'span').map((s) => s.props.children)).toContain('[[Server Alpha]]');
+    expect(elementsOfType(nodes, 'a')[0].props.href).toBe('https://example.com');
+  });
+
+  test('unclosed entity token remains literal text', () => {
+    const content = 'deploy [[Server Alpha today';
+    const nodes = renderMessageContent(content);
+    expect(elementsOfType(nodes, 'span')).toHaveLength(0);
+    expect(nodes.join('')).toBe(content);
+  });
+
+  test('entity longer than 255 chars remains literal text', () => {
+    const label = 'x'.repeat(256);
+    const content = `[[${label}]]`;
+    const nodes = renderMessageContent(content);
+    expect(elementsOfType(nodes, 'span')).toHaveLength(0);
+    expect(nodes.join('')).toBe(content);
+  });
+
+  test('entity inside a mine bubble uses contrast style', () => {
+    const nodes = renderMessageContent('deploy [[Server Alpha]]', { variant: 'mine' });
+    const [span] = elementsOfType(nodes, 'span');
+    expect(span.props.style.color).toBe('var(--item-active-fg)');
+    expect(span.props.style.textDecoration).toBe('underline');
+  });
+});
+
 describe('variant: "mine" (iMessage-style bubble layout entry)', () => {
   test('a mention inside a "mine" bubble uses the on-mine contrast style, not the default one', () => {
     const defaultNodes = renderMessageContent('hey @alice');

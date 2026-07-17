@@ -13,9 +13,9 @@
 //
 // Passes run in a fixed order, each only re-scanning the plain-text
 // segments left over from the one before it: links first (a URL's own text
-// must never be re-scanned for bold/italic/mention syntax inside it), then
-// bold, then italic, then mentions. This mirrors this app's other "silently
-// resolve to nothing" instinct (mentions already do this for a
+// must never be re-scanned for bold/italic/entity/mention syntax inside it),
+// then bold, then italic, then entity tags, then mentions. This mirrors this
+// app's other "silently resolve to nothing" instinct (mentions already do this for a
 // non-existent username): malformed/unclosed syntax or an unsafe link
 // scheme simply falls back to literal text for that token rather than
 // erroring or consuming the rest of the message hunting for a closer that
@@ -45,6 +45,7 @@ const BOLD_STAR_RE = /\*\*([^\n]+?)\*\*/g;
 const BOLD_UNDERSCORE_RE = /(?<!\w)__([^\n]+?)__(?!\w)/g;
 const ITALIC_STAR_RE = /\*([^\n*]+?)\*/g;
 const ITALIC_UNDERSCORE_RE = /(?<!\w)_([^\n_]+?)_(?!\w)/g;
+const ENTITY_RE = /\[\[([^\[\]]{1,255})\]\]/g;
 // Same shape/length bound as the backend's mention regex (mentionService.js)
 // — a purely visual highlight, not a re-validation of who was actually
 // notified (an @mention of a nonexistent or non-member username still
@@ -64,6 +65,27 @@ const MENTION_RE = /@[a-zA-Z0-9_.-]{3,50}/g;
 const styles = {
   mention: { color: 'var(--brg)', fontWeight: 700 },
   mentionOnMine: { color: 'var(--item-active-fg)', fontWeight: 700, textDecoration: 'underline' },
+  entity: {
+    color: 'var(--brg)',
+    background: 'var(--surface-alt)',
+    fontWeight: 700,
+    borderRadius: 6,
+    padding: '1px 5px',
+  },
+  entityOnMine: {
+    color: 'var(--item-active-fg)',
+    background: 'transparent',
+    fontWeight: 700,
+    textDecoration: 'underline',
+    border: '1px solid currentColor',
+    borderRadius: 6,
+    padding: '1px 5px',
+  },
+  entityButton: {
+    border: 'none',
+    font: 'inherit',
+    cursor: 'pointer',
+  },
   link: { color: 'var(--brg)', textDecoration: 'underline' },
   linkOnMine: { color: 'var(--item-active-fg)', textDecoration: 'underline', fontWeight: 700 },
 };
@@ -159,25 +181,44 @@ function mentionToNode([text], nextKey, mentionStyle) {
   );
 }
 
-// Bold/italic content gets one more pass applied to it — mentions only,
-// not links/bold/italic again — before being wrapped, so "**hey @bob**"
-// still highlights the mention. This is the one level of nesting the design
-// calls for ("a mention inside bold ... should still highlight"), not
-// general recursive re-parsing of everything inside everything. Unwraps a
-// single-item result back to a bare string/node — keeps the common
-// no-mention-inside case (the vast majority of bold/italic text) a plain
-// string child instead of a length-1 array for no reason.
-function processMentionsWithin(text, nextKey, mentionStyle) {
-  const result = applyPass([text], MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
+function entityToNode([text, label], nextKey, entityStyle, onEntityClick) {
+  if (onEntityClick) {
+    return (
+      <button
+        key={nextKey()}
+        type="button"
+        style={{ ...styles.entityButton, ...entityStyle }}
+        onClick={() => onEntityClick(label)}
+        aria-label={`Open entity ${label}`}
+      >
+        {text}
+      </button>
+    );
+  }
+  return (
+    <span key={nextKey()} style={entityStyle}>
+      {text}
+    </span>
+  );
+}
+
+// Bold/italic content gets one more highlight pass applied to it — entities
+// and mentions only, not links/bold/italic again — before being wrapped, so
+// "**hey @bob about [[Server Alpha]]**" still highlights the inline tokens.
+// This is one level of nesting, not general recursive re-parsing of
+// everything inside everything.
+function processHighlightsWithin(text, nextKey, { mentionStyle, entityStyle, onEntityClick }) {
+  let result = applyPass([text], ENTITY_RE, (m, nk) => entityToNode(m, nk, entityStyle, onEntityClick), nextKey);
+  result = applyPass(result, MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
   return result.length === 1 ? result[0] : result;
 }
 
-function boldToNode([, content], nextKey, mentionStyle) {
-  return <strong key={nextKey()}>{processMentionsWithin(content, nextKey, mentionStyle)}</strong>;
+function boldToNode([, content], nextKey, highlightOptions) {
+  return <strong key={nextKey()}>{processHighlightsWithin(content, nextKey, highlightOptions)}</strong>;
 }
 
-function italicToNode([, content], nextKey, mentionStyle) {
-  return <em key={nextKey()}>{processMentionsWithin(content, nextKey, mentionStyle)}</em>;
+function italicToNode([, content], nextKey, highlightOptions) {
+  return <em key={nextKey()}>{processHighlightsWithin(content, nextKey, highlightOptions)}</em>;
 }
 
 // The outer (?<!\w)/(?!\w) guard on BOLD_UNDERSCORE_RE/ITALIC_UNDERSCORE_RE
@@ -199,14 +240,14 @@ function italicToNode([, content], nextKey, mentionStyle) {
 // to the delimiter that doesn't collide with code-identifier syntax.
 const BARE_IDENTIFIER_RE = /^\w+$/;
 
-function boldUnderscoreToNode(match, nextKey, mentionStyle) {
+function boldUnderscoreToNode(match, nextKey, highlightOptions) {
   if (BARE_IDENTIFIER_RE.test(match[1])) return null;
-  return boldToNode(match, nextKey, mentionStyle);
+  return boldToNode(match, nextKey, highlightOptions);
 }
 
-function italicUnderscoreToNode(match, nextKey, mentionStyle) {
+function italicUnderscoreToNode(match, nextKey, highlightOptions) {
   if (BARE_IDENTIFIER_RE.test(match[1])) return null;
-  return italicToNode(match, nextKey, mentionStyle);
+  return italicToNode(match, nextKey, highlightOptions);
 }
 
 // `variant: 'mine'` is the one caller-facing option (FEATURE_REQUEST.md's
@@ -214,19 +255,22 @@ function italicUnderscoreToNode(match, nextKey, mentionStyle) {
 // needs mention/link styling that stays legible against that same-colored
 // background, everything else (bold/italic wrapping, tokenization order)
 // is identical regardless of variant.
-export function renderMessageContent(content, { variant } = {}) {
+export function renderMessageContent(content, { variant, onEntityClick } = {}) {
   let keyCounter = 0;
   const nextKey = () => keyCounter++;
   const mentionStyle = variant === 'mine' ? styles.mentionOnMine : styles.mention;
+  const entityStyle = variant === 'mine' ? styles.entityOnMine : styles.entity;
   const linkStyle = variant === 'mine' ? styles.linkOnMine : styles.link;
+  const highlightOptions = { mentionStyle, entityStyle, onEntityClick };
 
   let nodes = [content];
   nodes = applyPass(nodes, MD_LINK_RE, (m, nk) => mdLinkToNode(m, nk, linkStyle), nextKey);
   nodes = applyPass(nodes, AUTOLINK_RE, (m, nk) => autolinkToNode(m, nk, linkStyle), nextKey);
-  nodes = applyPass(nodes, BOLD_STAR_RE, (m, nk) => boldToNode(m, nk, mentionStyle), nextKey);
-  nodes = applyPass(nodes, BOLD_UNDERSCORE_RE, (m, nk) => boldUnderscoreToNode(m, nk, mentionStyle), nextKey);
-  nodes = applyPass(nodes, ITALIC_STAR_RE, (m, nk) => italicToNode(m, nk, mentionStyle), nextKey);
-  nodes = applyPass(nodes, ITALIC_UNDERSCORE_RE, (m, nk) => italicUnderscoreToNode(m, nk, mentionStyle), nextKey);
+  nodes = applyPass(nodes, BOLD_STAR_RE, (m, nk) => boldToNode(m, nk, highlightOptions), nextKey);
+  nodes = applyPass(nodes, BOLD_UNDERSCORE_RE, (m, nk) => boldUnderscoreToNode(m, nk, highlightOptions), nextKey);
+  nodes = applyPass(nodes, ITALIC_STAR_RE, (m, nk) => italicToNode(m, nk, highlightOptions), nextKey);
+  nodes = applyPass(nodes, ITALIC_UNDERSCORE_RE, (m, nk) => italicUnderscoreToNode(m, nk, highlightOptions), nextKey);
+  nodes = applyPass(nodes, ENTITY_RE, (m, nk) => entityToNode(m, nk, entityStyle, onEntityClick), nextKey);
   nodes = applyPass(nodes, MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
   return nodes;
 }

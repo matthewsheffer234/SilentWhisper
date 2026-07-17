@@ -6,6 +6,7 @@ import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/memb
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
 import { createMentionNotifications } from '../services/mentionNotificationService.js';
+import { linkMessageEntities } from '../services/entityService.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import {
   registerConnection,
@@ -218,6 +219,20 @@ async function handleMessage(ws, frame) {
     // clients in the room receive it too but have no matching placeholder,
     // so they simply ignore it.
     broadcastToRoom(channelId, { type: 'message_created', message, clientNonce: frame.clientNonce ?? null });
+
+    if (channel.workspace_id) {
+      try {
+        await linkMessageEntities(db, {
+          content: message.content,
+          messageId: message.id,
+          workspaceId: channel.workspace_id,
+          createdBy: ws.userId,
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to link message entities:', err);
+      }
+    }
 
     // A side effect of message creation, not part of it — see
     // routes/messages.js's identical call after its own broadcastToRoom, so

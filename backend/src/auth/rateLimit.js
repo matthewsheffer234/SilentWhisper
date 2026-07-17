@@ -137,3 +137,16 @@ export const memberSearchLimiter = rateLimit({
   keyGenerator: (req) => `member-search:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// Double-bracket entity autocomplete/resolve is the same keystroke-driven
+// request class as member search: cheap, authenticated, and per-user, with
+// client-side debounce as the first line and this limiter as abuse backstop.
+export const entitySearchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `entity-search:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

@@ -133,7 +133,16 @@ const styles = {
   },
 };
 
-export default function ThreadSidebar({ rootMessage, replies, presence, currentUser, onSendReply, onClose, isDirectConversation }) {
+export default function ThreadSidebar({
+  rootMessage,
+  replies,
+  presence,
+  currentUser,
+  onSendReply,
+  onClose,
+  isDirectConversation,
+  onOpenEntity,
+}) {
   const [draft, setDraft] = useState('');
   const [tasks, setTasks] = useState(null); // { loading, text, error }
 
@@ -224,7 +233,7 @@ export default function ThreadSidebar({ rootMessage, replies, presence, currentU
                   <PresenceBadge status={presence[rootMessage.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>
-                  {renderMessageContent(rootMessage.content, { variant: useMineStyle ? 'mine' : undefined })}
+                  {renderMessageContent(rootMessage.content, { variant: useMineStyle ? 'mine' : undefined, onEntityClick: onOpenEntity })}
                 </div>
               </div>
             </div>
@@ -261,7 +270,9 @@ export default function ThreadSidebar({ rootMessage, replies, presence, currentU
                   {showAuthor && <span style={styles.bubbleAuthor}>{r.displayName || r.username}</span>}
                   <PresenceBadge status={presence[r.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
-                <div style={styles.bubbleContent}>{renderMessageContent(r.content, { variant: useMineStyle ? 'mine' : undefined })}</div>
+                <div style={styles.bubbleContent}>
+                  {renderMessageContent(r.content, { variant: useMineStyle ? 'mine' : undefined, onEntityClick: onOpenEntity })}
+                </div>
               </div>
             </div>
           );

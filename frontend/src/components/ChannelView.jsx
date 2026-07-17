@@ -4,10 +4,11 @@ import { X, Hash, Lock, Sparkles, Info, User, Users, MessageSquare } from 'lucid
 import PresenceBadge from './PresenceBadge.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
+import { searchEntities } from '../api/entities.js';
 import { renderMessageContent } from '../markdown.jsx';
 
 // FEATURE_REQUEST.md's @mention autocomplete entry.
-const MENTION_DEBOUNCE_MS = 200;
+const AUTOCOMPLETE_DEBOUNCE_MS = 200;
 
 // FEATURE_REQUEST.md entry 3 (message presentation for team scanability).
 // Pure, DOM-free so they're unit-testable the same way ThemeContext.jsx's
@@ -202,7 +203,7 @@ const styles = {
   // Anchored *above* the input (bottom: 100%) rather than below it, same as
   // every other composer-adjacent popover in a bottom-docked chat input —
   // opening downward would push it off the viewport.
-  mentionDropdown: {
+  suggestionDropdown: {
     position: 'absolute',
     bottom: '100%',
     left: 0,
@@ -216,7 +217,7 @@ const styles = {
     borderRadius: 11,
     zIndex: 40,
   },
-  mentionOption: (highlighted) => ({
+  suggestionOption: (highlighted) => ({
     minHeight: 36,
     display: 'flex',
     alignItems: 'center',
@@ -227,7 +228,7 @@ const styles = {
     cursor: 'pointer',
     background: highlighted ? 'var(--item-hover)' : 'transparent',
   }),
-  mentionOptionUsername: { color: 'var(--text-3)', fontSize: 'var(--text-xs)' },
+  suggestionSecondary: { color: 'var(--text-3)', fontSize: 'var(--text-xs)' },
   sendButton: {
     minHeight: 44,
     padding: '0 20px',
@@ -251,6 +252,8 @@ export default function ChannelView({
   onSend,
   onOpenThread,
   onOpenDetails,
+  onOpenEntity,
+  workspaceId,
   mainContentId,
 }) {
   const [draft, setDraft] = useState('');
@@ -263,9 +266,12 @@ export default function ChannelView({
   // stale-read race between a debounced fetch's callback and a newer
   // keystroke.
   const [mention, setMention] = useState(null); // { start, query, suggestions, highlightIndex } | null
+  const [entity, setEntity] = useState(null); // { start, query, suggestions, highlightIndex } | null
   const composerInputRef = useRef(null);
   const mentionDropdownRef = useRef(null);
+  const entityDropdownRef = useRef(null);
   const mentionDebounceRef = useRef(null);
+  const entityDebounceRef = useRef(null);
   const pendingCaretRef = useRef(null);
 
   // Repositions the caret after a programmatic draft replacement (accepting
@@ -279,19 +285,32 @@ export default function ChannelView({
     }
   });
 
-  useEffect(() => () => clearTimeout(mentionDebounceRef.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(mentionDebounceRef.current);
+      clearTimeout(entityDebounceRef.current);
+    },
+    [],
+  );
 
   // Outside-click dismiss, same pattern as SearchBar.jsx/Menu.jsx — a bare
   // onBlur would fire before a mousedown-driven suggestion click lands.
   useEffect(() => {
-    if (!mention) return undefined;
+    if (!mention && !entity) return undefined;
     function handlePointerDown(e) {
-      if (composerInputRef.current?.contains(e.target) || mentionDropdownRef.current?.contains(e.target)) return;
+      if (
+        composerInputRef.current?.contains(e.target) ||
+        mentionDropdownRef.current?.contains(e.target) ||
+        entityDropdownRef.current?.contains(e.target)
+      ) {
+        return;
+      }
       setMention(null);
+      setEntity(null);
     }
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, [mention]);
+  }, [mention, entity]);
 
   // Windowed rendering (PROJECT_PLAN.md Section 8, Phase 5: "Add virtual
   // scrolling for long chat histories") — only the rows actually within (or
@@ -351,6 +370,7 @@ export default function ChannelView({
   useEffect(() => {
     setSummary(null);
     setMention(null);
+    setEntity(null);
   }, [channel?.id]);
 
   if (!channel) {
@@ -388,17 +408,61 @@ export default function ChannelView({
     return { start: i, query: text.slice(i + 1, caretPos) };
   }
 
+  function detectEntityTrigger(text, caretPos) {
+    let i = caretPos - 1;
+    while (i >= 0) {
+      const ch = text[i];
+      if (ch === '\n' || ch === ']') return null;
+      if (ch === '[' && i > 0 && text[i - 1] === '[') {
+        const query = text.slice(i + 1, caretPos);
+        if (query.length > 255 || /[\[\]]/.test(query)) return null;
+        return { start: i - 1, query };
+      }
+      i -= 1;
+    }
+    return null;
+  }
+
   function handleComposerChange(e) {
     const value = e.target.value;
     const caretPos = e.target.selectionStart;
     setDraft(value);
 
-    const trigger = detectMentionTrigger(value, caretPos);
+    const mentionTrigger = detectMentionTrigger(value, caretPos);
+    const entityTrigger = !isDirectConversation && workspaceId ? detectEntityTrigger(value, caretPos) : null;
+    const useEntity = entityTrigger && (!mentionTrigger || entityTrigger.start > mentionTrigger.start);
+    const trigger = useEntity ? entityTrigger : mentionTrigger;
+
     clearTimeout(mentionDebounceRef.current);
+    clearTimeout(entityDebounceRef.current);
     if (!trigger) {
       setMention(null);
+      setEntity(null);
       return;
     }
+    if (useEntity) {
+      setMention(null);
+      setEntity((prev) => ({
+        start: trigger.start,
+        query: trigger.query,
+        suggestions: prev && prev.start === trigger.start ? prev.suggestions : [],
+        highlightIndex: -1,
+      }));
+      entityDebounceRef.current = setTimeout(async () => {
+        try {
+          const results = await searchEntities(workspaceId, trigger.query);
+          setEntity((prev) =>
+            prev && prev.start === trigger.start && prev.query === trigger.query
+              ? { ...prev, suggestions: results, highlightIndex: results.length > 0 ? 0 : -1 }
+              : prev,
+          );
+        } catch {
+          setEntity((prev) => (prev && prev.start === trigger.start ? { ...prev, suggestions: [], highlightIndex: -1 } : prev));
+        }
+      }, AUTOCOMPLETE_DEBOUNCE_MS);
+      return;
+    }
+    setEntity(null);
     setMention((prev) => ({
       start: trigger.start,
       query: trigger.query,
@@ -418,7 +482,7 @@ export default function ChannelView({
         // block typing or surface an error in the composer.
         setMention((prev) => (prev && prev.start === trigger.start ? { ...prev, suggestions: [], highlightIndex: -1 } : prev));
       }
-    }, MENTION_DEBOUNCE_MS);
+    }, AUTOCOMPLETE_DEBOUNCE_MS);
   }
 
   function acceptMentionSuggestion(username) {
@@ -431,11 +495,23 @@ export default function ChannelView({
     setMention(null);
   }
 
+  function acceptEntitySuggestion(canonicalName) {
+    if (!entity) return;
+    const before = draft.slice(0, entity.start);
+    const after = draft.slice(entity.start + 2 + entity.query.length);
+    const insertion = `[[${canonicalName}]] `;
+    pendingCaretRef.current = before.length + insertion.length;
+    setDraft(`${before}${insertion}${after}`);
+    setEntity(null);
+  }
+
   function handleComposerKeyDown(e) {
-    if (mention && mention.suggestions.length > 0) {
+    const activeKind = entity && entity.suggestions.length > 0 ? 'entity' : mention && mention.suggestions.length > 0 ? 'mention' : null;
+    if (activeKind) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
-        setMention((prev) => {
+        const setter = activeKind === 'entity' ? setEntity : setMention;
+        setter((prev) => {
           const delta = e.key === 'ArrowDown' ? 1 : -1;
           const next = (prev.highlightIndex + delta + prev.suggestions.length) % prev.suggestions.length;
           return { ...prev, highlightIndex: next };
@@ -445,14 +521,20 @@ export default function ChannelView({
       if (e.key === 'Enter' || e.key === 'Tab') {
         // preventDefault is what stops Enter from also submitting the form.
         e.preventDefault();
-        const chosen = mention.suggestions[mention.highlightIndex] ?? mention.suggestions[0];
-        if (chosen) acceptMentionSuggestion(chosen.username);
+        if (activeKind === 'entity') {
+          const chosen = entity.suggestions[entity.highlightIndex] ?? entity.suggestions[0];
+          if (chosen) acceptEntitySuggestion(chosen.canonicalName);
+        } else {
+          const chosen = mention.suggestions[mention.highlightIndex] ?? mention.suggestions[0];
+          if (chosen) acceptMentionSuggestion(chosen.username);
+        }
         return;
       }
     }
-    if (e.key === 'Escape' && mention) {
+    if (e.key === 'Escape' && (mention || entity)) {
       e.preventDefault();
       setMention(null);
+      setEntity(null);
     }
   }
 
@@ -581,7 +663,7 @@ export default function ChannelView({
                     <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                   <div style={styles.messageContent}>
-                    {renderMessageContent(m.content, { variant: useMineStyle ? 'mine' : undefined })}
+                    {renderMessageContent(m.content, { variant: useMineStyle ? 'mine' : undefined, onEntityClick: onOpenEntity })}
                   </div>
                   {!m.parentMessageId && !m.pending && (
                     <button
@@ -618,20 +700,48 @@ export default function ChannelView({
             disabled={!joined || archived}
             maxLength={10000}
             role="combobox"
-            aria-expanded={Boolean(mention && mention.suggestions.length > 0)}
-            aria-controls="mention-suggestions"
+            aria-expanded={Boolean((mention && mention.suggestions.length > 0) || (entity && entity.suggestions.length > 0))}
+            aria-controls={entity && entity.suggestions.length > 0 ? 'entity-suggestions' : 'mention-suggestions'}
             aria-autocomplete="list"
             aria-activedescendant={
-              mention && mention.highlightIndex >= 0 ? `mention-option-${mention.suggestions[mention.highlightIndex].id}` : undefined
+              entity && entity.highlightIndex >= 0
+                ? `entity-option-${entity.suggestions[entity.highlightIndex].id}`
+                : mention && mention.highlightIndex >= 0
+                  ? `mention-option-${mention.suggestions[mention.highlightIndex].id}`
+                  : undefined
             }
           />
+          {entity && entity.suggestions.length > 0 && (
+            <div
+              ref={entityDropdownRef}
+              id="entity-suggestions"
+              role="listbox"
+              aria-label="Entity suggestions"
+              style={styles.suggestionDropdown}
+            >
+              {entity.suggestions.map((s, index) => (
+                <div
+                  key={s.id}
+                  id={`entity-option-${s.id}`}
+                  role="option"
+                  aria-selected={index === entity.highlightIndex}
+                  style={styles.suggestionOption(index === entity.highlightIndex)}
+                  onMouseEnter={() => setEntity((prev) => (prev ? { ...prev, highlightIndex: index } : prev))}
+                  onClick={() => acceptEntitySuggestion(s.canonicalName)}
+                >
+                  <span>{s.canonicalName}</span>
+                  {s.description && <span style={styles.suggestionSecondary}>{s.description}</span>}
+                </div>
+              ))}
+            </div>
+          )}
           {mention && mention.suggestions.length > 0 && (
             <div
               ref={mentionDropdownRef}
               id="mention-suggestions"
               role="listbox"
               aria-label="Mention suggestions"
-              style={styles.mentionDropdown}
+              style={styles.suggestionDropdown}
             >
               {mention.suggestions.map((s, index) => (
                 <div
@@ -639,12 +749,12 @@ export default function ChannelView({
                   id={`mention-option-${s.id}`}
                   role="option"
                   aria-selected={index === mention.highlightIndex}
-                  style={styles.mentionOption(index === mention.highlightIndex)}
+                  style={styles.suggestionOption(index === mention.highlightIndex)}
                   onMouseEnter={() => setMention((prev) => (prev ? { ...prev, highlightIndex: index } : prev))}
                   onClick={() => acceptMentionSuggestion(s.username)}
                 >
                   <span>{s.displayName || s.username}</span>
-                  <span style={styles.mentionOptionUsername}>@{s.username}</span>
+                  <span style={styles.suggestionSecondary}>@{s.username}</span>
                 </div>
               ))}
             </div>

@@ -44,6 +44,8 @@ export async function resetDb(db) {
   await adminDb('organizations').update({ archived_by: null });
   await db('mention_notifications').del();
   await db('user_notifications').del();
+  await db('message_entities').del();
+  await db('entities').del();
   await adminDb('messages').del();
   await db('channel_members').del();
   await adminDb('channels').del();

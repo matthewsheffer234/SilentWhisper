@@ -46,7 +46,7 @@ Design:
 
 ### 2. Double-bracket entity registry & autocomplete
 
-**Status**: Proposed
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Double-bracket entity registry, autocomplete, and entity detail pages" (2026-07-17).
 **Utility**: Medium-High. Lets a team build an implicit, cross-channel knowledge graph of recurring nouns — servers, projects, people, systems — by wrapping them in `[[Double Brackets]]` as they type, the same wiki-linking convention Roam/Obsidian/Notion popularized. Once tagged, the same entity resolves consistently everywhere it's mentioned again, with autocomplete surfacing prior mentions instead of retyping (or worse, near-miss-retyping) a name from memory. Independent of every other entry in this backlog — no shared prerequisite either direction.
 **Origin**: Requested directly, supplied as a full generic implementation spec (schema, backend parser, frontend components) written for a single-tenant chat app with no workspace/organization isolation. Reworked below to fit this app's actual multi-tenant model — the supplied schema's `entities.canonical_name`/`normalized_name` were **globally unique across the entire application**, which would leak entity names across unrelated organizations (Org A typing `[[Project Ares]]` would collide with or expose Org B's unrelated entity of the same name) and gave the autocomplete search endpoint no authorization check at all. Both are fixed below by scoping entities to a workspace, the same granularity channels/messages already use, and gating search on workspace membership like every other search endpoint in this app. The supplied spec's raw Tailwind classes and literal-HTML-shaped renderer are also replaced with this app's actual token-based styling and safe React-element rendering pipeline (`markdown.jsx`) — never `dangerouslySetInnerHTML` on user content, per Section 9's rules of engagement.
 **Implementation plan**: see `BACKLOG_ITEM_2_ENTITY_REGISTRY_IMPLEMENTATION_PLAN.md` for the codebase-grounded implementation sequence and verification plan.
@@ -62,7 +62,7 @@ Design:
 
 ### 3. Clickable entity profile/detail pages
 
-**Status**: Proposed
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Double-bracket entity registry, autocomplete, and entity detail pages" (2026-07-17).
 **Utility**: Medium-High. Turns the double-bracket registry from passive highlighting/autocomplete into a navigable knowledge surface: clicking `[[Project Ares]]` should show what the workspace knows about that entity, where it has been discussed, and optionally let authorized members improve its canonical metadata.
 **Origin**: Requested directly after the double-bracket entity registry/autocomplete design. This depends on backlog item #2's workspace-scoped `entities` and `message_entities` tables; it should not be built first.
 

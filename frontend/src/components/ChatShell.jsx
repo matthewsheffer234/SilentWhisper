@@ -6,6 +6,7 @@ import * as workspacesApi from '../api/workspaces.js';
 import * as organizationsApi from '../api/organizations.js';
 import * as notificationsApi from '../api/notifications.js';
 import * as directMessagesApi from '../api/directMessages.js';
+import * as entitiesApi from '../api/entities.js';
 import { PERMISSIONS, hasPermission, hasSystemPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
@@ -24,6 +25,7 @@ import AdminPanel from './AdminPanel.jsx';
 import WorkspaceSettingsSheet from './WorkspaceSettingsSheet.jsx';
 import NotificationPanel from './NotificationPanel.jsx';
 import ChannelDetailsPanel from './ChannelDetailsPanel.jsx';
+import EntityDetailsPanel from './EntityDetailsPanel.jsx';
 import CreateWorkspaceSheet from './CreateWorkspaceSheet.jsx';
 import CreateChannelSheet from './CreateChannelSheet.jsx';
 import NewMessageSheet from './NewMessageSheet.jsx';
@@ -101,6 +103,7 @@ export default function ChatShell() {
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [displayNameOpen, setDisplayNameOpen] = useState(false);
   const [channelDetailsOpen, setChannelDetailsOpen] = useState(false);
+  const [entityDetails, setEntityDetails] = useState(null); // { workspaceId, entity }
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [directMessages, setDirectMessages] = useState([]);
@@ -364,6 +367,10 @@ export default function ChatShell() {
     setChannelDetailsOpen(false);
   }, [selectedChannelId]);
 
+  useEffect(() => {
+    setEntityDetails(null);
+  }, [selectedWorkspaceId]);
+
   const selectChannel = useCallback(
     (channelId) => {
       setSelectedChannelId(channelId);
@@ -576,6 +583,18 @@ export default function ChatShell() {
     }
   }
 
+  async function handleOpenEntity(label) {
+    if (!selectedWorkspaceId) return;
+    try {
+      const entity = await entitiesApi.resolveEntity(selectedWorkspaceId, label);
+      setEntityDetails({ workspaceId: selectedWorkspaceId, entity });
+    } catch {
+      // Entity text can be stale or unresolved if a message was typed before
+      // the registry feature existed. A failed resolve should not disturb
+      // the reader or break message rendering.
+    }
+  }
+
   // FEATURE_REQUEST.md entry 3 (Direct Messages navigation): a DM/group-DM
   // isn't in channels[] (that list is fetched per-workspace) — falls back to
   // directMessages[] so selecting one still resolves to a real channel
@@ -694,6 +713,8 @@ export default function ChatShell() {
           onSend={handleSend}
           onOpenThread={openThread}
           onOpenDetails={() => setChannelDetailsOpen(true)}
+          workspaceId={selectedDirectMessage ? null : selectedWorkspaceId}
+          onOpenEntity={selectedDirectMessage ? undefined : handleOpenEntity}
         />
       )}
       <ThreadSidebar
@@ -704,6 +725,7 @@ export default function ChatShell() {
         onSendReply={handleSendReply}
         onClose={() => setThreadRoot(null)}
         isDirectConversation={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM'}
+        onOpenEntity={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM' ? undefined : handleOpenEntity}
       />
       {createWorkspaceOpen && (
         <CreateWorkspaceSheet
@@ -737,6 +759,14 @@ export default function ChatShell() {
           archived={isSelectedWorkspaceArchived}
           onAddMember={handleInviteToChannel}
           onClose={() => setChannelDetailsOpen(false)}
+        />
+      )}
+      {entityDetails && (
+        <EntityDetailsPanel
+          workspaceId={entityDetails.workspaceId}
+          entityId={entityDetails.entity.id}
+          initialEntity={entityDetails.entity}
+          onClose={() => setEntityDetails(null)}
         />
       )}
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}

@@ -6,6 +6,7 @@ import { assertUuid, assertBoundedInt, parsePagination, MAX_USERNAME_LENGTH } fr
 import { createMessage } from '../services/messageService.js';
 import { extractMentionedUserIds } from '../services/mentionService.js';
 import { createMentionNotifications } from '../services/mentionNotificationService.js';
+import { linkMessageEntities } from '../services/entityService.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import { broadcastToRoom, sendToUser } from '../ws/connectionRegistry.js';
 import { isMessageRateLimited } from '../ws/rateLimiter.js';
@@ -173,6 +174,20 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
     });
 
     broadcastToRoom(channelId, { type: 'message_created', message });
+
+    if (channel.workspace_id) {
+      try {
+        await linkMessageEntities(db, {
+          content: message.content,
+          messageId: message.id,
+          workspaceId: channel.workspace_id,
+          createdBy: req.user.id,
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to link message entities:', err);
+      }
+    }
 
     // A side effect of message creation, not part of it — mirrors
     // messageService.js's own header comment on why mention parsing lives
