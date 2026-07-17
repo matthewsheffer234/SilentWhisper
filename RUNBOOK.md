@@ -275,7 +275,7 @@ Connect to `ws://localhost:8101/ws` (or `WS_PATH` if changed). The connection is
 | ← server | `{type: "presence_update", userId, status}` | `status` is `online`, `away`, or `offline` |
 | ← server | `{type: "error", error, context}` | never closes the connection except for auth failures / identity mismatch / connection-cap — a bad `join` or rate-limited `message` just gets an error frame |
 
-Close codes: `4001` invalid/missing auth or identity mismatch, `4002` token expired without renewal, `4003` too many concurrent connections for that user (`WS_MAX_CONNECTIONS_PER_USER`, default 5).
+Close codes: `4001` invalid/missing auth or identity mismatch (also returned for a disabled account's still-unexpired token, indistinguishable from an actually-invalid one), `4002` token expired without renewal, `4003` too many concurrent connections for that user (`WS_MAX_CONNECTIONS_PER_USER`, default 5), `4004` account disabled while the connection was already open — the server closes it immediately rather than waiting for the token to expire (`FEATURE_REQUEST.md` entry 1). A frame larger than `WS_MAX_PAYLOAD_BYTES` (default 131072, 128 KiB) is rejected by the underlying `ws` library itself before it reaches application code, closing with code `1009`.
 
 ## AI Features
 

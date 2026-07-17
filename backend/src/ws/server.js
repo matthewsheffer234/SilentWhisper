@@ -35,7 +35,16 @@ function sendError(ws, error, context) {
 // opens unauthenticated — no room joins, no data — until an `authenticate`
 // frame validates. Everything else in this file assumes that invariant.
 export function attachWebSocketServer(httpServer) {
-  const wss = new WebSocketServer({ server: httpServer, path: config.ws.path });
+  // maxPayload (FEATURE_REQUEST.md entry 1): `ws` rejects and closes any
+  // frame larger than this before it's buffered or handed to our 'message'
+  // handler for JSON.parse — closing an unauthenticated memory/CPU
+  // exhaustion vector rather than relying on validation that only runs
+  // after the oversized frame is already fully received.
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: config.ws.path,
+    maxPayload: config.ws.maxPayloadBytes,
+  });
 
   wss.on('connection', (ws) => {
     ws.authenticated = false;
@@ -44,6 +53,15 @@ export function attachWebSocketServer(httpServer) {
     ws.displayName = null;
     ws.tokenExp = null;
     ws.joinedChannels = new Set();
+
+    // Required as soon as `maxPayload` is set (FEATURE_REQUEST.md entry 1):
+    // an oversized frame surfaces as an 'error' event on this socket (`ws`'s
+    // receiver rejects it before 'message' ever fires), and an EventEmitter
+    // 'error' event with no listener is a fatal, process-crashing exception
+    // in Node — not just a dropped event. `ws` already closes the
+    // connection itself (code 1009) once it emits this, so there's nothing
+    // left to do here beyond preventing the crash.
+    ws.on('error', () => {});
 
     ws.on('message', async (raw) => {
       let frame;
@@ -120,6 +138,20 @@ async function handleAuthenticate(ws, frame) {
   try {
     claims = verifyAccessToken(frame.accessToken);
   } catch {
+    sendError(ws, 'Invalid or expired access token', 'authenticate');
+    ws.close(4001, 'Invalid token');
+    return;
+  }
+
+  // Mirrors requireAuth's identical status re-check (FEATURE_REQUEST.md
+  // entry 1) — the JWT alone doesn't reflect a status change made after it
+  // was issued. Runs on every authenticate frame, including a reconnect and
+  // an in-place re-auth on an already-open socket, not just the first one:
+  // a disabled user must not be able to re-establish or renew a session
+  // with a still-unexpired token. Same generic message as an invalid token
+  // so a disabled account can't be distinguished from an expired one.
+  const user = await db('users').where({ id: claims.userId }).first('status');
+  if (!user || user.status !== 'ACTIVE') {
     sendError(ws, 'Invalid or expired access token', 'authenticate');
     ws.close(4001, 'Invalid token');
     return;

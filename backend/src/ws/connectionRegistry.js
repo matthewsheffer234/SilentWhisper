@@ -93,6 +93,29 @@ export function sendToUser(userId, event) {
   }
 }
 
+// Force-closes every live connection for a user — e.g. an admin disabling
+// the account (FEATURE_REQUEST.md entry 1: "admin disable takes effect
+// immediately rather than waiting for token expiry"). Distinct from
+// unregisterConnection, which only updates bookkeeping for a socket that's
+// already closing on its own: this is the thing that actually closes it.
+// Sends an explicit error frame first, mirroring ws/server.js's own
+// sendError-then-close convention elsewhere, since a WebSocket close
+// `reason` string isn't reliably surfaced to browser client code the way a
+// message frame is. `ws/server.js`'s existing `close` handler does the same
+// unregisterConnection/leaveAllRooms/handleDisconnect cleanup this triggers,
+// so no cleanup is duplicated here.
+export function disconnectUser(userId, { code = 4004, reason = 'Account disabled' } = {}) {
+  const set = userConnections.get(userId);
+  if (!set) return;
+  const payload = JSON.stringify({ type: 'error', error: reason });
+  for (const ws of [...set]) {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(payload);
+    }
+    ws.close(code, reason);
+  }
+}
+
 export function broadcastToAllAuthenticated(event) {
   const payload = JSON.stringify(event);
   for (const set of userConnections.values()) {

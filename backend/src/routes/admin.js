@@ -9,6 +9,7 @@ import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
 import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateLimit.js';
 import { isSystemAdminUser } from '../authz/membershipService.js';
+import { disconnectUser } from '../ws/connectionRegistry.js';
 import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from '../errors.js';
 
 // System-admin-only account lifecycle (FEATURE_REQUEST.md entry 1, slice 4,
@@ -155,6 +156,13 @@ adminRouter.post('/users/:userId/disable', adminPasswordResetLimiter, async (req
     if (target.status !== 'DISABLED') {
       await db('users').where({ id: targetUserId }).update({ status: 'DISABLED' });
       await revokeAllRefreshTokensForUser(db, targetUserId);
+      // Immediate eviction (FEATURE_REQUEST.md entry 1) — closes any
+      // WebSocket connections this user has open right now, rather than
+      // leaving them connected until their access token naturally expires.
+      // Synchronous/in-process, not queued, since "immediately" is the
+      // point; requireAuth/handleAuthenticate's status checks close the
+      // remaining gap (a still-unexpired token making a *new* request).
+      disconnectUser(targetUserId, { reason: 'Account disabled' });
       await appendAuditEvent(db, {
         actorId: req.user.id,
         actorIp: req.ip,

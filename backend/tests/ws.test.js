@@ -3,7 +3,7 @@ import { app, start, shutdown } from '../src/index.js';
 import { db } from '../src/db.js';
 import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { signup, authHeader } from './helpers/testUsers.js';
+import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 import { connectWs, waitForMessage, waitForClose, sendFrame } from './helpers/wsClient.js';
 import { _resetForTests as resetConnectionRegistry } from '../src/ws/connectionRegistry.js';
 import { _resetForTests as resetPresence } from '../src/ws/presence.js';
@@ -117,6 +117,72 @@ describe('authenticate handshake', () => {
     const errorMsg = await waitForMessage(oneTooMany, (e) => e.type === 'error');
     expect(errorMsg.error).toMatch(/too many concurrent connections/i);
     await waitForClose(oneTooMany);
+  });
+});
+
+describe('account disable — immediate WebSocket eviction (FEATURE_REQUEST.md entry 1)', () => {
+  test('disabling a connected user force-closes their open socket immediately', async () => {
+    const admin = await seedSystemAdmin('wsdisableadmin0');
+    const target = await signup('wsdisabletarget0');
+    const ws = await openAndTrack();
+    sendFrame(ws, { type: 'authenticate', accessToken: target.accessToken });
+    await waitForMessage(ws, (e) => e.type === 'authenticated');
+
+    // Attach listeners before triggering the disable — the eviction happens
+    // synchronously inside the admin route handler, so waiting on the REST
+    // response first would risk missing the close.
+    const errorPromise = waitForMessage(ws, (e) => e.type === 'error');
+    const closePromise = waitForClose(ws);
+    const res = await request(app)
+      .post(`/api/admin/users/${target.userId}/disable`)
+      .set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+
+    const errorMsg = await errorPromise;
+    expect(errorMsg.error).toMatch(/disabled/i);
+    await closePromise;
+  });
+
+  test('a disabled user cannot authenticate a new connection with a still-unexpired access token', async () => {
+    const admin = await seedSystemAdmin('wsdisableadmin1');
+    const target = await signup('wsdisabletarget1');
+    await request(app).post(`/api/admin/users/${target.userId}/disable`).set(authHeader(admin.accessToken));
+
+    const ws = await openAndTrack();
+    sendFrame(ws, { type: 'authenticate', accessToken: target.accessToken });
+    const errorMsg = await waitForMessage(ws, (e) => e.type === 'error');
+    expect(errorMsg.error).toMatch(/invalid or expired/i);
+    await waitForClose(ws);
+  });
+
+  test('a disabled user cannot renew an already-authenticated connection via a re-authenticate frame', async () => {
+    const target = await signup('wsdisabletarget2');
+    const ws = await openAndTrack();
+    sendFrame(ws, { type: 'authenticate', accessToken: target.accessToken });
+    await waitForMessage(ws, (e) => e.type === 'authenticated');
+
+    // Flips status directly rather than through the admin route, so this
+    // isolates handleAuthenticate's reauth-branch status check from the
+    // separate immediate-eviction path the first test above already covers.
+    await db('users').where({ id: target.userId }).update({ status: 'DISABLED' });
+
+    sendFrame(ws, { type: 'authenticate', accessToken: target.accessToken });
+    const errorMsg = await waitForMessage(ws, (e) => e.type === 'error');
+    expect(errorMsg.error).toMatch(/invalid or expired/i);
+    await waitForClose(ws);
+  });
+});
+
+describe('WebSocket payload limit (FEATURE_REQUEST.md entry 1)', () => {
+  test('a frame larger than the configured maxPayload closes the connection before it is parsed', async () => {
+    const ws = await openAndTrack();
+    // A single oversized field is enough — the `ws` receiver enforces
+    // maxPayload at the frame level, before any application code (including
+    // JSON.parse in the 'message' handler) ever sees the payload.
+    const oversizedToken = 'x'.repeat(config.ws.maxPayloadBytes + 1024);
+    sendFrame(ws, { type: 'authenticate', accessToken: oversizedToken });
+    const closeResult = await waitForClose(ws);
+    expect(closeResult.code).toBe(1009);
   });
 });
 

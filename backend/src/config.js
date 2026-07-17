@@ -130,5 +130,13 @@ export const config = {
     maxMessagesPerWindow: Number(process.env.WS_MAX_MESSAGES_PER_WINDOW || 10),
     messageWindowMs: Number(process.env.WS_MESSAGE_WINDOW_MS || 10_000),
     maxConnectionsPerUser: Number(process.env.WS_MAX_CONNECTIONS_PER_USER || 5),
+    // Security & Stability (FEATURE_REQUEST.md entry 1; both architecture
+    // reviews' P0 recommendations): caps inbound WebSocket frame size so an
+    // oversized frame is rejected before ever being buffered/JSON-parsed.
+    // Sized comfortably above the worst-case encoding of a MAX_MESSAGE_LENGTH
+    // message (validation.js, 10,000 chars — up to ~3 bytes/char in UTF-8 for
+    // non-Latin text, plus JSON framing overhead), so no legitimate message
+    // frame is ever at risk of hitting this cap.
+    maxPayloadBytes: Number(process.env.WS_MAX_PAYLOAD_BYTES || 131_072), // 128 KiB
   },
 };

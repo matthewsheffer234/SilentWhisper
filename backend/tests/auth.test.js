@@ -129,6 +129,24 @@ describe('Account status: disabled users', () => {
     const refreshRes = await request(app).post('/api/auth/refresh').set('Cookie', [`refresh_token=${cookie}`]);
     expect(refreshRes.status).toBe(401);
   });
+
+  // FEATURE_REQUEST.md entry 1 (WebSocket connection hygiene / immediate
+  // eviction): the gap this closes is a still-unexpired access token — the
+  // two tests above only cover login and refresh, neither of which is the
+  // token a disabled user might already be carrying. requireAuth must now
+  // reject that token on its very next REST call, not just leave it valid
+  // until it naturally expires.
+  test('a still-unexpired access token is rejected on the next REST call after disable, with the same generic message as an invalid token', async () => {
+    const user = await signup('disableduser2');
+    const before = await request(app).get('/api/auth/me').set(authHeader(user.accessToken));
+    expect(before.status).toBe(200);
+
+    await db('users').where({ id: user.userId }).update({ status: 'DISABLED' });
+
+    const after = await request(app).get('/api/auth/me').set(authHeader(user.accessToken));
+    expect(after.status).toBe(401);
+    expect(after.body.error).toBe('Invalid or expired access token');
+  });
 });
 
 describe('POST /api/auth/refresh', () => {
