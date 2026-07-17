@@ -32,6 +32,24 @@
 // follows — confirmed with the operator before this was ever run, and now a
 // hard invariant of this script, not a per-run judgment call.
 //
+// `organizations` has no owner/creator column and no cascade from a deleted
+// workspace back to the org it belongs to, so a prefix/owner-based sweep
+// alone can never reach it — every org an e2e test creates via
+// createOrgApi() (Org Mgmt/Acme Corp/Org B/Member Mgmt Org/Org Move
+// Target/Panel Created Org, all in workflows.spec.js) was leaking forever
+// even though this script was already deleting the test users and
+// workspaces it belonged to (found 2026-07-17: 76 orphaned test orgs had
+// accumulated in the dev database, one every e2e run). Fixed by leaning on
+// a real invariant instead of another prefix list: POST /organizations
+// (backend/src/routes/organizations.js) inserts the org and its creator's
+// ORG_ADMIN organization_members row in the same db.transaction, so a
+// committed org always has >=1 member at creation time — an org with zero
+// organization_members AND zero workspaces pointing at it is always dead
+// weight, never a real org that just hasn't been used yet. That sweep runs
+// unconditionally at the end of every invocation (not gated on matching any
+// test-user prefix), so it also mops up rows left behind by *this script's
+// own* prior versions, not just the current run's deletions.
+//
 // Own tiny dependency tree (dotenv + pg only), same as every other script in
 // this directory — connects with the migration role (PGUSER/PGPASSWORD),
 // not APP_DB_USER, since app_runtime_user has no DELETE grant on
@@ -83,11 +101,13 @@ async function main() {
     ]);
     const testUserIds = testUserRows.map((r) => r.id);
 
-    if (testUserIds.length === 0) {
-      console.log(`No users match prefixes [${prefixes.join(', ')}] in ${process.env.PGDATABASE}. Nothing to do.`);
-      await client.query('ROLLBACK');
-      return;
-    }
+    // Note: deliberately no early-return when testUserIds is empty. The
+    // orphaned-organizations sweep below (see header comment) must still
+    // run every time — it cleans up dead orgs regardless of whether this
+    // particular invocation matched any test users, since a prior run can
+    // leave orgs orphaned independent of what's currently in `users`. Every
+    // ANY($n::uuid[]) delete below is a no-op against an empty array, so
+    // this stays safe and cheap when there's genuinely nothing else to do.
 
     const { rows: testWorkspaceRows } = await client.query('SELECT id FROM workspaces WHERE owner_id = ANY($1::uuid[])', [
       testUserIds,
@@ -112,10 +132,19 @@ async function main() {
       : [];
     const testChannelIds = [...dmChannelRows, ...workspaceChannelRows].map((r) => r.id);
 
+    const { rows: preExistingOrphanOrgRows } = await client.query(
+      `SELECT o.id FROM organizations o
+       WHERE NOT EXISTS (SELECT 1 FROM organization_members om WHERE om.organization_id = o.id)
+         AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.organization_id = o.id)`,
+    );
+
     console.log(`Prefixes: ${prefixes.join(', ')}`);
     console.log(`Test users to delete: ${testUserIds.length}`);
     console.log(`Test workspaces to delete: ${testWorkspaceIds.length}`);
     console.log(`Test channels to delete (incl. DMs): ${testChannelIds.length}`);
+    console.log(
+      `Already-orphaned organizations to delete (0 members, 0 workspaces — more may become orphaned once the above deletes run): ${preExistingOrphanOrgRows.length}`,
+    );
 
     if (dryRun) {
       console.log('--dry-run: no changes made.');
@@ -195,6 +224,30 @@ async function main() {
     const orgMembers = await client.query('DELETE FROM organization_members WHERE user_id = ANY($1::uuid[])', [testUserIds]);
     const users = await client.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [testUserIds]);
 
+    // Re-check for orphans now, after the deletes above may have just
+    // stripped an org's last organization_members row — this reaches both
+    // pre-existing orphans (leftovers from before this sweep existed) and
+    // orgs newly orphaned by this very run, in one query.
+    const { rows: orphanOrgRows } = await client.query(
+      `SELECT o.id FROM organizations o
+       WHERE NOT EXISTS (SELECT 1 FROM organization_members om WHERE om.organization_id = o.id)
+         AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.organization_id = o.id)`,
+    );
+    const orphanOrgIds = orphanOrgRows.map((r) => r.id);
+
+    // No cascade on invitations/membership_invitations.organization_id, so
+    // any leftover invite scoped to a dead org needs deleting explicitly or
+    // the organizations delete below hits a FK violation.
+    const orphanOrgInvitations = orphanOrgIds.length
+      ? await client.query('DELETE FROM invitations WHERE organization_id = ANY($1::uuid[])', [orphanOrgIds])
+      : { rowCount: 0 };
+    const orphanOrgMembershipInvitations = orphanOrgIds.length
+      ? await client.query('DELETE FROM membership_invitations WHERE organization_id = ANY($1::uuid[])', [orphanOrgIds])
+      : { rowCount: 0 };
+    const orphanOrganizations = orphanOrgIds.length
+      ? await client.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [orphanOrgIds])
+      : { rowCount: 0 };
+
     await client.query('COMMIT');
 
     console.log('Deleted counts:', {
@@ -210,6 +263,9 @@ async function main() {
       refreshTokens: refreshTokens.rowCount,
       organizationMembers: orgMembers.rowCount,
       users: users.rowCount,
+      orphanOrganizationInvitations: orphanOrgInvitations.rowCount,
+      orphanOrganizationMembershipInvitations: orphanOrgMembershipInvitations.rowCount,
+      orphanOrganizations: orphanOrganizations.rowCount,
     });
     console.log('audit_logs: untouched, by design — see header comment.');
   } catch (err) {
