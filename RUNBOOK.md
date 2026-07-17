@@ -229,17 +229,17 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | POST | `/api/workspaces/:workspaceId/channels` | `{name, type: "PUBLIC"\|"PRIVATE"}` — creator auto-joined |
 | GET | `/api/workspaces/:workspaceId/channels` | all `PUBLIC` channels + `PRIVATE` ones the caller has joined |
 | POST | `/api/workspaces/:workspaceId/channels/:channelId/join` | self-service join — `PUBLIC` only, 400 for `PRIVATE` |
-| POST | `/api/workspaces/:workspaceId/channels/:channelId/members` | `{userId}` — caller must already be a channel member; target must already be a workspace member |
+| POST | `/api/workspaces/:workspaceId/channels/:channelId/members` | `{username}` — caller must already be a channel member; `channelId` must belong to `workspaceId` (400 otherwise); target must already be a member of that same workspace |
 | POST | `/api/direct-messages` | `{targetUserId}` → creates or reuses a 1:1 `DIRECT` channel (`workspace_id` is `NULL`) |
 | POST | `/api/group-direct-messages` | `{memberIds: [...]}` → creates a `GROUP_DM` channel |
 | GET | `/api/channels/:channelId/messages` | `?limit=&before=&parentMessageId=` — newest-first, paginated by timestamp cursor |
 | POST | `/api/channels/:channelId/messages` | `{content, parentMessageId?}` — max 10,000 chars |
-| GET | `/api/ai/settings` | admin only (ADMIN in ≥1 workspace) — effective LLM settings (no secrets) + provider health |
-| PATCH | `/api/ai/settings` | admin only — partial update of non-secret settings; unknown fields or out-of-range values are rejected with 400 |
+| GET | `/api/ai/settings` | **system admin only** (`is_system_admin`, not workspace role — see PROJECT_PLAN.md Section 11's 2026-07-17 security-hardening entry) — effective LLM settings (no secrets) + provider health |
+| PATCH | `/api/ai/settings` | system admin only — partial update of non-secret settings; unknown fields or out-of-range values are rejected with 400 |
 | POST | `/api/channels/:channelId/ai/summarize` | `{limit?}` (default 50, max 200 recent messages) — streamed `text/plain` summary; requires channel membership |
 | POST | `/api/messages/:messageId/ai/extract-tasks` | streamed `text/plain` checklist for the thread rooted at `:messageId`; requires membership in that message's channel |
-| GET | `/api/audit/logs` | admin only — `?limit=&beforeId=` paginated recent audit events, newest first; **each call is itself audited** (`AUDIT_DASHBOARD_ACCESSED`) |
-| POST | `/api/audit/verify` | admin only — recomputes the whole hash chain server-side, returns `{verified, rowsChecked, firstFailure?}`; audited as `AUDIT_VERIFICATION_ATTEMPTED` |
+| GET | `/api/audit/logs` | **system admin only** — `?limit=&beforeId=` paginated recent audit events, newest first; **each call is itself audited** (`AUDIT_DASHBOARD_ACCESSED`) |
+| POST | `/api/audit/verify` | system admin only — recomputes the whole hash chain server-side, returns `{verified, rowsChecked, firstFailure?}`; audited as `AUDIT_VERIFICATION_ATTEMPTED` |
 | POST | `/api/search/semantic` | `{query, workspaceId?, channelId?, limit?}` (limit default 20, max 50) — conceptual search over the caller's own channels, ranked by cosine similarity; see Semantic Search below |
 
 `audit_logs.id` is `BIGSERIAL` — node-postgres returns it as a JSON **string**, not a number (Postgres `int8` avoids silent precision loss beyond 2^53 by round-tripping through the driver as text). Treat `beforeId` as an opaque cursor, never do arithmetic on it.
@@ -648,9 +648,9 @@ Check the browser console for the `authenticated` frame — if it never arrives,
 
 Something else on the host is using that port. Check what: `ss -tlnp | grep <port>`. These were chosen specifically to avoid the existing Silent Lattice stack's ports (`3000/3001/8000/8001/1521/1522/9201/9202/11434-11436`) — if you still collide, change the host-side port in `docker-compose.yml` (the container-side port can stay the same).
 
-### "AI Settings" button doesn't appear in the sidebar
+### "AI Settings"/"Audit Log" rows don't appear in the Admin hub
 
-It's only shown to a user who is `ADMIN` of at least one workspace (`workspaces.some(ws => ws.role === 'ADMIN')` in `frontend/src/components/ChatShell.jsx`) — the same rule the backend enforces server-side (`requireAnyWorkspaceAdmin`). Creating a workspace automatically makes the creator its `ADMIN`; joining an existing one via invite does not. This is a client-side convenience only — hiding the button doesn't grant or deny anything by itself, `GET`/`PATCH /api/ai/settings` re-check on every request.
+Both are **system-admin only** (`is_system_admin`, not any workspace role — PROJECT_PLAN.md Section 11's 2026-07-17 security-hardening entry; see scripts/grant-system-admin.mjs for how to provision one). Being OWNER/MANAGER of a workspace is not enough, and does not need to be — that only unlocks the hub's separate "Manage Users" row. This is a client-side convenience only — hiding the rows doesn't grant or deny anything by itself, `GET`/`PATCH /api/ai/settings` and `GET /api/audit/logs`/`POST /api/audit/verify` all re-check `is_system_admin` server-side on every request.
 
 ### `GET /api/ai/settings` shows `"healthy": false`
 

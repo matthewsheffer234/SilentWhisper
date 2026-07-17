@@ -13,13 +13,12 @@ import { ValidationError, ConflictError, NotFoundError, ForbiddenError } from '.
 
 // System-admin-only account lifecycle (FEATURE_REQUEST.md entry 1, slice 4,
 // SLICE_4_PLAN.md §4.3). Every route here is gated by a direct
-// isSystemAdminUser check, not requireSystemPermission's OR-fallback — see
-// that function's own comment in membershipService.js: the fallback exists
-// narrowly to avoid locking out pre-existing workspace admins from
-// AI-settings/audit during slice 1's transition, and extending it to
-// "any workspace admin creates/disables any account" would be a real,
-// unintended privilege widening (the same reasoning organizations.js's
-// POST / and workspaces.js's GET /admin/all already use).
+// isSystemAdminUser check, not a workspace-role-based fallback — the same
+// direct-check pattern requireSystemAdmin now uses for AI settings/audit too
+// (Security.md, 2026-07-15, HIGH finding removed the OR-fallback those two
+// used to have). "Any workspace admin creates/disables any account" would
+// be a real, unintended privilege widening (the same reasoning
+// organizations.js's POST / and workspaces.js's GET /admin/all already use).
 export const adminRouter = Router();
 
 adminRouter.use(requireAuth);

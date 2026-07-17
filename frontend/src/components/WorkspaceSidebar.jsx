@@ -247,7 +247,7 @@ export default function WorkspaceSidebar({
   onSelectChannel,
   onJoinChannel,
   onLogout,
-  canManageAi,
+  canManageWorkspaceUsers,
   onNavigateToSearchResult,
   onOpenChangePassword,
   onOpenDisplayName,
@@ -322,10 +322,12 @@ export default function WorkspaceSidebar({
 
   // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: the Admin
   // hub is worth showing if the caller has *any* of the privileged
-  // capabilities it groups — workspace-scoped user admin/AI/audit
-  // (canManageAi), managing at least one organization, or system admin.
+  // capabilities it groups — workspace-scoped user admin
+  // (canManageWorkspaceUsers), managing at least one organization, or
+  // system admin (which alone also unlocks the hub's AI Settings/Audit Log
+  // rows — see AdminPanel.jsx).
   const canManageAnyOrg = organizations.some((org) => hasOrgManagementAccess(isSystemAdmin, org.role));
-  const showAdminButton = canManageAi || canManageAnyOrg || isSystemAdmin;
+  const showAdminButton = canManageWorkspaceUsers || canManageAnyOrg || isSystemAdmin;
 
   const userMenuItems = [
     {

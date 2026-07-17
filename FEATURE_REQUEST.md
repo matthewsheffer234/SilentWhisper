@@ -27,24 +27,27 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-### 1. Security hardening from 2026-07-15 audit
+### 1. Security hardening from 2026-07-15 audit — remaining Medium/Low items
 
 **Status**: Proposed
-**Utility**: Critical. This closes the highest-risk findings from `Security.md`: global authorization overreach, cross-workspace channel membership injection, disabled-account access windows, provider SSRF/DoS risk, stale invitation redemption, and avoidable WebSocket/group-DM DoS edges.
-**Origin**: Requested after the Principal AppSec review was written to `Security.md` on 2026-07-15. Prioritized above product features because two findings are High severity authorization vulnerabilities and several Medium findings affect account lifecycle or backend availability.
+**Utility**: Critical. Closes the remaining findings from `Security.md`: disabled-account access windows, provider SSRF/DoS risk, stale invitation redemption, and avoidable WebSocket/group-DM DoS edges. The two High-severity authorization findings from the same audit (global admin boundary, cross-workspace channel-member injection) are already fixed — see "Security hardening: global admin boundary and cross-workspace channel-member injection" under Done, below.
+**Origin**: Requested after the Principal AppSec review was written to `Security.md` on 2026-07-15.
 
 Design:
-- **Global admin boundary**: replace `requireSystemPermission`'s "system admin OR OWNER/MANAGER in any workspace" fallback for unscoped global surfaces with a direct `is_system_admin` gate. At minimum, `GET /api/audit/logs`, `POST /api/audit/verify`, `GET /api/ai/settings`, and `PATCH /api/ai/settings` must require system-admin status. If workspace owners/managers still need audit visibility, add a separate workspace-scoped audit endpoint whose query is filtered to authorized workspace ids and excludes global/system metadata; do not reuse the current global audit endpoint.
-- **Cross-workspace channel-member injection fix**: update `POST /api/workspaces/:workspaceId/channels/:channelId/members` so it proves `channel.workspace_id === workspaceId` after `requireChannelMember`, then uses `channel.workspace_id` for `requireWorkspaceNotArchived` and the target user's `workspace_members` lookup. A mismatched workspace/channel pair should fail without inserting `channel_members`.
 - **Disabled-account enforcement**: make `requireAuth` status-aware by checking `users.status === 'ACTIVE'` after JWT verification. Mirror the same check in WebSocket `handleAuthenticate`, including re-authentication frames, and close/reject inactive users with the same generic invalid-token behavior. Consider adding a connection-registry helper to disconnect all active sockets for a user at disable-time, so admin disable takes effect immediately rather than waiting for token expiry.
 - **LLM provider SSRF/DoS control**: treat `llm.baseUrl` as an allowlisted provider origin, not an arbitrary admin-supplied URL. Add an `ALLOWED_LLM_ORIGINS` env var or equivalent config, normalize `baseUrl` to an origin, and reject loopback/link-local/private metadata targets unless explicitly listed. Keep network egress restricted at the container/network layer where possible. This also reduces global AI outage risk from accidentally pointing the provider at a blackhole or unrelated internal service.
 - **Archived invitation redemption**: in `POST /api/invitations/:token/accept`, after row-locking the invitation and before creating the user, re-check that the target workspace or organization still exists and is not archived. Return the same generic "Invitation not found" response for archived/revoked/expired/nonexistent cases from this public endpoint.
 - **WebSocket payload cap**: add a configurable `WS_MAX_PAYLOAD_BYTES` with a conservative default such as 32 KiB and pass it to `new WebSocketServer({ maxPayload })`. Close malformed unauthenticated frames after sending the error so unauthenticated clients cannot repeatedly force large JSON parsing work.
 - **Group DM member cap**: add a product-level maximum for `memberIds` in `POST /api/group-direct-messages`, e.g. 20 users, before UUID validation/database lookup. This is a low-severity authenticated DoS hardening item but cheap to close with the rest.
-- **Audit and compatibility**: global admin-boundary tightening is a deliberate behavior change. Document it in `PROJECT_PLAN.md` Section 11 when shipped. Existing audit event types can remain; add new audit rows only for any new admin-scoped endpoint introduced, not for ordinary denied attempts.
-- **Tests**: add backend tests proving ordinary workspace owners/managers cannot access global audit/AI settings; system admins still can; mismatched workspace/channel member-add fails and does not create membership; disabled users cannot use REST or WS with still-unexpired access tokens; archived workspace/org invitations cannot be redeemed; oversized WebSocket frames are rejected; oversized group-DM member arrays 400. Regression-run existing auth, admin, workspace, invitations, WebSocket, audit, AI settings, and mention notification tests.
+- **Tests**: add backend tests proving disabled users cannot use REST or WS with still-unexpired access tokens; archived workspace/org invitations cannot be redeemed; oversized WebSocket frames are rejected; oversized group-DM member arrays 400.
 
 ## Done
+
+### Security hardening: global admin boundary and cross-workspace channel-member injection
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Security hardening: global admin boundary and cross-workspace channel-member injection" (2026-07-17).
+
+Fixes the two High-severity findings from `Security.md`'s 2026-07-15 review. `requireSystemPermission`'s "system admin OR OWNER/MANAGER in any workspace" fallback for `GET /api/audit/logs`, `POST /api/audit/verify`, `GET /api/ai/settings`, and `PATCH /api/ai/settings` is replaced by a direct `requireSystemAdmin` (`is_system_admin`-only) gate — self-service workspace creation, which grants OWNER automatically, no longer grants any access to these global, non-workspace-scoped surfaces. `POST /api/workspaces/:workspaceId/channels/:channelId/members` now proves `channel.workspace_id === workspaceId` before any target-membership check, using `channel.workspace_id` (not the path parameter) for the archived-workspace check and the target user's workspace-membership lookup — a mismatched workspace/channel pair 400s without inserting `channel_members`. Frontend `AdminPanel.jsx`'s "AI Settings"/"Audit Log" rows moved from the workspace-admin-gated group to the system-admin-only group (alongside "System Admin"); "Manage Users" stays workspace-scoped, since `UserManagementPanel` enforces its own per-workspace permission server-side regardless.
 
 ### Cross-channel "Catch Me Up" workspace digests
 

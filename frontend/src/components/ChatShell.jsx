@@ -7,7 +7,7 @@ import * as organizationsApi from '../api/organizations.js';
 import * as notificationsApi from '../api/notifications.js';
 import * as directMessagesApi from '../api/directMessages.js';
 import * as entitiesApi from '../api/entities.js';
-import { PERMISSIONS, hasPermission, hasSystemPermission, hasOrgManagementAccess } from '../authz/permissions.js';
+import { PERMISSIONS, hasPermission, hasAnyWorkspaceAdminAccess, hasOrgManagementAccess } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
 import WorkspaceHome from './WorkspaceHome.jsx';
@@ -626,12 +626,14 @@ export default function ChatShell() {
   const selectedChannel =
     channels.find((c) => c.id === selectedChannelId) ??
     (selectedDirectMessage ? toChannelViewShape(selectedDirectMessage) : null);
-  // The AI settings surface is admin-only (PROJECT_PLAN.md Section 6); the
-  // backend gates it on "system admin, or OWNER/MANAGER in at least one
-  // workspace" (see requireSystemPermission's doc comment), so the entry
-  // point mirrors that same rule rather than the currently-selected
-  // workspace's role.
-  const canManageAi = hasSystemPermission(user?.isSystemAdmin, workspaces, PERMISSIONS.AI_SETTINGS_MANAGE);
+  // Workspace-scoped admin access (Admin hub's "Manage Users" row only) —
+  // is_system_admin OR OWNER/MANAGER in at least one workspace. AI Settings
+  // and Audit Log are separate, global surfaces gated directly on
+  // isSystemAdmin below (Security.md, 2026-07-15, HIGH finding: they used
+  // to share this same OR-fallback, letting self-service workspace
+  // ownership grant access to global surfaces too — see AdminPanel.jsx and
+  // requireSystemAdmin's backend doc comment).
+  const canManageWorkspaceUsers = hasAnyWorkspaceAdminAccess(user?.isSystemAdmin, workspaces);
   // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: the Admin
   // hub's "Manage Organization" row is worth showing if the caller manages
   // *any* organization, not just the currently-selected one (OrgManagementPanel
@@ -672,7 +674,7 @@ export default function ChatShell() {
         onSelectChannel={selectChannel}
         onJoinChannel={handleJoinChannel}
         onLogout={logout}
-        canManageAi={canManageAi}
+        canManageWorkspaceUsers={canManageWorkspaceUsers}
         onNavigateToSearchResult={handleNavigateToSearchResult}
         onOpenChangePassword={() => setChangePasswordOpen(true)}
         onOpenDisplayName={() => setDisplayNameOpen(true)}
@@ -822,7 +824,7 @@ export default function ChatShell() {
       {adminPanelOpen && (
         <AdminPanel
           onClose={() => setAdminPanelOpen(false)}
-          canManageAi={canManageAi}
+          canManageWorkspaceUsers={canManageWorkspaceUsers}
           canManageOrg={canManageOrg}
           isSystemAdmin={Boolean(user?.isSystemAdmin)}
           onOpenUserManagement={() => setUserManagementOpen(true)}

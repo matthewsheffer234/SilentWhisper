@@ -28,8 +28,11 @@ export const PERMISSIONS = {
   // New, slice 4 (gap-fill): OWNER only. Consumed only by
   // POST /:workspaceId/settings, the only setter for managers_can_archive.
   WORKSPACE_MANAGE_SETTINGS: 'WORKSPACE_MANAGE_SETTINGS',
-  AI_SETTINGS_MANAGE: 'AI_SETTINGS_MANAGE',
-  AUDIT_VIEW: 'AUDIT_VIEW',
+  // AI_SETTINGS_MANAGE/AUDIT_VIEW deliberately removed (Security.md,
+  // 2026-07-15, HIGH finding): those two global surfaces are gated directly
+  // on is_system_admin via requireSystemAdmin now, not a role-map
+  // permission, so a permission constant for them would be unused — same
+  // reasoning this file already gives for omitting USERS_*/ORGS_VIEW_ALL/etc.
   ORG_INVITE: 'ORG_INVITE',
   ORG_MANAGE_MEMBERS: 'ORG_MANAGE_MEMBERS',
 };

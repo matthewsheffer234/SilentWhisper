@@ -5,10 +5,10 @@ import { getAiSettings, updateAiSettings } from '../api/ai.js';
 // PROJECT_PLAN.md Section 6: "Admins can inspect the active provider, model,
 // timeout, token limits, streaming support, and prompt versions" and "Admins
 // can update non-secret LLM settings later without rebuilding the frontend."
-// Gated server-side (requireSystemPermission) — this component is only ever
-// rendered for a user ChatShell has already determined is OWNER/MANAGER of
-// at least one workspace (or a system admin), but the backend enforces it
-// regardless. Uses the shared Sheet primitive (FEATURE_REQUEST.md's
+// Gated server-side (requireSystemAdmin, is_system_admin only — Security.md,
+// 2026-07-15, HIGH finding) — this component is only ever rendered for a
+// user ChatShell has already determined is a system admin, but the backend
+// enforces it regardless. Uses the shared Sheet primitive (FEATURE_REQUEST.md's
 // "standard modal/sheet component" entry).
 
 const styles = {

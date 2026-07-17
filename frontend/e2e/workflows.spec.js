@@ -740,6 +740,10 @@ test.describe('AI features (real Ollama inference — allow extra time)', () => 
 test.describe('admin surfaces', () => {
   test('AI settings panel: view health, edit, and save', async ({ page }) => {
     const seeded = await seedUserWithChannel('aiadmin');
+    // Security.md, 2026-07-15, HIGH finding: AI settings is gated on
+    // is_system_admin only now, not "OWNER/MANAGER of any workspace" — a
+    // plain seeded workspace owner can no longer reach it.
+    await promoteToSystemAdmin(seeded.userId);
     await loginViaUi(page, seeded.username, seeded.password);
 
     // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: AI
@@ -762,6 +766,10 @@ test.describe('admin surfaces', () => {
 
   test('audit dashboard: view recent events and verify chain integrity', async ({ page }) => {
     const seeded = await seedUserWithChannel('auditadmin');
+    // Security.md, 2026-07-15, HIGH finding: the audit dashboard is gated on
+    // is_system_admin only now, not "OWNER/MANAGER of any workspace" — a
+    // plain seeded workspace owner can no longer reach it.
+    await promoteToSystemAdmin(seeded.userId);
     await loginViaUi(page, seeded.username, seeded.password);
 
     await openAdminPanelItem(page, 'Audit Log');
@@ -1477,18 +1485,24 @@ test.describe('admin user management', () => {
     await page.click('button:has-text("Sign In")');
     await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
     // The role promotion took effect: this account is now a MANAGER and
-    // sees the same admin-only controls the original admin does — the
-    // "Admin" user-menu entry itself (canManageAi-gated via
-    // requireSystemPermission's OWNER/MANAGER-of-any-workspace fallback),
-    // not a bare button for each individual tool. It must not see "System
-    // Admin" though — that row is gated on isSystemAdmin specifically,
-    // which this account never held.
+    // sees the "Admin" user-menu entry itself (canManageWorkspaceUsers-gated
+    // — OWNER/MANAGER of at least one workspace), not a bare button for each
+    // individual tool. It must not see "System Admin" (or, inside the hub,
+    // AI Settings/Audit Log) though — those rows are gated on isSystemAdmin
+    // specifically (Security.md, 2026-07-15, HIGH finding), which this
+    // account never held.
     await page.click('button[aria-label="User menu"]');
     await expect(page.locator('[role="menuitem"]:has-text("Admin")')).toBeVisible({ timeout: 10_000 });
     await page.click('[role="menuitem"]:has-text("Admin")');
     const adminDialog = page.getByRole('dialog', { name: 'admin', exact: true });
     await expect(adminDialog).toBeVisible({ timeout: 10_000 });
     await expect(adminDialog.locator('button:has-text("System Admin")')).not.toBeVisible();
+    // Security.md, 2026-07-15, HIGH finding regression: a workspace
+    // MANAGER (not a system admin) must not see the global AI
+    // Settings/Audit Log rows either — they used to share the same
+    // OR-fallback "System Admin" now correctly excludes this account from.
+    await expect(adminDialog.locator('button:has-text("AI Settings")')).not.toBeVisible();
+    await expect(adminDialog.locator('button:has-text("Audit Log")')).not.toBeVisible();
   });
 });
 
@@ -2017,6 +2031,10 @@ test.describe('menus (Apple HIG overhaul: pull-down buttons + progressive disclo
 
   test('the Admin hub opens the same three existing panels', async ({ page }) => {
     const seeded = await seedUserWithChannel('menuadmin');
+    // AI Settings/Audit Log are is_system_admin-gated now (Security.md,
+    // 2026-07-15, HIGH finding); Manage Users stays workspace-owner-gated
+    // and this user owns the workspace seedUserWithChannel created either way.
+    await promoteToSystemAdmin(seeded.userId);
     await loginViaUi(page, seeded.username, seeded.password);
 
     await openAdminPanelItem(page, 'AI Settings');

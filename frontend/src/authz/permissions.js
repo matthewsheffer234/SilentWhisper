@@ -1,5 +1,5 @@
 // Mirrors backend/src/authz/permissions.js and membershipService.js's
-// requireWorkspacePermission/requireOrgPermission/requireSystemPermission.
+// requireWorkspacePermission/requireOrgPermission/requireSystemAdmin.
 // No shared-code mechanism exists between frontend and backend in this repo
 // (no monorepo/workspaces config) — kept in sync by hand, reviewed together
 // in the same commit. This file only ever controls what the UI *offers*;
@@ -19,8 +19,11 @@ export const PERMISSIONS = {
   WORKSPACE_CHANGE_VISIBILITY: 'WORKSPACE_CHANGE_VISIBILITY',
   // New, slice 4: OWNER only.
   WORKSPACE_MANAGE_SETTINGS: 'WORKSPACE_MANAGE_SETTINGS',
-  AI_SETTINGS_MANAGE: 'AI_SETTINGS_MANAGE',
-  AUDIT_VIEW: 'AUDIT_VIEW',
+  // AI_SETTINGS_MANAGE/AUDIT_VIEW deliberately removed (Security.md,
+  // 2026-07-15, HIGH finding): those two global surfaces are gated on
+  // is_system_admin only now, not a role-map permission — see
+  // ChatShell.jsx's isSystemAdmin usage for AdminPanel's AI Settings/Audit
+  // Log rows.
   ORG_INVITE: 'ORG_INVITE',
   ORG_MANAGE_MEMBERS: 'ORG_MANAGE_MEMBERS',
 };
@@ -61,17 +64,21 @@ export function hasOrgPermission(role, permission) {
 // (a real gap found while wiring the org switcher: without this OR-
 // fallback, a system admin could never open org management for any org
 // except one they'd just created in the same session, whose role is known
-// locally from the POST response instead of a refetch). Mirrors
-// hasSystemPermission's OR-fallback shape.
+// locally from the POST response instead of a refetch).
 export function hasOrgManagementAccess(isSystemAdmin, role) {
   return isSystemAdmin || hasOrgPermission(role, PERMISSIONS.ORG_MANAGE_MEMBERS);
 }
 
-// Mirrors requireSystemPermission's OR-fallback exactly: system admin OR
-// OWNER/MANAGER of at least one workspace. `permission` is unused today on
-// the backend too (kept for signature parity, so a future backend
-// tightening doesn't require an untraceable frontend rewrite).
-export function hasSystemPermission(isSystemAdmin, workspaces, _permission) {
+// Gates the Admin hub's workspace-scoped "Manage Users" entry point only —
+// UserManagementPanel is per-workspace (requireWorkspacePermission
+// server-side), unlike AI Settings/Audit Log, which are global surfaces now
+// gated directly on isSystemAdmin (Security.md, 2026-07-15, HIGH finding:
+// the old shared "system admin OR OWNER/MANAGER of any workspace" check let
+// self-service workspace ownership grant access to those two global
+// surfaces as well — see requireSystemAdmin's backend doc comment). A
+// system admin with no workspace memberships of their own still sees this
+// entry point so they aren't locked out of workspace user administration.
+export function hasAnyWorkspaceAdminAccess(isSystemAdmin, workspaces) {
   if (isSystemAdmin) return true;
   return workspaces.some((ws) => ws.role === 'OWNER' || ws.role === 'MANAGER');
 }

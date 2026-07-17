@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { requireSystemPermission } from '../authz/membershipService.js';
-import { PERMISSIONS } from '../authz/permissions.js';
+import { requireSystemAdmin } from '../authz/membershipService.js';
 import { appendAuditEvent, verifyAuditChain } from '../audit/auditService.js';
 import { assertBoundedInt } from '../validation.js';
 
@@ -20,13 +19,13 @@ const MAX_LIMIT = 200;
 // an audited action." — every page of the dashboard a caller loads inserts
 // its own `AUDIT_DASHBOARD_ACCESSED` row, not just a one-time "dashboard
 // opened" event, since each call is a fresh read of potentially sensitive
-// metadata (e.g. who was added to a private channel). Gated on AUDIT_VIEW —
-// the same system-admin / OWNER-or-MANAGER-of-any-workspace rule Phase 4
-// established for the AI settings surface — see requireSystemPermission's
-// doc comment.
+// metadata (e.g. who was added to a private channel). Gated on
+// is_system_admin only (Security.md, 2026-07-15, HIGH finding) — this
+// global surface has no per-workspace scoping, so no workspace role can
+// grant it.
 auditRouter.get('/audit/logs', async (req, res, next) => {
   try {
-    const { viaSystemAdminOverride } = await requireSystemPermission(db, req.user.id, PERMISSIONS.AUDIT_VIEW);
+    const { viaSystemAdminOverride } = await requireSystemAdmin(db, req.user.id);
 
     const limit =
       req.query.limit !== undefined ? assertBoundedInt(req.query.limit, { min: 1, max: MAX_LIMIT }, 'limit') : DEFAULT_LIMIT;
@@ -79,7 +78,7 @@ auditRouter.get('/audit/logs', async (req, res, next) => {
 // verification attempts").
 auditRouter.post('/audit/verify', async (req, res, next) => {
   try {
-    const { viaSystemAdminOverride } = await requireSystemPermission(db, req.user.id, PERMISSIONS.AUDIT_VIEW);
+    const { viaSystemAdminOverride } = await requireSystemAdmin(db, req.user.id);
 
     const result = await verifyAuditChain(db);
 

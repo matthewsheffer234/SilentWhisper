@@ -127,3 +127,74 @@ describe('GET /workspaces/:workspaceId/channels/:channelId/members', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// Security.md, 2026-07-15, HIGH: "Cross-Workspace Channel Membership
+// Injection" — the route used to validate the caller against `channelId`
+// but the *target's* workspace membership against the independent
+// `workspaceId` path parameter, never checking the two belonged together.
+describe('POST /workspaces/:workspaceId/channels/:channelId/members', () => {
+  test('adds an existing workspace member to the channel', async () => {
+    const owner = await signup('chanaddowner0');
+    const member = await signup('chanaddmember0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, member);
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: member.username });
+    expect(res.status).toBe(204);
+
+    const row = await db('channel_members').where({ channel_id: channelId, user_id: member.userId }).first();
+    expect(row).toBeTruthy();
+  });
+
+  test('a channelId/workspaceId pair from different workspaces 400s and inserts nothing', async () => {
+    const ownerA = await signup('chaninjectownerA0');
+    const workspaceA = await createWorkspace(ownerA);
+    const channelA = await createChannel(ownerA, workspaceA, 'PRIVATE');
+
+    const ownerB = await signup('chaninjectownerB0');
+    const workspaceB = await createWorkspace(ownerB);
+    // The account being smuggled into channelA is a real member of
+    // workspaceB, not workspaceA — the pre-fix code would find this row
+    // under `workspaceId` (workspaceB, from the path) and let it through.
+    const targetInB = await signup('chaninjecttarget0');
+    await addToWorkspace(ownerB, workspaceB, targetInB);
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceB}/channels/${channelA}/members`)
+      .set(authHeader(ownerA.accessToken))
+      .send({ username: targetInB.username });
+    expect(res.status).toBe(400);
+
+    const row = await db('channel_members').where({ channel_id: channelA, user_id: targetInB.userId }).first();
+    expect(row).toBeFalsy();
+  });
+
+  test('a target user who is not a member of the channel’s actual workspace 400s, even if workspaceId in the path names a workspace they do belong to', async () => {
+    const ownerA = await signup('chaninjectownerA1');
+    const workspaceA = await createWorkspace(ownerA);
+    const channelA = await createChannel(ownerA, workspaceA, 'PRIVATE');
+
+    const ownerB = await signup('chaninjectownerB1');
+    const workspaceB = await createWorkspace(ownerB);
+    const targetInB = await signup('chaninjecttarget1');
+    await addToWorkspace(ownerB, workspaceB, targetInB);
+    // Attacker (ownerA) also happens to be a member of workspaceB, which is
+    // what makes `requireChannelMember`/`requireWorkspaceNotArchived` alone
+    // insufficient — only the explicit channel.workspace_id === workspaceId
+    // check catches this.
+    await addToWorkspace(ownerB, workspaceB, ownerA);
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceB}/channels/${channelA}/members`)
+      .set(authHeader(ownerA.accessToken))
+      .send({ username: targetInB.username });
+    expect(res.status).toBe(400);
+
+    const row = await db('channel_members').where({ channel_id: channelA, user_id: targetInB.userId }).first();
+    expect(row).toBeFalsy();
+  });
+});

@@ -2,8 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { requireChannelMember, requireSystemPermission, requireWorkspaceMember } from '../authz/membershipService.js';
-import { PERMISSIONS } from '../authz/permissions.js';
+import { requireChannelMember, requireSystemAdmin, requireWorkspaceMember } from '../authz/membershipService.js';
 import { appendAuditEvent } from '../audit/auditService.js';
 import { assertUuid, assertBoundedInt } from '../validation.js';
 import { NotFoundError, ValidationError } from '../errors.js';
@@ -19,13 +18,12 @@ export const aiRouter = Router();
 aiRouter.use(requireAuth);
 
 // Admin-only per PROJECT_PLAN.md Section 6 ("Admins can inspect the active
-// provider..."). Gated on AI_SETTINGS_MANAGE — a system admin, or OWNER/
-// MANAGER of at least one workspace (see requireSystemPermission's doc
-// comment for why, given app_settings has no per-workspace scoping of its
-// own).
+// provider..."). Gated on is_system_admin only (Security.md, 2026-07-15,
+// HIGH finding) — app_settings has no per-workspace scoping of its own, so
+// no workspace role can grant access to it.
 aiRouter.get('/ai/settings', async (req, res, next) => {
   try {
-    await requireSystemPermission(db, req.user.id, PERMISSIONS.AI_SETTINGS_MANAGE);
+    await requireSystemAdmin(db, req.user.id);
     const settings = await getEffectiveSettings(db);
     res.json({ ...settings, health: getHealthStatus() });
   } catch (err) {
@@ -35,7 +33,7 @@ aiRouter.get('/ai/settings', async (req, res, next) => {
 
 aiRouter.patch('/ai/settings', async (req, res, next) => {
   try {
-    const { viaSystemAdminOverride } = await requireSystemPermission(db, req.user.id, PERMISSIONS.AI_SETTINGS_MANAGE);
+    const { viaSystemAdminOverride } = await requireSystemAdmin(db, req.user.id);
     const patch = validateSettingsPatch(req.body ?? {});
     const settings = await updateSettings(db, patch, req.user.id);
 

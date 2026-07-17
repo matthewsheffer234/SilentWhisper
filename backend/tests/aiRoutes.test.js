@@ -4,7 +4,7 @@ import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { signup, authHeader } from './helpers/testUsers.js';
+import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 import { LLM_SETTING_KEYS, validateSettingsPatch, updateSettings } from '../src/llm/settingsService.js';
 
 // PROJECT_PLAN.md Section 8, Phase 4: "Add tests for ... authorization ...
@@ -55,7 +55,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
     expect(res.status).toBe(401);
   });
 
-  test('rejects a workspace member who is not OWNER/MANAGER of any workspace', async () => {
+  test('rejects a plain workspace member', async () => {
     const admin = await signup('aiadmin0');
     const member = await signup('aimember0');
     const workspaceId = await createWorkspace(admin);
@@ -65,9 +65,22 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
     expect(res.status).toBe(403);
   });
 
-  test('allows a workspace OWNER to read settings, including health status', async () => {
-    const admin = await signup('aiadmin1');
-    await createWorkspace(admin);
+  // Security.md, 2026-07-15, HIGH: "Self-Service Workspace Ownership Grants
+  // Global Audit/AI Administration" — a workspace OWNER used to be able to
+  // read/update global AI settings via requireSystemPermission's OR-fallback,
+  // even without is_system_admin. That fallback is removed; being OWNER of a
+  // workspace (self-service, anyone can do it via POST /api/workspaces)
+  // must no longer grant access to this global, unscoped surface.
+  test('rejects a workspace OWNER who is not a system admin', async () => {
+    const owner = await signup('aiadmin1');
+    await createWorkspace(owner);
+
+    const res = await request(app).get('/api/ai/settings').set(authHeader(owner.accessToken));
+    expect(res.status).toBe(403);
+  });
+
+  test('a system admin can read settings, including health status', async () => {
+    const admin = await seedSystemAdmin('aisysadmin0');
 
     const res = await request(app).get('/api/ai/settings').set(authHeader(admin.accessToken));
     expect(res.status).toBe(200);
@@ -76,9 +89,8 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
     expect(res.body.apiKey).toBeUndefined();
   });
 
-  test('a workspace OWNER can update non-secret settings, and it is audited', async () => {
-    const admin = await signup('aiadmin2');
-    await createWorkspace(admin);
+  test('a system admin can update non-secret settings, and it is audited', async () => {
+    const admin = await seedSystemAdmin('aisysadmin1');
 
     const res = await request(app)
       .patch('/api/ai/settings')
@@ -95,8 +107,7 @@ describe('GET/PATCH /api/ai/settings authorization', () => {
   });
 
   test('rejects an update with an unknown field or invalid value', async () => {
-    const admin = await signup('aiadmin3');
-    await createWorkspace(admin);
+    const admin = await seedSystemAdmin('aisysadmin2');
 
     const badField = await request(app)
       .patch('/api/ai/settings')

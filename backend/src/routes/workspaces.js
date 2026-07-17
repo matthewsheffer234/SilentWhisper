@@ -185,13 +185,14 @@ workspacesRouter.get('/', async (req, res, next) => {
 // workspace regardless of membership, across every organization. Mounted
 // ahead of the /:workspaceId routes below (matching how /discoverable is
 // already ordered ahead of them) so "admin" is never mistaken for a
-// :workspaceId value by assertUuid. Direct isSystemAdminUser gate, not
-// requireSystemPermission's OR-fallback — same reasoning as
-// organizations.js's POST / and admin.js: the fallback exists narrowly for
-// AI-settings/audit continuity, and extending it to "see every
-// account/workspace across every organization" would be an unintended
-// cross-tenant information-disclosure widening. Read-only — no mutating
-// actions wired to it this slice.
+// :workspaceId value by assertUuid. Direct isSystemAdminUser gate, not a
+// workspace-role-based fallback — same reasoning as organizations.js's
+// POST / and admin.js: "see every account/workspace across every
+// organization" would be an unintended cross-tenant information-disclosure
+// widening if granted to any workspace OWNER/MANAGER (the same class of
+// widening Security.md's 2026-07-15 HIGH finding flagged for AI
+// settings/audit, which used to have exactly that fallback). Read-only —
+// no mutating actions wired to it this slice.
 workspacesRouter.get('/admin/all', async (req, res, next) => {
   try {
     if (!(await isSystemAdminUser(db, req.user.id))) {
@@ -1188,18 +1189,34 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/members', async (req, r
     const username = assertUsername(req.body?.username);
 
     // Caller must already belong to the channel to add someone else to it.
-    await requireChannelMember(db, req.user.id, channelId);
-    await requireWorkspaceNotArchived(db, workspaceId);
+    const channel = await requireChannelMember(db, req.user.id, channelId);
+    // Bind the path parameters together before any target-membership check
+    // (Security.md, 2026-07-15, HIGH: "Cross-Workspace Channel Membership
+    // Injection") — without this, a caller could pass an unrelated
+    // workspaceId where their *other* account holds membership, and that
+    // account's workspace-B membership would satisfy the target-membership
+    // check below for a channel that actually belongs to workspace A,
+    // granting access to a private channel without ever joining its real
+    // workspace. Same check the sibling GET .../members roster route above
+    // already makes.
+    if (channel.workspace_id !== workspaceId) {
+      throw new ValidationError('Channel not found in this workspace');
+    }
+    await requireWorkspaceNotArchived(db, channel.workspace_id);
 
     const targetUser = await db('users').where({ username }).first('id', 'username');
     if (!targetUser) {
       throw new ValidationError('No user with that username exists');
     }
 
-    // Target must already belong to the workspace — this endpoint adds an
-    // existing workspace member to a channel, not a stranger to the workspace.
+    // Target must already belong to the *channel's actual* workspace — this
+    // endpoint adds an existing workspace member to a channel, not a
+    // stranger to the workspace. Uses channel.workspace_id, not the path
+    // parameter, now that the two are confirmed equal above; kept explicit
+    // rather than reusing workspaceId so a future edit can't silently
+    // reintroduce the same binding gap.
     const targetRole = await db('workspace_members')
-      .where({ workspace_id: workspaceId, user_id: targetUser.id })
+      .where({ workspace_id: channel.workspace_id, user_id: targetUser.id })
       .first();
     if (!targetRole) {
       throw new ValidationError('Target user is not a member of this workspace');

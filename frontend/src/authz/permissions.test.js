@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { PERMISSIONS, hasPermission, hasOrgPermission, hasSystemPermission, hasOrgManagementAccess } from './permissions.js';
+import { PERMISSIONS, hasPermission, hasOrgPermission, hasAnyWorkspaceAdminAccess, hasOrgManagementAccess } from './permissions.js';
 
 // FEATURE_REQUEST.md entry 1, slice 3. Pure-function tests only (no jsdom
 // in this frontend's Vitest setup — same reason ThemeContext.test.jsx only
@@ -74,24 +74,24 @@ describe('hasOrgManagementAccess', () => {
   });
 });
 
-describe('hasSystemPermission', () => {
+describe('hasAnyWorkspaceAdminAccess', () => {
   test('a system admin always passes, even with no workspace memberships', () => {
-    expect(hasSystemPermission(true, [])).toBe(true);
+    expect(hasAnyWorkspaceAdminAccess(true, [])).toBe(true);
   });
 
   test('a non-system-admin with an OWNER workspace membership passes', () => {
-    expect(hasSystemPermission(false, [{ role: 'OWNER' }])).toBe(true);
+    expect(hasAnyWorkspaceAdminAccess(false, [{ role: 'OWNER' }])).toBe(true);
   });
 
   test('a non-system-admin with a MANAGER workspace membership passes', () => {
-    expect(hasSystemPermission(false, [{ role: 'MANAGER' }])).toBe(true);
+    expect(hasAnyWorkspaceAdminAccess(false, [{ role: 'MANAGER' }])).toBe(true);
   });
 
   test('a non-system-admin with only MEMBER workspace memberships fails', () => {
-    expect(hasSystemPermission(false, [{ role: 'MEMBER' }])).toBe(false);
+    expect(hasAnyWorkspaceAdminAccess(false, [{ role: 'MEMBER' }])).toBe(false);
   });
 
   test('a non-system-admin with no workspace memberships fails', () => {
-    expect(hasSystemPermission(false, [])).toBe(false);
+    expect(hasAnyWorkspaceAdminAccess(false, [])).toBe(false);
   });
 });

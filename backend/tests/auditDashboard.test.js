@@ -4,7 +4,7 @@ import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { appendAuditEvent, verifyAuditChain } from '../src/audit/auditService.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { signup, authHeader } from './helpers/testUsers.js';
+import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 
 // PROJECT_PLAN.md Section 8, Phase 5: the admin audit dashboard, and the
 // verification logic it shares with the standalone /scripts CLI tool.
@@ -91,12 +91,22 @@ describe('GET /api/audit/logs', () => {
     expect(res.status).toBe(403);
   });
 
-  test('an OWNER sees existing audit events, newest first, and the access itself is audited', async () => {
-    const admin = await signup('auditadmin1');
-    // Seeding via signup() is a direct DB insert (FEATURE_REQUEST.md entry
-    // 1, slice 4: self-service signup is closed) and produces no audit row
-    // of its own — two workspace creations give two WORKSPACE_CREATED rows
-    // to assert ordering over.
+  // Security.md, 2026-07-15, HIGH: "Self-Service Workspace Ownership Grants
+  // Global Audit/AI Administration" — creating a workspace (self-service,
+  // open to any authenticated user) used to grant global audit-log access
+  // via the OWNER/MANAGER OR-fallback. It no longer does.
+  test('rejects a workspace OWNER who is not a system admin', async () => {
+    const owner = await signup('auditownernotadmin0');
+    await createWorkspace(owner);
+
+    const res = await request(app).get('/api/audit/logs').set(authHeader(owner.accessToken));
+    expect(res.status).toBe(403);
+  });
+
+  test('a system admin sees existing audit events, newest first, and the access itself is audited', async () => {
+    const admin = await seedSystemAdmin('auditadmin1');
+    // Two workspace creations give two WORKSPACE_CREATED rows to assert
+    // ordering over.
     await createWorkspace(admin);
     await createWorkspace(admin);
 
@@ -119,7 +129,7 @@ describe('GET /api/audit/logs', () => {
   });
 
   test('paginates with beforeId and respects limit', async () => {
-    const admin = await signup('auditadmin2');
+    const admin = await seedSystemAdmin('auditadmin2');
     await createWorkspace(admin);
     for (let i = 0; i < 5; i += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -139,7 +149,7 @@ describe('GET /api/audit/logs', () => {
   });
 
   test('rejects an out-of-range limit', async () => {
-    const admin = await signup('auditadmin3');
+    const admin = await seedSystemAdmin('auditadmin3');
     await createWorkspace(admin);
     const res = await request(app).get('/api/audit/logs?limit=99999').set(authHeader(admin.accessToken));
     expect(res.status).toBe(400);
@@ -153,8 +163,16 @@ describe('POST /api/audit/verify', () => {
     expect(res.status).toBe(403);
   });
 
-  test('an OWNER gets a verified result and it is audited as AUDIT_VERIFICATION_ATTEMPTED', async () => {
-    const admin = await signup('auditadmin4');
+  test('rejects a workspace OWNER who is not a system admin', async () => {
+    const owner = await signup('auditownernotadmin1');
+    await createWorkspace(owner);
+
+    const res = await request(app).post('/api/audit/verify').set(authHeader(owner.accessToken));
+    expect(res.status).toBe(403);
+  });
+
+  test('a system admin gets a verified result and it is audited as AUDIT_VERIFICATION_ATTEMPTED', async () => {
+    const admin = await seedSystemAdmin('auditadmin4');
     await createWorkspace(admin);
 
     const res = await request(app).post('/api/audit/verify').set(authHeader(admin.accessToken));
@@ -168,7 +186,7 @@ describe('POST /api/audit/verify', () => {
   });
 
   test('reports verified: false after a row is tampered with directly in the database', async () => {
-    const admin = await signup('auditadmin5');
+    const admin = await seedSystemAdmin('auditadmin5');
     await createWorkspace(admin);
     const row = await db('audit_logs').where({ action_type: 'WORKSPACE_CREATED' }).first();
     await adminDb('audit_logs').where({ id: row.id }).update({ actor_ip: '9.9.9.9' });

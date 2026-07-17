@@ -23,13 +23,11 @@ export const organizationsRouter = Router();
 
 organizationsRouter.use(requireAuth);
 
-// System-admin only — plain isSystemAdminUser check, deliberately not
-// requireSystemPermission (FEATURE_REQUEST.md entry 1, slice 2):
-// requireSystemPermission's OR-fallback (any workspace OWNER/MANAGER) exists
-// narrowly to avoid locking out existing workspace admins from AI-settings/
-// audit during slice 1's transition. Extending that fallback to "any
-// workspace admin can create an organization" would be a real, unintended
-// privilege widening, not a continuation of its purpose.
+// System-admin only — plain isSystemAdminUser check, deliberately not the
+// workspace-role-based OR-fallback requireSystemAdmin no longer has either
+// (Security.md, 2026-07-15, HIGH finding). "Any workspace admin can create
+// an organization" would be a real, unintended privilege widening, not a
+// continuation of any existing rule's purpose.
 organizationsRouter.post('/', async (req, res, next) => {
   try {
     if (!(await isSystemAdminUser(db, req.user.id))) {

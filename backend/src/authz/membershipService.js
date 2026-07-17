@@ -80,26 +80,20 @@ export async function requireWorkspacePermission(db, userId, workspaceId, permis
 }
 
 // System-wide surfaces (AI settings, audit dashboard) have no per-workspace
-// scoping of their own, so — same reasoning the old requireAnyWorkspaceAdmin
-// comment gave — access is granted to a system admin OR anyone who holds
-// OWNER/MANAGER in at least one workspace. The OR-fallback is a deliberate,
-// temporary widening: tightening this to is_system_admin-only would lock out
-// every current workspace admin immediately, since no is_system_admin
-// account is provisioned by this slice (see scripts/grant-system-admin.mjs).
-// Remove the fallback only once account provisioning (a later slice) makes
-// that safe — not part of this slice's scope.
-export async function requireSystemPermission(db, userId, _permission) {
-  if (await isSystemAdminUser(db, userId)) {
-    return { viaSystemAdminOverride: true };
+// scoping of their own. This used to also grant access to anyone who held
+// OWNER/MANAGER in at least one workspace (a deliberate, temporary widening
+// from when no is_system_admin account existed yet — see
+// scripts/grant-system-admin.mjs) — that OR-fallback let any user
+// self-escalate to global audit-log access and global AI-settings control
+// simply by creating a workspace (Security.md, 2026-07-15, HIGH: "Self-
+// Service Workspace Ownership Grants Global Audit/AI Administration").
+// Account provisioning now exists, so the fallback is removed: these
+// surfaces are is_system_admin-only, full stop.
+export async function requireSystemAdmin(db, userId) {
+  if (!(await isSystemAdminUser(db, userId))) {
+    throw new ForbiddenError('System admin privileges required');
   }
-  const row = await db('workspace_members')
-    .where({ user_id: userId })
-    .whereIn('system_role', ['OWNER', 'MANAGER'])
-    .first('workspace_id');
-  if (!row) {
-    throw new ForbiddenError('Workspace admin privileges required');
-  }
-  return { viaSystemAdminOverride: false };
+  return { viaSystemAdminOverride: true };
 }
 
 export async function getOrgRole(db, userId, organizationId) {
