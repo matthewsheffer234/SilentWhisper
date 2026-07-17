@@ -5,7 +5,9 @@ import App from './App.jsx';
 import InviteRedemptionPage from './components/InviteRedemptionPage.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { ThemeProvider, resolveTheme, applyTheme, THEME_STORAGE_KEY } from './context/ThemeContext.jsx';
-import './global.css';
+// global.css is linked directly in index.html's <head> (render-blocking,
+// so it applies before first paint) rather than imported here — see that
+// file's comment for why.
 
 // Applied synchronously, before the app renders, to minimize a
 // flash-of-wrong-theme for a returning user with a saved Light/Dark

@@ -574,6 +574,14 @@ Reuse this token system directly rather than redefining equivalent tokens under 
 
 Every implemented element is logged here as it lands, per-phase, with the files touched and what was actually verified (not just written) — so this section is a record of what's real, not a restatement of the roadmap above.
 
+### Fix: skip-link flash of unstyled content on page load (2026-07-17)
+
+User-reported: on every hard refresh, the "Skip to main content" skip link (Section 7's Apple HIG accessibility pass) briefly rendered as plain, visible black-on-surface text at the top of the page before disappearing off-screen. Root cause: `global.css` — which pushes `.sl-skip-link` out of the viewport via `transform: translateY(-150%)` until `:focus` — was loaded via `import './global.css'` inside `main.jsx`, a deferred JS module script. The browser paints the raw `index.html` body, including the unstyled anchor text, before that module finishes loading and Vite's dev-mode HMR client injects the corresponding `<style>` tag.
+
+Fix: `global.css` is now referenced as a `<link rel="stylesheet" href="/src/global.css">` directly in `index.html`'s `<head>`, with the `import './global.css'` removed from `main.jsx`. A `<head>`-level stylesheet link is render-blocking by default, so the CSS (including the skip-link's off-screen positioning) applies before first paint, in both Vite dev mode (confirmed Vite's dev server serves the file as raw `text/css` when requested with a stylesheet `Accept` header, not the JS-wrapped HMR module it serves for a `import`-style request) and a production `vite build` (confirmed the built `dist/index.html` gets a hashed `<link>` to the same, byte-identical CSS bundle — this was a load-order fix only, no content change).
+
+**Verification**: 65/65 frontend Vitest tests, `npx vite build` clean, `dist/index.html`'s emitted `<link>` inspected directly, and the dev server's raw-CSS response manually confirmed via `curl` with an explicit `Accept: text/css` header (matching what a browser's `<link rel="stylesheet">` request actually sends). Not independently verified: an actual browser screenshot of a hard refresh with no visible flash — no browser/screenshot tool was available in this session, so this rests on the above plus the mechanism being the standard, well-documented fix for this exact class of issue (deferred JS-injected CSS vs. `<head>`-level render-blocking `<link>`).
+
 ### Security hardening: global admin boundary and cross-workspace channel-member injection (2026-07-17)
 
 Fixes the two High-severity findings from `Security.md`'s 2026-07-15 review. `FEATURE_REQUEST.md` entry 1 is split: these two items move to Done; the remaining Medium/Low items (disabled-account enforcement, LLM base-URL SSRF/DoS allowlisting, archived-invitation redemption, WebSocket payload cap, group-DM member cap) stay Proposed under a narrowed entry 1.

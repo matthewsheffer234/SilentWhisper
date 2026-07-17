@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Silent Whisper</title>
+    <!-- Linked here, not imported from main.jsx, so the browser blocks
+         first paint on it — global.css is what pushes .sl-skip-link
+         off-screen (translateY(-150%) until :focus), and a JS-injected
+         stylesheet arrives after the initial paint, letting its plain,
+         unstyled text flash visibly on every hard refresh. -->
+    <link rel="stylesheet" href="/src/global.css" />
   </head>
   <body>
     <a href="#main" class="sl-skip-link">Skip to main content</a>
