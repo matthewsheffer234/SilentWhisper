@@ -9,7 +9,8 @@
     "load-test": "node load-test.mjs",
     "grant-system-admin": "node grant-system-admin.mjs",
     "create-first-admin": "node create-first-admin.mjs",
-    "clear-test-artifacts": "node clear-test-artifacts.mjs"
+    "clear-test-artifacts": "node clear-test-artifacts.mjs",
+    "seed-springfield-investigation": "node seed-springfield-investigation.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
