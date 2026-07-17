@@ -10,6 +10,11 @@ import { defineConfig } from '@playwright/test';
 // Tests / Integration Tests section), then run `npm run test:e2e`.
 export default defineConfig({
   testDir: './e2e',
+  // Operator's standing instruction: test artifacts get swept from the dev
+  // database after every run (scripts/clear-test-artifacts.mjs), never the
+  // audit log. Runs once after the whole suite, pass or fail — see
+  // e2e/globalTeardown.mjs.
+  globalTeardown: './e2e/globalTeardown.mjs',
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
