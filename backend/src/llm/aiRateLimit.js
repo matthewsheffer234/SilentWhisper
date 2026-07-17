@@ -41,3 +41,17 @@ export const semanticSearchRateLimiter = rateLimit({
   keyGenerator: (req) => `search:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// Cross-channel workspace digest (FEATURE_REQUEST.md entry 6): "a stricter
+// per-user digest rate limit because this endpoint can scan many channels
+// and run multiple prompt batches" than aiProxyRateLimiter above — a single
+// digest request does more selection/prompt work than one channel summary.
+export const aiDigestRateLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `digest:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

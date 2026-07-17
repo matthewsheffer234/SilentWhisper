@@ -108,6 +108,7 @@ export default function AiSettingsPanel({ onClose }) {
         streamingEnabled: Boolean(form.streamingEnabled),
         summaryPromptVersion: form.summaryPromptVersion,
         taskPromptVersion: form.taskPromptVersion,
+        digestPromptVersion: form.digestPromptVersion,
       };
       const updated = await updateAiSettings(patch);
       setSettings(updated);
@@ -253,6 +254,18 @@ export default function AiSettingsPanel({ onClose }) {
                   style={styles.input}
                   value={form.taskPromptVersion}
                   onChange={(e) => updateField('taskPromptVersion', e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div style={styles.row}>
+              <div style={{ ...styles.field, flex: 1 }}>
+                <label style={styles.label} htmlFor="ai-digest-version">Digest prompt version</label>
+                <input
+                  id="ai-digest-version"
+                  style={styles.input}
+                  value={form.digestPromptVersion}
+                  onChange={(e) => updateField('digestPromptVersion', e.target.value)}
                 />
               </div>
             </div>

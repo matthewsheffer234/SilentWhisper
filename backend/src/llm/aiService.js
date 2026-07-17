@@ -4,16 +4,19 @@ import { getAdapter } from './adapterFactory.js';
 import { tryAcquire, release } from './concurrencyGate.js';
 import { ServiceUnavailableError } from '../errors.js';
 
-// Shared by both AI routes (summarize, extract-tasks) so streaming, the
-// concurrency gate, and prompt truncation/versioning can never drift between
-// the two features (same principle Section 3 requires for authorization and
-// message creation, applied here). Writes the completion straight to `res`
-// as it streams — response headers carrying prompt metadata are set before
-// any body bytes go out, so the caller can always inspect them even though
-// the body itself is chunked plain text (PROJECT_PLAN.md Section 8, Phase 4:
-// "Render streamed or incremental AI text in the frontend when supported by
-// the backend route").
-export async function runStreamingCompletion({ db, res, promptBuilder, promptVersionField, messages }) {
+// Shared by all three AI routes (summarize, extract-tasks, workspace-digest)
+// so streaming, the concurrency gate, and prompt truncation/versioning can
+// never drift between them (same principle Section 3 requires for
+// authorization and message creation, applied here). Writes the completion
+// straight to `res` as it streams — response headers carrying prompt
+// metadata are set before any body bytes go out, so the caller can always
+// inspect them even though the body itself is chunked plain text
+// (PROJECT_PLAN.md Section 8, Phase 4: "Render streamed or incremental AI
+// text in the frontend when supported by the backend route"). `signal` is
+// optional and only passed by the workspace-digest route today (see
+// adapterInterface.js) — omitted, summarize/extract-tasks behave exactly as
+// before.
+export async function runStreamingCompletion({ db, res, promptBuilder, promptVersionField, messages, signal }) {
   const settings = await getEffectiveSettings(db);
 
   if (settings.provider === 'disabled') {
@@ -55,6 +58,7 @@ export async function runStreamingCompletion({ db, res, promptBuilder, promptVer
       settings: { ...settings, apiKey: config.llm.apiKey },
       prompt,
       onChunk,
+      signal,
     });
     if (!wroteViaChunk) {
       res.write(text);

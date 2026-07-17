@@ -11,6 +11,7 @@ import { PERMISSIONS, hasPermission, hasSystemPermission, hasOrgManagementAccess
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
 import WorkspaceHome from './WorkspaceHome.jsx';
+import WorkspaceDigestPanel from './WorkspaceDigestPanel.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
 import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
@@ -120,6 +121,10 @@ export default function ChatShell() {
   const [orgManagementOpen, setOrgManagementOpen] = useState(false);
   const [systemAdminOpen, setSystemAdminOpen] = useState(false);
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  // Cross-channel "Catch Me Up" workspace digest (FEATURE_REQUEST.md entry
+  // 6) — opened from WorkspaceHome's "Catch Me Up" button, always scoped to
+  // whichever workspace is currently selected.
+  const [digestOpen, setDigestOpen] = useState(false);
   // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
   // lifted from WorkspaceSidebar.jsx's own local state (where it lived
   // when the sheet was only ever opened from the workspace row's own
@@ -700,6 +705,7 @@ export default function ChatShell() {
           onJoinChannel={handleJoinChannel}
           onCreateChannel={() => setCreateChannelOpen(true)}
           onOpenWorkspaceSettings={() => setWorkspaceSettingsId(selectedWorkspace.id)}
+          onOpenDigest={() => setDigestOpen(true)}
         />
       ) : (
         <ChannelView
@@ -780,6 +786,9 @@ export default function ChatShell() {
           onSubscribed={handleSubscribed}
           organizationId={selectedOrganizationId}
         />
+      )}
+      {digestOpen && selectedWorkspace && (
+        <WorkspaceDigestPanel workspace={selectedWorkspace} channels={channels} onClose={() => setDigestOpen(false)} />
       )}
       {createOrgOpen && (
         <CreateOrganizationModal onClose={() => setCreateOrgOpen(false)} onCreate={handleCreateOrganization} />

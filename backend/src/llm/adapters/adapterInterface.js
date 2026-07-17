@@ -18,6 +18,12 @@
 //     that don't (or when streaming is off) simply never call it, and the
 //     caller falls back to the returned `text` in one piece. Either way the
 //     resolved `text` is always the full, final completion.
+//   signal: optional AbortSignal (workspace digest, FEATURE_REQUEST.md entry
+//     6 — "allow cancellation without leaving the provider request running
+//     indefinitely"). When provided and later aborted, the adapter cancels
+//     its in-flight upstream request the same way an internal timeout does.
+//     Omitted by the other two AI routes (summarize, extract-tasks), which
+//     don't need caller-initiated cancellation.
 //   Throws UpstreamError (errors.js) on network failure, timeout, or a
 //     response the adapter can't parse.
 //

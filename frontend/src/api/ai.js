@@ -4,7 +4,7 @@ import { apiFetch, API_BASE, getAccessToken, refreshAccessToken } from './client
 // plain-text body, not JSON, so they can't go through apiFetch — but they
 // still need the same in-memory-token + silent-refresh-and-retry treatment
 // every other authenticated request gets (PROJECT_PLAN.md Section 3).
-async function streamPost(path, body, onChunk, _isRetry = false) {
+async function streamPost(path, body, onChunk, { signal, _isRetry = false } = {}) {
   const token = getAccessToken();
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
@@ -14,12 +14,13 @@ async function streamPost(path, body, onChunk, _isRetry = false) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(body ?? {}),
+    signal,
   });
 
   if (res.status === 401 && !_isRetry) {
     const newToken = await refreshAccessToken();
     if (newToken) {
-      return streamPost(path, body, onChunk, true);
+      return streamPost(path, body, onChunk, { signal, _isRetry: true });
     }
   }
 
@@ -66,6 +67,14 @@ export const summarizeChannel = (channelId, onChunk, { limit } = {}) =>
   streamPost(`/channels/${channelId}/ai/summarize`, limit ? { limit } : {}, onChunk);
 
 export const extractTasks = (messageId, onChunk) => streamPost(`/messages/${messageId}/ai/extract-tasks`, {}, onChunk);
+
+// Cross-channel "Catch Me Up" workspace digest (FEATURE_REQUEST.md entry 6).
+// `signal` is the one caller-facing addition streamPost's other two callers
+// don't need — a digest can run long enough (multiple channels' worth of
+// selection + a larger prompt) that the design calls for a real Cancel
+// affordance, unlike a single-channel summarize/extract-tasks action.
+export const requestWorkspaceDigest = (workspaceId, params, onChunk, { signal } = {}) =>
+  streamPost('/ai/workspace-digest', { workspaceId, ...params }, onChunk, { signal });
 
 export const getAiSettings = () => apiFetch('/ai/settings');
 export const updateAiSettings = (patch) => apiFetch('/ai/settings', { method: 'PATCH', body: patch });

@@ -16,9 +16,16 @@ function baseUrl(settings) {
   return settings.baseUrl.replace(/\/$/, '');
 }
 
-async function generate({ settings, prompt, onChunk }) {
+async function generate({ settings, prompt, onChunk, signal }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+  // Optional caller-supplied signal (workspace digest, FEATURE_REQUEST.md
+  // entry 6) — see ollamaAdapter.js's identical comment.
+  const onExternalAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onExternalAbort);
+  }
   try {
     const res = await fetch(`${baseUrl(settings)}/v1/completions`, {
       method: 'POST',
@@ -76,12 +83,13 @@ async function generate({ settings, prompt, onChunk }) {
     return { text: full };
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new UpstreamError('vLLM request timed out');
+      throw new UpstreamError(signal?.aborted ? 'vLLM request was cancelled' : 'vLLM request timed out');
     }
     if (err instanceof UpstreamError) throw err;
     throw new UpstreamError(`vLLM request failed: ${err.message}`);
   } finally {
     clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
   }
 }
 

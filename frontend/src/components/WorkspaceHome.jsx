@@ -1,4 +1,4 @@
-import { Hash, Lock, Plus, UserPlus } from 'lucide-react';
+import { Hash, Lock, Plus, UserPlus, Sparkles } from 'lucide-react';
 
 // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
 // replaces ChannelView.jsx's plain "Select a channel to get started." text
@@ -112,6 +112,7 @@ export default function WorkspaceHome({
   onJoinChannel,
   onCreateChannel,
   onOpenWorkspaceSettings,
+  onOpenDigest,
 }) {
   const hasChannels = channels.length > 0;
 
@@ -181,6 +182,17 @@ export default function WorkspaceHome({
                 {hasChannels ? 'Invite People' : 'Invite teammates'}
               </button>
             )}
+          </div>
+        )}
+        {/* Read-only, so shown regardless of archived state — unlike Create
+            Channel/Invite People above, generating a digest doesn't require
+            write access to the workspace. FEATURE_REQUEST.md entry 6. */}
+        {hasChannels && (
+          <div style={styles.actions}>
+            <button type="button" style={styles.secondaryButton} onClick={onOpenDigest}>
+              <Sparkles size={14} aria-hidden="true" />
+              Catch Me Up
+            </button>
           </div>
         )}
       </div>

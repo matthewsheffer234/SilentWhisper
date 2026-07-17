@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { AI_SUMMARY_LIMIT, AI_SUMMARY_SCOPE, AI_THREAD_SCOPE, formatAiActionError } from './aiPresentation.js';
+import {
+  AI_SUMMARY_LIMIT,
+  AI_SUMMARY_SCOPE,
+  AI_THREAD_SCOPE,
+  AI_DIGEST_WINDOW_OPTIONS,
+  formatAiActionError,
+} from './aiPresentation.js';
 
 describe('AI presentation helpers', () => {
   test('keeps the channel summary scope tied to the request limit', () => {
@@ -25,5 +31,17 @@ describe('AI presentation helpers', () => {
       'No messages to summarize in this channel yet',
     );
     expect(formatAiActionError({}, 'fallback')).toBe('fallback');
+  });
+
+  test('reports a cancelled digest request distinctly from a real failure', () => {
+    expect(formatAiActionError({ name: 'AbortError' }, 'fallback')).toBe('Cancelled.');
+  });
+
+  test('offers a fixed set of plain-language digest window choices', () => {
+    expect(AI_DIGEST_WINDOW_OPTIONS).toEqual([
+      { sinceHours: 24, label: 'Last 24 hours' },
+      { sinceHours: 72, label: 'Last 3 days' },
+      { sinceHours: 168, label: 'Last 7 days' },
+    ]);
   });
 });

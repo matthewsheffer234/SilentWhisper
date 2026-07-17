@@ -13,9 +13,19 @@ function baseUrl(settings) {
   return settings.baseUrl.replace(/\/$/, '');
 }
 
-async function generate({ settings, prompt, onChunk }) {
+async function generate({ settings, prompt, onChunk, signal }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+  // Optional caller-supplied signal (workspace digest, FEATURE_REQUEST.md
+  // entry 6 — "allow cancellation without leaving the provider request
+  // running indefinitely"). Merged into the same controller as the timeout
+  // rather than passed straight to fetch, so either source aborting looks
+  // identical downstream.
+  const onExternalAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onExternalAbort);
+  }
   try {
     const res = await fetch(`${baseUrl(settings)}/api/generate`, {
       method: 'POST',
@@ -67,12 +77,13 @@ async function generate({ settings, prompt, onChunk }) {
     return { text: full };
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new UpstreamError('Ollama request timed out');
+      throw new UpstreamError(signal?.aborted ? 'Ollama request was cancelled' : 'Ollama request timed out');
     }
     if (err instanceof UpstreamError) throw err;
     throw new UpstreamError(`Ollama request failed: ${err.message}`);
   } finally {
     clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
   }
 }
 

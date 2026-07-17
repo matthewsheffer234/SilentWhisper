@@ -68,6 +68,13 @@ export const config = {
     streamingEnabled: process.env.LLM_STREAMING_ENABLED !== 'false',
     summaryPromptVersion: process.env.LLM_SUMMARY_PROMPT_VERSION || 'v1',
     taskPromptVersion: process.env.LLM_TASK_PROMPT_VERSION || 'v1',
+    // Cross-channel workspace digest (FEATURE_REQUEST.md entry 6), same
+    // versioned-template convention as summary/task prompts above.
+    digestPromptVersion: process.env.LLM_DIGEST_PROMPT_VERSION || 'v1',
+    // Not an app_settings key — an operational safety cap on how far back a
+    // digest request can reach, deliberately env-only like embedding.*
+    // below rather than admin-editable through the AI Settings panel.
+    digestMaxWindowHours: Number(process.env.AI_DIGEST_MAX_WINDOW_HOURS || 336), // 14 days
     // Not an app_settings key — purely operational, how often the backend
     // pings the provider's health endpoint (Section 8, Phase 4).
     healthCheckIntervalMs: Number(process.env.LLM_HEALTH_CHECK_INTERVAL_MS || 60_000),

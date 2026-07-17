@@ -30,6 +30,7 @@ const KEY_TO_FIELD = {
   'llm.streaming_enabled': 'streamingEnabled',
   'llm.summary_prompt_version': 'summaryPromptVersion',
   'llm.task_prompt_version': 'taskPromptVersion',
+  'llm.digest_prompt_version': 'digestPromptVersion',
 };
 const FIELD_TO_KEY = Object.fromEntries(Object.entries(KEY_TO_FIELD).map(([k, v]) => [v, k]));
 export const LLM_SETTING_KEYS = Object.keys(KEY_TO_FIELD);
@@ -48,6 +49,7 @@ function envDefaults() {
     streamingEnabled: config.llm.streamingEnabled,
     summaryPromptVersion: config.llm.summaryPromptVersion,
     taskPromptVersion: config.llm.taskPromptVersion,
+    digestPromptVersion: config.llm.digestPromptVersion,
   };
 }
 
@@ -110,6 +112,9 @@ export function validateSettingsPatch(body) {
   }
   if ('taskPromptVersion' in body) {
     patch.taskPromptVersion = assertShortString(body.taskPromptVersion, { maxLength: 20 }, 'taskPromptVersion');
+  }
+  if ('digestPromptVersion' in body) {
+    patch.digestPromptVersion = assertShortString(body.digestPromptVersion, { maxLength: 20 }, 'digestPromptVersion');
   }
   return patch;
 }
