@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { X, Hash, Lock, Sparkles, Info, User, Users } from 'lucide-react';
+import { X, Hash, Lock, Sparkles, Info, User, Users, MessageSquare } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
@@ -8,6 +8,34 @@ import { renderMessageContent } from '../markdown.jsx';
 
 // FEATURE_REQUEST.md's @mention autocomplete entry.
 const MENTION_DEBOUNCE_MS = 200;
+
+// FEATURE_REQUEST.md entry 3 (message presentation for team scanability).
+// Pure, DOM-free so they're unit-testable the same way ThemeContext.jsx's
+// resolveTheme() is — see ChannelView.test.jsx.
+export function isFirstInRun(messages, index) {
+  const prev = messages[index - 1];
+  return !prev || prev.userId !== messages[index].userId;
+}
+
+export function formatReplyCount(count) {
+  // Deliberately the full phrase, not a bare "Reply", when there's nothing
+  // to report yet — ThreadSidebar.jsx's own reply-composer submit button is
+  // also just "Reply", and a message with no replies is the common case, so
+  // a bare "Reply" launcher would collide with it both visually (in a
+  // shared reply flow) and for `:text-is("Reply")`-style selectors/AT name
+  // lookups. Compacting to a count only kicks in once there's an actual
+  // count to show.
+  if (!count) return 'Reply in thread';
+  return `${count} ${count === 1 ? 'reply' : 'replies'}`;
+}
+
+export function initials(name) {
+  if (!name) return '';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 const styles = {
   wrapper: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--surface)' },
@@ -96,7 +124,7 @@ const styles = {
   // (global.css's `.sl-row:hover{background:var(--item-hover)}`) moves onto
   // the bubble itself — hovering the empty alignment space shouldn't
   // highlight anything.
-  messageRowOuter: { display: 'flex', width: '100%' },
+  messageRowOuter: { display: 'flex', width: '100%', gap: 8 },
   messageBubble: {
     display: 'flex',
     flexDirection: 'column',
@@ -104,6 +132,27 @@ const styles = {
     borderRadius: 16,
     padding: '8px 12px',
     boxSizing: 'border-box',
+  },
+  // Channels have no mirrored "mine" bubble competing for space on the
+  // other side, so they get more breathing room than a DM's 60%.
+  messageBubbleChannel: { maxWidth: '75%' },
+  // Fixed-width slot so a message's text always starts at the same x
+  // position whether or not this particular row shows an avatar — the
+  // same alignment trick Slack/Apple Messages both use for grouped runs.
+  avatarSlot: { width: 28, flexShrink: 0, display: 'flex', justifyContent: 'center' },
+  avatarCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'var(--surface-alt)',
+    color: 'var(--text-1)',
+    border: '1px solid var(--border)',
+    fontSize: 'var(--text-xs)',
+    fontWeight: 700,
+    flexShrink: 0,
   },
   // Reuses the exact token pair `--item-active-bg`/`--item-active-fg`
   // already established for the active sidebar row (PROJECT_PLAN.md
@@ -121,6 +170,9 @@ const styles = {
   messageContent: { fontSize: 'var(--text-base)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   pending: { opacity: 0.55 },
   replyButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
     alignSelf: 'flex-start',
     fontSize: 'var(--text-xs)',
     color: 'var(--brg)',
@@ -475,15 +527,24 @@ export default function ChannelView({
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const m = messages[virtualRow.index];
             const isMine = m.userId === currentUser.id;
+            // Only DMs/group-DMs use the mine/theirs bubble split — channels
+            // render every message with the same "theirs" visual treatment
+            // regardless of sender (FEATURE_REQUEST.md entry 3's resolved
+            // alignment call). `isMine` itself is still needed above for
+            // things unrelated to color/alignment (none currently), so it's
+            // kept as a separate variable rather than folded away.
+            const useMineStyle = isDirectConversation && isMine;
             // Consecutive-message grouping: tighten the gap *after* this row
             // when the next message in the (already chronologically ordered)
             // array shares the same sender, rather than repeating full row
-            // spacing for every message in a run. Metadata (author/
-            // timestamp) still renders on every row regardless — only the
-            // spacing changes, per the design's explicit accessibility note
-            // (hover/first-of-run-only metadata is excluded here on purpose).
+            // spacing for every message in a run.
             const nextMessage = messages[virtualRow.index + 1];
             const isGroupedWithNext = Boolean(nextMessage && nextMessage.userId === m.userId);
+            // DMs keep "never show my own name" regardless of grouping;
+            // channels show the author (including the current user's own
+            // name) only at the start of a same-sender run.
+            const showAuthor = isDirectConversation ? !isMine : isFirstInRun(messages, virtualRow.index);
+            const showAvatar = !isDirectConversation && showAuthor;
             return (
               <div
                 key={m.id}
@@ -496,33 +557,41 @@ export default function ChannelView({
                   width: '100%',
                   transform: `translateY(${virtualRow.start}px)`,
                   ...styles.messageRowOuter,
-                  justifyContent: isMine ? 'flex-end' : 'flex-start',
+                  justifyContent: useMineStyle ? 'flex-end' : 'flex-start',
                   paddingBottom: isGroupedWithNext ? 2 : 10,
                   ...(m.pending ? styles.pending : {}),
                 }}
               >
+                {!isDirectConversation && (
+                  <div style={styles.avatarSlot}>
+                    {showAvatar && <div className="sl-avatar" style={styles.avatarCircle}>{initials(m.displayName || m.username)}</div>}
+                  </div>
+                )}
                 <div
-                  className={`sl-row sl-bubble-${isMine ? 'mine' : 'theirs'}`}
+                  className={`sl-row sl-bubble-${useMineStyle ? 'mine' : 'theirs'}`}
                   style={{
                     ...styles.messageBubble,
-                    ...(isMine ? styles.messageBubbleMine : styles.messageBubbleTheirs),
+                    ...(isDirectConversation ? {} : styles.messageBubbleChannel),
+                    ...(useMineStyle ? styles.messageBubbleMine : styles.messageBubbleTheirs),
                   }}
                 >
-                  <div style={{ ...styles.messageMeta, ...(isMine ? styles.messageMetaMine : {}) }}>
-                    {!isMine && <span style={styles.messageAuthor}>{m.displayName || m.username}</span>}
-                    <PresenceBadge status={presence[m.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
+                  <div style={{ ...styles.messageMeta, ...(useMineStyle ? styles.messageMetaMine : {}) }}>
+                    {showAuthor && <span style={styles.messageAuthor}>{m.displayName || m.username}</span>}
+                    <PresenceBadge status={presence[m.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
                     <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                   <div style={styles.messageContent}>
-                    {renderMessageContent(m.content, { variant: isMine ? 'mine' : undefined })}
+                    {renderMessageContent(m.content, { variant: useMineStyle ? 'mine' : undefined })}
                   </div>
                   {!m.parentMessageId && !m.pending && (
                     <button
                       type="button"
-                      style={{ ...styles.replyButton, ...(isMine ? styles.replyButtonMine : {}) }}
+                      style={{ ...styles.replyButton, ...(useMineStyle ? styles.replyButtonMine : {}) }}
                       onClick={() => onOpenThread(m)}
+                      aria-label={m.replyCount ? `Reply in thread, ${formatReplyCount(m.replyCount)}` : undefined}
                     >
-                      Reply in thread
+                      <MessageSquare size={12} aria-hidden="true" />
+                      {formatReplyCount(m.replyCount ?? 0)}
                     </button>
                   )}
                 </div>

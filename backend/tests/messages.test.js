@@ -148,6 +148,62 @@ describe('message pagination', () => {
   });
 });
 
+describe('message reply counts', () => {
+  test('a message with no replies has replyCount 0 in the main feed', async () => {
+    const owner = await signup('msgreplycount0');
+    const channelId = await createChannel(owner);
+    await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'root' });
+
+    const listRes = await request(app)
+      .get(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken));
+    expect(listRes.body[0].replyCount).toBe(0);
+  });
+
+  test('replyCount in the main feed reflects the number of replies posted', async () => {
+    const owner = await signup('msgreplycount1');
+    const channelId = await createChannel(owner);
+    const root = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'root' });
+
+    await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'reply one', parentMessageId: root.body.id });
+    await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'reply two', parentMessageId: root.body.id });
+
+    const listRes = await request(app)
+      .get(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken));
+    expect(listRes.body).toHaveLength(1);
+    expect(listRes.body[0].replyCount).toBe(2);
+  });
+
+  test('replies themselves report replyCount 0 — threading is flat, replies have no children', async () => {
+    const owner = await signup('msgreplycount2');
+    const channelId = await createChannel(owner);
+    const root = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'root' });
+    await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'a reply', parentMessageId: root.body.id });
+
+    const threadRes = await request(app)
+      .get(`/api/channels/${channelId}/messages?parentMessageId=${root.body.id}`)
+      .set(authHeader(owner.accessToken));
+    expect(threadRes.body).toHaveLength(1);
+    expect(threadRes.body[0].replyCount).toBe(0);
+  });
+});
+
 describe('message length limits', () => {
   test('rejects an empty message', async () => {
     const owner = await signup('msgowner5');

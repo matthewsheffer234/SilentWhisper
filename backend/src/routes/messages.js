@@ -54,6 +54,13 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
         'messages.content',
         'messages.parent_message_id',
         'messages.created_at',
+        // Replies never have their own children (flat one-level threading,
+        // 0004_communication_and_content.js), so this is always 0 when
+        // fetching a thread's own replies — no branching needed between the
+        // two query modes above. Backed by idx_messages_threading.
+        db.raw(
+          '(select count(*) from messages as replies where replies.parent_message_id = messages.id)::int as reply_count',
+        ),
       );
 
     res.json(
@@ -66,6 +73,7 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
         content: r.content,
         parentMessageId: r.parent_message_id,
         createdAt: r.created_at,
+        replyCount: Number(r.reply_count),
       })),
     );
   } catch (err) {

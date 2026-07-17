@@ -175,11 +175,25 @@ async function seedPlainUser(label) {
   return { username, password: TEST_PASSWORD, userId, accessToken };
 }
 
-async function sendMessage(accessToken, channelId, content) {
+async function sendMessage(accessToken, channelId, content, parentMessageId) {
   const res = await fetch(`${API_BASE}/channels/${channelId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(parentMessageId ? { content, parentMessageId } : { content }),
+  });
+  return res.json();
+}
+
+// FEATURE_REQUEST.md entry 3 (message presentation): seeds a DM channel
+// directly, the same "REST for setup, UI for what's under test" precedent
+// seedUserWithChannel already establishes for workspace channels — avoids
+// routing every DM-scoped bubble test through the "New message" people
+// picker just to get a channel id to send API messages into.
+async function startDirectMessageApi(accessToken, targetUserId) {
+  const res = await fetch(`${API_BASE}/direct-messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ targetUserId }),
   });
   return res.json();
 }
@@ -456,8 +470,15 @@ test.describe('markdown formatting', () => {
   });
 });
 
-test.describe('iMessage-style message bubble layout', () => {
-  test('own messages render right-aligned filled with no author name; others render left-aligned with their username; a mention inside a "mine" bubble stays legible; consecutive same-sender messages group tighter', async ({
+// FEATURE_REQUEST.md entry 3 (message presentation for team scanability).
+// The user resolved this entry's one open design call directly: channels
+// always left-align with visible identity (no mirrored "mine" bubble);
+// DIRECT/GROUP_DM conversations keep the original iMessage-style bubble
+// behavior below completely unchanged. These are now two separate tests
+// against two different conversation types rather than one channel-scoped
+// test, since the two now genuinely render differently.
+test.describe('message presentation: channels vs. direct messages', () => {
+  test('channel messages: always left-aligned for every sender, author/avatar shown only on the first message of a run (including the current user\'s own), and a compact reply affordance', async ({
     page,
   }) => {
     const me = await seedUserWithChannel('bubbleme');
@@ -470,18 +491,86 @@ test.describe('iMessage-style message bubble layout', () => {
     await selectChannelRow(page, 'general');
     await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
 
-    // Two consecutive messages from "me" (for the grouping check below),
-    // the second containing a mention (for the contrast check below).
+    // Two consecutive messages from "me" (for the grouping check below).
     await page.fill('input[placeholder^="Message #"]', 'first mine message');
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=first mine message')).toBeVisible({ timeout: 10_000 });
-    await page.fill('input[placeholder^="Message #"]', `hey @${other.username} second mine message`);
+    await page.fill('input[placeholder^="Message #"]', 'second mine message');
+    await page.click('button:has-text("Send")');
+    await expect(page.locator('text=second mine message')).toBeVisible({ timeout: 10_000 });
+
+    // A message from someone else, sent over the API — avoids needing a
+    // second browser context just to prove every sender renders the same
+    // way in a channel.
+    await sendMessage(other.accessToken, me.channel.id, 'a message from someone else');
+    await expect(page.locator('text=a message from someone else')).toBeVisible({ timeout: 10_000 });
+
+    // Channels never use the "mine" filled-bubble treatment — every message
+    // in a channel is `.sl-bubble-theirs`, regardless of sender.
+    await expect(page.locator('.sl-bubble-mine')).toHaveCount(0);
+
+    // Always left-aligned: every row's justify-content is flex-start,
+    // including the current user's own messages.
+    const firstMineRow = page.locator('text=first mine message').locator('../..');
+    const otherRow = page.locator('text=a message from someone else').locator('../..');
+    await expect(firstMineRow).toHaveCSS('justify-content', 'flex-start');
+    await expect(otherRow).toHaveCSS('justify-content', 'flex-start');
+
+    // Grouping: the author name (and avatar) appear on the first message of
+    // a run — including "me"'s own run, unlike a DM — but not on the second,
+    // grouped message from the same sender.
+    const firstMineBubble = page.locator('.sl-bubble-theirs', { hasText: 'first mine message' });
+    const secondMineBubble = page.locator('.sl-bubble-theirs', { hasText: 'second mine message' });
+    await expect(firstMineBubble.getByText(me.username, { exact: true })).toBeVisible();
+    await expect(secondMineBubble.getByText(me.username, { exact: true })).toHaveCount(0);
+    await expect(firstMineRow.locator('.sl-avatar')).toHaveCount(1);
+    const secondMineRow = page.locator('text=second mine message').locator('../..');
+    await expect(secondMineRow.locator('.sl-avatar')).toHaveCount(0);
+
+    // Someone else's message, being the first (and only) message of its own
+    // run, also shows an author name and avatar.
+    const theirsBubble = page.locator('.sl-bubble-theirs', { hasText: 'a message from someone else' });
+    await expect(theirsBubble.getByText(other.username, { exact: true })).toBeVisible();
+    await expect(otherRow.locator('.sl-avatar')).toHaveCount(1);
+
+    // Consecutive same-sender grouping still tightens vertical spacing, same
+    // mechanism as before.
+    const groupedPaddingBottom = await firstMineRow.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
+    const ungroupedPaddingBottom = await secondMineRow.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
+    expect(groupedPaddingBottom).toBeLessThan(ungroupedPaddingBottom);
+
+    // Compact reply affordance: with no replies yet, the button still reads
+    // the full "Reply in thread" (not a bare "Reply", which would collide
+    // with ThreadSidebar's own reply-composer submit button) — it only
+    // compacts to a count once one exists (covered by the live-count test
+    // below).
+    const replyButton = firstMineBubble.locator('button:has-text("Reply in thread")');
+    await expect(replyButton).toHaveText('Reply in thread');
+  });
+
+  test('direct messages keep the original iMessage-style bubbles unchanged: own messages right-aligned and filled with no author name, a mention inside a "mine" bubble stays legible, consecutive same-sender messages group tighter', async ({
+    page,
+  }) => {
+    const me = await seedPlainUser('dmbubbleme');
+    const other = await seedPlainUser('dmbubbleother');
+    const dm = await startDirectMessageApi(me.accessToken, other.userId);
+
+    await loginViaUi(page, me.username, me.password);
+    await selectChannelRow(page, other.username);
+    await page.waitForSelector(`#main input[placeholder="Message ${other.username}"]`, { timeout: 10_000 });
+
+    // Two consecutive messages from "me" (for the grouping check below),
+    // the second containing a mention (for the contrast check below).
+    await page.fill(`#main input[placeholder="Message ${other.username}"]`, 'first mine message');
+    await page.click('button:has-text("Send")');
+    await expect(page.locator('text=first mine message')).toBeVisible({ timeout: 10_000 });
+    await page.fill(`#main input[placeholder="Message ${other.username}"]`, `hey @${other.username} second mine message`);
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=second mine message')).toBeVisible({ timeout: 10_000 });
 
     // A message from someone else, sent over the API — avoids needing a
     // second browser context just to prove the "theirs" rendering path.
-    await sendMessage(other.accessToken, me.channel.id, 'a message from someone else');
+    await sendMessage(other.accessToken, dm.id, 'a message from someone else');
     await expect(page.locator('text=a message from someone else')).toBeVisible({ timeout: 10_000 });
 
     const mineBubbles = page.locator('.sl-bubble-mine');
@@ -523,6 +612,30 @@ test.describe('iMessage-style message bubble layout', () => {
     const groupedPaddingBottom = await firstMineRow.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
     const ungroupedPaddingBottom = await secondMineRow.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
     expect(groupedPaddingBottom).toBeLessThan(ungroupedPaddingBottom);
+  });
+
+  test('a reply posted by someone else updates a channel message\'s reply count live, without the thread sidebar being open', async ({
+    page,
+  }) => {
+    const me = await seedUserWithChannel('replycountlive');
+    const other = await seedPlainUser('replycountliveother');
+    await inviteToWorkspace(me.accessToken, me.workspace.id, other.username);
+    await joinChannelApi(other.accessToken, me.workspace.id, me.channel.id);
+
+    const root = await sendMessage(me.accessToken, me.channel.id, 'root message for live count');
+
+    await loginViaUi(page, me.username, me.password);
+    await selectWorkspaceRow(page, me.workspace.name);
+    await selectChannelRow(page, 'general');
+    await expect(page.locator('button:has-text("Reply in thread")')).toBeVisible({ timeout: 10_000 });
+
+    // Posted by someone else, over the API — proves the live update comes
+    // from the WS broadcast every client in the room receives, not just
+    // whichever client happened to open the thread sidebar itself.
+    await sendMessage(other.accessToken, me.channel.id, 'a live reply', root.id);
+
+    await expect(page.locator('button[aria-label="Reply in thread, 1 reply"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('button:has-text("1 reply")')).toBeVisible();
   });
 });
 

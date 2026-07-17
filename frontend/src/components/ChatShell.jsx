@@ -90,6 +90,12 @@ export default function ChatShell() {
   const [presence, setPresence] = useState({});
   const [threadRoot, setThreadRoot] = useState(null);
   const [threadReplies, setThreadReplies] = useState([]);
+  // Resolved at the moment a thread is opened (see openThread below), not
+  // re-derived from whatever's currently selected — a thread can be opened
+  // for a channel other than the one presently selected (search-result and
+  // mention navigation both pass an explicit channelIdOverride), so
+  // ThreadSidebar needs its own record of which conversation it belongs to.
+  const [threadChannelType, setThreadChannelType] = useState(null);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
@@ -141,6 +147,25 @@ export default function ChatShell() {
     });
   }, []);
 
+  // A reply broadcasts to the whole channel room (backend/src/ws/server.js),
+  // not just to clients with that thread open — previously that meant
+  // anyone without the thread sidebar open simply dropped the event. This
+  // keeps the compact reply-count affordance in ChannelView.jsx's already-
+  // loaded feed live for everyone in the room, with no extra request and no
+  // change to the broadcast payload itself (a fresh message has no replies
+  // yet, so newly-created root messages just default to 0 client-side).
+  const bumpReplyCount = useCallback((channelId, parentMessageId) => {
+    setMessagesByChannel((prev) => {
+      const existing = prev[channelId];
+      if (!existing) return prev;
+      const index = existing.findIndex((m) => m.id === parentMessageId);
+      if (index === -1) return prev;
+      const next = [...existing];
+      next[index] = { ...next[index], replyCount: (next[index].replyCount ?? 0) + 1 };
+      return { ...prev, [channelId]: next };
+    });
+  }, []);
+
   const reconcileThreadReply = useCallback((incoming) => {
     setThreadReplies((prev) => {
       const nonceMatchIndex = incoming.clientNonce ? prev.findIndex((m) => m.id === incoming.clientNonce) : -1;
@@ -183,6 +208,7 @@ export default function ChatShell() {
         if (threadRootRef.current && frame.message.parentMessageId === threadRootRef.current.id) {
           reconcileThreadReply(frame);
         }
+        bumpReplyCount(frame.message.channelId, frame.message.parentMessageId);
         return;
       }
       reconcileMessage(frame.message.channelId, frame);
@@ -269,7 +295,7 @@ export default function ChatShell() {
 
     socket.connect();
     return () => socket.disconnect();
-  }, [reconcileMessage, reconcileThreadReply]);
+  }, [reconcileMessage, reconcileThreadReply, bumpReplyCount]);
 
   useEffect(() => {
     workspacesApi.listWorkspaces().then((ws) => {
@@ -484,6 +510,9 @@ export default function ChatShell() {
 
   function openThread(rootMessage, channelIdOverride = selectedChannelId) {
     setThreadRoot(rootMessage);
+    const originChannel =
+      channels.find((c) => c.id === channelIdOverride) ?? directMessages.find((dm) => dm.id === channelIdOverride);
+    setThreadChannelType(originChannel?.type ?? null);
     workspacesApi.listMessages(channelIdOverride, { parentMessageId: rootMessage.id }).then((history) => {
       setThreadReplies([...history].reverse().map(toDisplayMessage));
     });
@@ -674,6 +703,7 @@ export default function ChatShell() {
         currentUser={user}
         onSendReply={handleSendReply}
         onClose={() => setThreadRoot(null)}
+        isDirectConversation={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM'}
       />
       {createWorkspaceOpen && (
         <CreateWorkspaceSheet

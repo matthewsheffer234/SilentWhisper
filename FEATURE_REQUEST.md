@@ -60,21 +60,7 @@ Design:
 - **Frontend — applying it on load**: `ChatShell.jsx`'s initial-load effect (line 174-177 today) changes from unconditionally picking `ws[0].id` to: if `user.defaultWorkspaceId` is set *and* present in the just-fetched `ws` list (defends against a default pointing at a workspace the user has since lost membership in — no separate cleanup job needed, this check is cheap and already has the list in hand), select it; otherwise fall back to `ws[0].id` exactly as today.
 - **Tests**: setting a default on a workspace the caller belongs to succeeds and is reflected in `GET /api/auth/me`/login/signup responses; setting it on a workspace the caller isn't a member of 404s (existence-hiding, not 403); setting `null` clears it; a plain `MEMBER` (not just `ADMIN`) can set their own default; the frontend's initial-selection logic prefers a valid `defaultWorkspaceId` over `ws[0]` when both are present, and falls back to `ws[0]` when the stored default is no longer in the caller's workspace list (e.g. removed from that workspace since setting it).
 
-### 3. Message presentation improvements for team scanability
-
-**Status**: Proposed
-**Utility**: Medium. The current iMessage-style bubbles are friendly, but team channels need fast scanning by author, thread activity, and context. This entry tunes message presentation without undoing the existing bubble work prematurely.
-**Origin**: `UI_UX_REVIEW.md` recommendation.
-
-Design:
-- **Identity**: render display names and optional initials/avatar markers for other users' messages.
-- **Grouping**: group consecutive messages from the same sender more strongly. Show author/avatar on the first message in a run, with reduced repetition on following messages.
-- **Threads**: replace always-visible "Reply in thread" text with a more compact thread affordance showing reply count/activity where available.
-- **Alignment experiment**: evaluate left-aligning all channel messages while reserving right-aligned bubbles for DMs. Treat this as a product/design decision to validate rather than an automatic rewrite.
-- **Data**: add reply counts/last reply metadata to message list responses if needed; keep pagination bounded.
-- **Tests**: frontend tests for grouping and author display; backend tests if reply-count metadata is added; visual/e2e checks for long names and mobile-width layouts.
-
-### 4. Contextual AI action menu and clearer AI output scope
+### 3. Contextual AI action menu and clearer AI output scope
 
 **Status**: Proposed
 **Utility**: Medium. Channel summaries and thread task extraction are useful, but direct header buttons compete with channel context controls. Grouping AI actions makes them available without making them the primary object of the interface.
@@ -89,7 +75,7 @@ Design:
 - **Audit/rate limits**: reuse existing AI audit and concurrency conventions.
 - **Tests**: frontend/e2e tests for menu placement, loading/unavailable states, scope text, streaming output, and dismissal.
 
-### 5. Cross-channel "Catch Me Up" workspace digests
+### 4. Cross-channel "Catch Me Up" workspace digests
 
 **Status**: Proposed
 **Utility**: High. This is a natural next step for the existing local AI features: it turns unread mentions and important channel activity into a short operational brief for someone returning from a multi-day break, instead of forcing them to manually scan every backlog thread.
@@ -108,6 +94,12 @@ Design:
 - **Tests**: endpoint selects only authorized unread mentions/starred-channel messages; time-window clamping works; long inputs are chunked below configured limits; provider streams are forwarded incrementally to the client; cancellation closes the upstream provider request; audit rows record metadata without raw content.
 
 ## Done
+
+### Message presentation improvements for team scanability
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Message presentation improvements for team scanability" (2026-07-17).
+
+Channels now always left-align messages with visible author identity; `DIRECT`/`GROUP_DM` conversations keep the original iMessage-style bubble behavior unchanged — the entry's one open design call, resolved directly with the user before implementation. `ChannelView.jsx`/`ThreadSidebar.jsx` show the author name and a neutral initials-avatar circle only on the first message of a same-sender run in channels; the "Reply in thread" button compacts to a count ("3 replies") once replies exist, backed by a new `replyCount` field on `GET /channels/:channelId/messages` and kept live via the existing WS broadcast even for viewers who never opened the thread sidebar. A real bug found by e2e testing, not by inspection: an initial bare "Reply" label for the zero-replies case collided exactly with `ThreadSidebar.jsx`'s own reply-composer submit button, breaking a pre-existing e2e selector — fixed by keeping the full "Reply in thread" phrase until a real count exists. 3 new backend tests, 13 new frontend Vitest tests, 3 new/rewritten e2e tests.
 
 ### Live notification system + in-app invitation notification & acceptance workflow
 

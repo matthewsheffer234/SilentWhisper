@@ -3,6 +3,7 @@ import { X, Sparkles } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import { extractTasks } from '../api/ai.js';
 import { renderMessageContent } from '../markdown.jsx';
+import { isFirstInRun, initials } from './ChannelView.jsx';
 
 const styles = {
   sidebar: {
@@ -81,10 +82,29 @@ const styles = {
   // 'the messaging window'" — same alignment/color/contrast rules as
   // ChannelView.jsx's message rows, not a separate visual language for
   // thread replies.
-  rowOuter: { display: 'flex', width: '100%' },
+  rowOuter: { display: 'flex', width: '100%', gap: 8 },
   bubble: { display: 'flex', flexDirection: 'column', maxWidth: '80%', borderRadius: 14, padding: '7px 10px', boxSizing: 'border-box' },
+  // Channel-origin threads get the same wider allowance ChannelView.jsx
+  // gives its own non-DM messages, for the same reason (no mirrored "mine"
+  // bubble on the other side to leave room for).
+  bubbleChannel: { maxWidth: '92%' },
   bubbleMine: { background: 'var(--brg)', color: 'var(--item-active-fg)' },
   bubbleTheirs: { background: 'var(--surface)', color: 'var(--text-1)' },
+  avatarSlot: { width: 24, flexShrink: 0, display: 'flex', justifyContent: 'center' },
+  avatarCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'var(--surface)',
+    color: 'var(--text-1)',
+    border: '1px solid var(--border)',
+    fontSize: 10,
+    fontWeight: 700,
+    flexShrink: 0,
+  },
   bubbleMeta: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
   bubbleMetaMine: { color: 'var(--item-active-fg)' },
   bubbleAuthor: { fontWeight: 700, fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
@@ -113,7 +133,7 @@ const styles = {
   },
 };
 
-export default function ThreadSidebar({ rootMessage, replies, presence, currentUser, onSendReply, onClose }) {
+export default function ThreadSidebar({ rootMessage, replies, presence, currentUser, onSendReply, onClose, isDirectConversation }) {
   const [draft, setDraft] = useState('');
   const [tasks, setTasks] = useState(null); // { loading, text, error }
 
@@ -174,15 +194,37 @@ export default function ThreadSidebar({ rootMessage, replies, presence, currentU
       <div style={styles.root}>
         {(() => {
           const isMine = rootMessage.userId === currentUser.id;
+          // The root message has no predecessor in this sidebar, so it's
+          // always its own run — same "always show author" rule ChannelView
+          // gives the first message of any run.
+          const useMineStyle = isDirectConversation && isMine;
+          const showAuthor = isDirectConversation ? !isMine : true;
+          const showAvatar = !isDirectConversation;
           return (
-            <div style={{ ...styles.rowOuter, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
-              <div className="sl-row" style={{ ...styles.bubble, ...(isMine ? styles.bubbleMine : styles.bubbleTheirs) }}>
-                <div style={{ ...styles.bubbleMeta, ...(isMine ? styles.bubbleMetaMine : {}) }}>
-                  {!isMine && <span style={styles.bubbleAuthor}>{rootMessage.displayName || rootMessage.username}</span>}
-                  <PresenceBadge status={presence[rootMessage.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
+            <div style={{ ...styles.rowOuter, justifyContent: useMineStyle ? 'flex-end' : 'flex-start' }}>
+              {!isDirectConversation && (
+                <div style={styles.avatarSlot}>
+                  {showAvatar && (
+                    <div className="sl-avatar" style={styles.avatarCircle}>
+                      {initials(rootMessage.displayName || rootMessage.username)}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div
+                className="sl-row"
+                style={{
+                  ...styles.bubble,
+                  ...(isDirectConversation ? {} : styles.bubbleChannel),
+                  ...(useMineStyle ? styles.bubbleMine : styles.bubbleTheirs),
+                }}
+              >
+                <div style={{ ...styles.bubbleMeta, ...(useMineStyle ? styles.bubbleMetaMine : {}) }}>
+                  {showAuthor && <span style={styles.bubbleAuthor}>{rootMessage.displayName || rootMessage.username}</span>}
+                  <PresenceBadge status={presence[rootMessage.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>
-                  {renderMessageContent(rootMessage.content, { variant: isMine ? 'mine' : undefined })}
+                  {renderMessageContent(rootMessage.content, { variant: useMineStyle ? 'mine' : undefined })}
                 </div>
               </div>
             </div>
@@ -191,16 +233,35 @@ export default function ThreadSidebar({ rootMessage, replies, presence, currentU
       </div>
       <div style={styles.replies}>
         {replies.length === 0 && <div style={{ color: 'var(--text-3)', fontSize: 'var(--text-sm)' }}>No replies yet.</div>}
-        {replies.map((r) => {
+        {replies.map((r, index) => {
           const isMine = r.userId === currentUser.id;
+          const useMineStyle = isDirectConversation && isMine;
+          const showAuthor = isDirectConversation ? !isMine : isFirstInRun(replies, index);
+          const showAvatar = !isDirectConversation && showAuthor;
           return (
-            <div key={r.id} style={{ ...styles.rowOuter, justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
-              <div className="sl-row" style={{ ...styles.bubble, ...(isMine ? styles.bubbleMine : styles.bubbleTheirs) }}>
-                <div style={{ ...styles.bubbleMeta, ...(isMine ? styles.bubbleMetaMine : {}) }}>
-                  {!isMine && <span style={styles.bubbleAuthor}>{r.displayName || r.username}</span>}
-                  <PresenceBadge status={presence[r.userId] ?? 'offline'} variant={isMine ? 'onMine' : undefined} />
+            <div key={r.id} style={{ ...styles.rowOuter, justifyContent: useMineStyle ? 'flex-end' : 'flex-start' }}>
+              {!isDirectConversation && (
+                <div style={styles.avatarSlot}>
+                  {showAvatar && (
+                    <div className="sl-avatar" style={styles.avatarCircle}>
+                      {initials(r.displayName || r.username)}
+                    </div>
+                  )}
                 </div>
-                <div style={styles.bubbleContent}>{renderMessageContent(r.content, { variant: isMine ? 'mine' : undefined })}</div>
+              )}
+              <div
+                className="sl-row"
+                style={{
+                  ...styles.bubble,
+                  ...(isDirectConversation ? {} : styles.bubbleChannel),
+                  ...(useMineStyle ? styles.bubbleMine : styles.bubbleTheirs),
+                }}
+              >
+                <div style={{ ...styles.bubbleMeta, ...(useMineStyle ? styles.bubbleMetaMine : {}) }}>
+                  {showAuthor && <span style={styles.bubbleAuthor}>{r.displayName || r.username}</span>}
+                  <PresenceBadge status={presence[r.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
+                </div>
+                <div style={styles.bubbleContent}>{renderMessageContent(r.content, { variant: useMineStyle ? 'mine' : undefined })}</div>
               </div>
             </div>
           );
