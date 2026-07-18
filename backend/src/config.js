@@ -7,6 +7,10 @@ function required(name, value) {
   return value;
 }
 
+// Hoisted out of the llm block below so allowedLlmOrigins' default can
+// reference the same value baseUrl uses, without duplicating the fallback.
+const llmBaseUrl = process.env.LLM_BASE_URL || 'http://silent-whisper-ollama:11434';
+
 export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 8000),
@@ -51,7 +55,7 @@ export const config = {
     // database-backed override (Section 3, Secrets & Configuration: no
     // secret ever lives in app_settings).
     provider: process.env.LLM_PROVIDER || 'ollama',
-    baseUrl: process.env.LLM_BASE_URL || 'http://silent-whisper-ollama:11434',
+    baseUrl: llmBaseUrl,
     model: process.env.LLM_MODEL || 'mistral',
     // Optional — most local gateways (this Ollama container included) have
     // no auth in front of them; only set when a gateway requires it.
@@ -78,6 +82,19 @@ export const config = {
     // Not an app_settings key — purely operational, how often the backend
     // pings the provider's health endpoint (Section 8, Phase 4).
     healthCheckIntervalMs: Number(process.env.LLM_HEALTH_CHECK_INTERVAL_MS || 60_000),
+    // Not an app_settings key — deployment-controlled allowlist enforced by
+    // validation.js's assertAllowedLlmUrl against the admin-editable
+    // `baseUrl` setting (Security.md, 2026-07-15, MEDIUM: SSRF/global-AI-DoS
+    // via an arbitrary admin-supplied baseUrl). Defaults to exactly
+    // llmBaseUrl's own origin, so an out-of-the-box deployment keeps working
+    // with zero extra config while nothing else is implicitly trusted; add
+    // the target vLLM origin here (comma-separated) when moving to the
+    // GPU-backed production network.
+    allowedLlmOrigins: (process.env.ALLOWED_LLM_ORIGINS || llmBaseUrl)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => new URL(s).origin),
   },
 
   embedding: {

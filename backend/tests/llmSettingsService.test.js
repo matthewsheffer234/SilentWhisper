@@ -56,6 +56,23 @@ describe('validateSettingsPatch', () => {
     expect(() => validateSettingsPatch({ baseUrl: 'not-a-url' })).toThrow();
     expect(() => validateSettingsPatch({ baseUrl: 'ftp://example.com' })).toThrow();
   });
+
+  // Security.md (2026-07-15, MEDIUM: LLM baseUrl SSRF/DoS) — a
+  // syntactically valid http(s) URL is no longer sufficient on its own; it
+  // must also be an allowlisted origin (config.llm.allowedLlmOrigins).
+  test('accepts an allowlisted base URL, normalized to just its origin', () => {
+    const patch = validateSettingsPatch({ baseUrl: `${config.llm.baseUrl}/some/path?query=1` });
+    expect(patch.baseUrl).toBe(new URL(config.llm.baseUrl).origin);
+  });
+
+  test('rejects a well-formed http(s) URL whose origin is not allowlisted, e.g. a loopback SSRF target', () => {
+    expect(() => validateSettingsPatch({ baseUrl: 'http://127.0.0.1:9999' })).toThrow(
+      /not an approved LLM provider origin/,
+    );
+    expect(() => validateSettingsPatch({ baseUrl: 'http://some-other-internal-host:1234' })).toThrow(
+      /not an approved LLM provider origin/,
+    );
+  });
 });
 
 describe('updateSettings', () => {

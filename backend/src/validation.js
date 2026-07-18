@@ -1,4 +1,5 @@
 import { ValidationError } from './errors.js';
+import { config } from './config.js';
 
 // Server-side validation for everything crossing the API boundary
 // (PROJECT_PLAN.md Section 3, Input Handling & Injection Prevention) —
@@ -41,6 +42,10 @@ export const MAX_NAME_LENGTH = 100; // workspaces.name / channels.name are VARCH
 export const MAX_USERNAME_LENGTH = 50; // users.username is VARCHAR(50)
 export const MAX_EMAIL_LENGTH = 255; // users.email is VARCHAR(255)
 export const MAX_DISPLAY_NAME_LENGTH = 100; // users.display_name is VARCHAR(100)
+// Security.md (2026-07-15, LOW: "Group DM Creation Allows Unbounded Member
+// Arrays") — a product-level cap, not a schema constraint; bounds the
+// worst-case whereIn/insert size an authenticated caller can force.
+export const MAX_GROUP_DM_MEMBERS = 20;
 
 export function assertUuid(value, label = 'id') {
   if (typeof value !== 'string' || !UUID_RE.test(value)) {
@@ -126,10 +131,11 @@ export function assertBoolean(value, label = 'value') {
   return value;
 }
 
-// LLM_BASE_URL is an admin-supplied local/intranet endpoint (Ollama or
-// vLLM), not user content — only sanity-checked as a well-formed http(s)
-// URL, not allow-listed, since the whole point is pointing it at whatever
-// local provider the deployment uses (Section 2).
+// Generic building block: only checks the value is a syntactically valid,
+// non-empty http(s) URL. On its own this says nothing about whether the
+// *target* is trustworthy — see assertAllowedLlmUrl below, which layers an
+// origin allowlist on top of this for the one caller (LLM baseUrl) where
+// the target matters.
 export function assertHttpUrl(value, label = 'value') {
   if (typeof value !== 'string' || value.length === 0 || value.length > 500) {
     throw new ValidationError(`${label} must be a non-empty URL string`);
@@ -144,6 +150,31 @@ export function assertHttpUrl(value, label = 'value') {
     throw new ValidationError(`${label} must use http or https`);
   }
   return value;
+}
+
+// Deployment-controlled allowlist (Security.md, 2026-07-15, MEDIUM: "LLM
+// Base URL Allows Backend-Side SSRF and Global AI DoS"). Read once at
+// module load from config.js's ALLOWED_LLM_ORIGINS/LLM_BASE_URL-derived
+// default, not per-call — this is operator/deployment config, never
+// user-supplied.
+const ALLOWED_LLM_ORIGINS = new Set(config.llm.allowedLlmOrigins);
+
+// `baseUrl` is admin-editable via PATCH /api/ai/settings (Section 4,
+// Runtime Configuration), unlike LLM_BASE_URL itself, which is trusted
+// operator-set deployment config. That makes it attacker-reachable input:
+// without this check, a compromised or over-privileged admin session could
+// point the backend at loopback, link-local, or private-network targets as
+// an SSRF primitive, or break AI/search globally by pointing it at a
+// blackhole (Security.md's exploit scenario for this finding). Only an
+// explicitly allowlisted origin is accepted; the return value is
+// normalized to just that origin, discarding any path/query the caller
+// supplied, since only the origin is ever meaningful for this setting.
+export function assertAllowedLlmUrl(value, label = 'baseUrl') {
+  const parsed = new URL(assertHttpUrl(value, label));
+  if (!ALLOWED_LLM_ORIGINS.has(parsed.origin)) {
+    throw new ValidationError(`${label} is not an approved LLM provider origin`);
+  }
+  return parsed.origin;
 }
 
 export function assertShortString(value, { maxLength }, label = 'value') {

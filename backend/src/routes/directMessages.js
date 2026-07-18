@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid } from '../validation.js';
+import { assertUuid, MAX_GROUP_DM_MEMBERS } from '../validation.js';
 import { ValidationError, NotFoundError } from '../errors.js';
 
 export const directMessagesRouter = Router();
@@ -166,6 +166,11 @@ groupDirectMessagesRouter.post('/', async (req, res, next) => {
     const memberIds = Array.isArray(req.body?.memberIds) ? req.body.memberIds : null;
     if (!memberIds || memberIds.length === 0) {
       throw new ValidationError('memberIds must be a non-empty array');
+    }
+    // Checked before per-element UUID validation/DB lookup — a large
+    // malformed array shouldn't even reach those.
+    if (memberIds.length > MAX_GROUP_DM_MEMBERS) {
+      throw new ValidationError(`memberIds must include at most ${MAX_GROUP_DM_MEMBERS} users`);
     }
     const uniqueTargetIds = [...new Set(memberIds.map((id) => assertUuid(id, 'memberIds[]')))].filter(
       (id) => id !== req.user.id,

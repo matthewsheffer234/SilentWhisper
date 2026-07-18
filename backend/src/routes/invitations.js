@@ -86,6 +86,24 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
         return { kind: 'invalid' };
       }
 
+      // Security.md (2026-07-15, MEDIUM: "Archived Workspace/Organization
+      // Invitations Remain Redeemable") — creation already checks archived
+      // state (requireOrgNotArchived/requireWorkspaceNotArchived in
+      // organizations.js/workspaces.js), but that only proves the scope was
+      // active at *invite* time. An invitation can sit PENDING for days;
+      // this re-checks at *redemption* time, inside the same row-locked
+      // transaction, so a scope archived after the invite was sent can no
+      // longer be joined via a stale token. Same generic 404 as every other
+      // invalid-token case — a public endpoint must not leak that the token
+      // was otherwise fine but its target got archived.
+      if (row.scope_type === 'ORGANIZATION') {
+        const org = await trx('organizations').where({ id: row.organization_id }).first('archived_at');
+        if (!org || org.archived_at) return { kind: 'invalid' };
+      } else {
+        const workspace = await trx('workspaces').where({ id: row.workspace_id }).first('archived_at');
+        if (!workspace || workspace.archived_at) return { kind: 'invalid' };
+      }
+
       const existing = await trx('users').where({ username }).orWhere({ email }).first();
       if (existing) {
         return { kind: 'conflict' };

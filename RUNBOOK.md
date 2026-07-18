@@ -299,6 +299,7 @@ Every `LLM_*` env var (`backend/.env.example`) is a **default**, not the final w
 | `LLM_STREAMING_ENABLED` | `true` | if the provider can't actually stream, the backend still returns the full text in one write |
 | `LLM_SUMMARY_PROMPT_VERSION` / `LLM_TASK_PROMPT_VERSION` | `v1` | logged on every AI audit event; an unrecognized version falls back to the `v1` template rather than failing |
 | `LLM_HEALTH_CHECK_INTERVAL_MS` | `60000` | not an `app_settings` key — operational only |
+| `ALLOWED_LLM_ORIGINS` | *(empty — falls back to `LLM_BASE_URL`'s own origin)* | not an `app_settings` key — comma-separated allowlist of origins `baseUrl` may be changed to via `PATCH /api/ai/settings`; see Switching providers below |
 
 ### Checking provider health
 
@@ -360,6 +361,7 @@ Changing `LLM_PROVIDER`/`LLM_BASE_URL`/`LLM_MODEL` is a config change only — n
 
 - **Via the admin UI**: "AI Settings" panel (visible to any workspace `ADMIN`) → change Provider/Base URL/Model → Save. Takes effect on the next AI request; the health dot updates on the next sweep (`LLM_HEALTH_CHECK_INTERVAL_MS`, default 60s) or immediately if you reopen the panel (it re-fetches on mount).
 - **Via `PATCH /api/ai/settings`**: `{"provider": "vllm", "baseUrl": "http://vllm:8000", "model": "your-model"}`.
+- **`baseUrl` must be an allowlisted origin** (Security.md, 2026-07-15, MEDIUM: LLM baseUrl SSRF/DoS) — `ALLOWED_LLM_ORIGINS` restricts what this endpoint (and the admin UI, which calls it) will accept, specifically so an admin session can't be used to point the backend at an arbitrary internal target. A `baseUrl` whose origin isn't in the list 400s with `"baseUrl is not an approved LLM provider origin"` — before switching to `vllm` on the target production network, add that origin to `ALLOWED_LLM_ORIGINS` (a backend restart/redeploy, not an app_settings change) first, or the `PATCH` above will be rejected.
 - **To turn AI features off entirely**: `{"provider": "disabled"}` — every summarize/extract-tasks call then returns `503` immediately (`ServiceUnavailableError`), without ever calling out to a provider.
 
 `vllm` is implemented and unit-tested against a mocked OpenAI-compatible endpoint (`/v1/completions`, `/v1/models`) but has not been exercised against a real vLLM instance — this test host has no GPU. Verify against a real instance before relying on it in production.

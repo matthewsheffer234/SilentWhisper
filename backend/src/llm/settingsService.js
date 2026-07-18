@@ -4,7 +4,7 @@ import {
   assertBoundedInt,
   assertBoundedNumber,
   assertBoolean,
-  assertHttpUrl,
+  assertAllowedLlmUrl,
   assertShortString,
 } from '../validation.js';
 import { ValidationError } from '../errors.js';
@@ -93,7 +93,7 @@ export function validateSettingsPatch(body) {
     }
   }
   if ('provider' in body) patch.provider = assertEnum(body.provider, LLM_PROVIDERS, 'provider');
-  if ('baseUrl' in body) patch.baseUrl = assertHttpUrl(body.baseUrl, 'baseUrl');
+  if ('baseUrl' in body) patch.baseUrl = assertAllowedLlmUrl(body.baseUrl, 'baseUrl');
   if ('model' in body) patch.model = assertShortString(body.model, { maxLength: 200 }, 'model');
   if ('timeoutMs' in body) patch.timeoutMs = assertBoundedInt(body.timeoutMs, { min: 1000, max: 120_000 }, 'timeoutMs');
   if ('maxInputChars' in body) {

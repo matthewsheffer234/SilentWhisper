@@ -27,19 +27,7 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-### 1. Security hardening from 2026-07-15 audit — remaining Medium/Low items
-
-**Status**: Proposed
-**Utility**: Closes the rest of the findings from `Security.md`: provider SSRF/DoS risk, stale invitation redemption, and an avoidable group-DM DoS edge. The disabled-account and WebSocket-payload items originally scoped here shipped separately — see "WebSocket connection hygiene: immediate eviction on account disable + payload cap" under Done, below. The two High-severity authorization findings from the same audit (global admin boundary, cross-workspace channel-member injection) are already fixed — see "Security hardening: global admin boundary and cross-workspace channel-member injection" under Done, below.
-**Origin**: Requested after the Principal AppSec review was written to `Security.md` on 2026-07-15.
-
-Design:
-- **LLM provider SSRF/DoS control**: treat `llm.baseUrl` as an allowlisted provider origin, not an arbitrary admin-supplied URL. Add an `ALLOWED_LLM_ORIGINS` env var or equivalent config, normalize `baseUrl` to an origin, and reject loopback/link-local/private metadata targets unless explicitly listed. Keep network egress restricted at the container/network layer where possible. This also reduces global AI outage risk from accidentally pointing the provider at a blackhole or unrelated internal service.
-- **Archived invitation redemption**: in `POST /api/invitations/:token/accept`, after row-locking the invitation and before creating the user, re-check that the target workspace or organization still exists and is not archived. Return the same generic "Invitation not found" response for archived/revoked/expired/nonexistent cases from this public endpoint.
-- **Group DM member cap**: add a product-level maximum for `memberIds` in `POST /api/group-direct-messages`, e.g. 20 users, before UUID validation/database lookup. This is a low-severity authenticated DoS hardening item but cheap to close with the rest.
-- **Tests**: add backend tests proving archived workspace/org invitations cannot be redeemed and oversized group-DM member arrays 400.
-
-### 2. The deploy loop — production frontend bundle + a scripted deploy step
+### 1. The deploy loop — production frontend bundle + a scripted deploy step
 
 **Status**: Proposed
 **Utility**: Both reviews independently call this the cheapest, highest-leverage non-security fix available: `ARCHITECTURE_REVIEW_(Claude).md`'s Risk 3 (dev server in production) and Risk 5 (no CI/CD, manual deploy) note that "stale frontend/backend container" has already caused real, user-visible regressions at least four separate times across `PROJECT_PLAN.md` Section 11's own log, each one only caught because e2e tests happened to run immediately afterward. `ARCHITECTURE_REVIEW_(CODEX).md`'s P1 Recommendations 1–2 and Phase 1 item 6 make the same two points independently. This isn't a scale problem — it's a today problem, and it directly undermines "rapid feature iteration."
@@ -51,7 +39,7 @@ Design:
 - **No schema, authz, or audit implications** — this is build/deploy tooling only, touching `frontend/Dockerfile`, `docker-compose.yml`, and a new `scripts/deploy.sh`.
 - **Verification**: `npx vite build` runs clean; the new frontend container serves the built `dist/` (confirmed via a direct `curl` to a known route, not just "container starts"); `scripts/deploy.sh` is idempotent (running it twice back to back produces no errors, no duplicate reload side effects beyond the flag being passed twice); `RUNBOOK.md`'s Production Deployment section updated to reference the script as the standard path, keeping the manual sequence documented underneath it as what the script actually does, for anyone debugging it.
 
-### 3. Hot path splitting — move notification writes and entity linking off the message-send path
+### 2. Hot path splitting — move notification writes and entity linking off the message-send path
 
 **Status**: Proposed
 **Utility**: Both reviews flag the message-send path's inline side effects (mention resolution, notification writes, entity linking, embedding enqueue) as a latency risk that grows with mention/entity count per message — `ARCHITECTURE_REVIEW_(Claude).md` Risk 4 and Recommendation 5's outbox-pattern approach (applied there to audit writes, but the same shape); `ARCHITECTURE_REVIEW_(CODEX).md` Risk 3 and P2 Recommendations 1–4 (a durable `message_side_effect_jobs` table, explicitly). Keeps message delivery feeling instantaneous as mention/entity usage grows, without touching the one thing users actually perceive as "sent" — the DB insert and room broadcast.
@@ -67,6 +55,16 @@ Design:
 - **No audit change**: no message side effect is itself an audited action today, so this is silent to the audit log unless that changes separately later.
 
 ## Done
+
+### Security hardening from 2026-07-15 audit: LLM baseUrl allowlist, archived invitation redemption, group-DM member cap
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Security hardening from 2026-07-15 audit: LLM baseUrl allowlist, archived invitation redemption, group-DM member cap" (2026-07-18). Re-verified against the live codebase immediately before implementation — all three were still present, unaffected by the WebSocket-hygiene and admin-boundary fixes that shipped separately.
+
+`backend/src/validation.js` gained `assertAllowedLlmUrl` (layered on top of the existing `assertHttpUrl`), checking the parsed URL's origin against a new `config.llm.allowedLlmOrigins` — sourced from `ALLOWED_LLM_ORIGINS` (comma-separated), defaulting to exactly `LLM_BASE_URL`'s own origin so an out-of-the-box deployment keeps working with nothing else implicitly trusted. `llm/settingsService.js`'s `validateSettingsPatch` now calls it for `baseUrl` instead of the plain syntax check, so `PATCH /api/ai/settings` rejects any origin not on the allowlist (e.g. a loopback or arbitrary internal target) with "baseUrl is not an approved LLM provider origin" — closing the SSRF/global-AI-DoS path a compromised or over-privileged admin session previously had. `backend/src/routes/invitations.js`'s `POST /:token/accept` now re-checks `organizations.archived_at`/`workspaces.archived_at` inside the same row-locked transaction, after the invitation-validity check and before user creation — an invitation created while its target was active can no longer be redeemed once that target is archived, closing a stale-invitation loophole around the existing archive write-freeze. `backend/src/routes/directMessages.js`'s `groupDirectMessagesRouter.post('/')` gained a `MAX_GROUP_DM_MEMBERS` (20) check on `memberIds.length`, before per-element UUID validation or any database lookup.
+
+`RUNBOOK.md`'s env var table and "Switching providers" section updated: `ALLOWED_LLM_ORIGINS` documented, with an explicit note that moving to `vllm` on the target production network requires adding that origin to the allowlist (a restart-time config change) before the `PATCH /api/ai/settings` call that switches providers will succeed. `backend/.env.example` gained the new var.
+
+**Tests**: `backend/tests/llmSettingsService.test.js` — an allowlisted `baseUrl` is accepted and normalized to just its origin (path/query stripped); a well-formed but non-allowlisted origin (a loopback target and an arbitrary internal hostname) is rejected. `backend/tests/invitations.test.js` — a workspace archived after its invitation was created can no longer be redeemed (generic 404, no user row created, invitation stays `PENDING`); same for an organization-scoped invitation. `backend/tests/directMessages.test.js` — a `memberIds` array of 21 is rejected before any `GROUP_DM` channel row is created; exactly 20 succeeds. 442 backend tests (440 passing; two pre-existing failures across two runs, both the same documented `aiRoutes.test.js` "respond first, audit after" race hitting a different one of its own tests depending on timing — reproduced in isolation on an unmodified run, confirming it's unrelated to this change).
 
 ### WebSocket connection hygiene: immediate eviction on account disable + payload cap
 

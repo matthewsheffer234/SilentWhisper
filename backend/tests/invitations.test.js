@@ -390,6 +390,57 @@ describe('POST /api/invitations/:token/accept', () => {
       .send({ username: 'expiredacceptuser0', email: 'expiredaccept0@example.com', password: 'correct-horse-battery' });
     expect(res.status).toBe(404);
   });
+
+  // Security.md (2026-07-15, MEDIUM: "Archived Workspace/Organization
+  // Invitations Remain Redeemable") — creation-time archived checks don't
+  // help a token created while the resource was still active; redemption
+  // must re-check current state, not just what was true at invite time.
+  test('a workspace archived after the invitation was created can no longer be joined via that token', async () => {
+    const owner = await signup('wsacceptarchived0');
+    const ws = await createWorkspace(owner);
+    const createRes = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({});
+
+    const archiveRes = await request(app).post(`/api/workspaces/${ws.id}/archive`).set(authHeader(owner.accessToken));
+    expect(archiveRes.status).toBe(200);
+
+    const res = await request(app)
+      .post(`/api/invitations/${createRes.body.token}/accept`)
+      .send({ username: 'wsarchivedaccept0', email: 'wsarchivedaccept0@example.com', password: 'correct-horse-battery' });
+    // Same generic 404 as every other invalid-token case — a public
+    // endpoint must not leak that the token was otherwise fine but its
+    // target got archived.
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Invitation not found');
+
+    const user = await db('users').where({ username: 'wsarchivedaccept0' }).first();
+    expect(user).toBeUndefined();
+    const invitationRow = await db('invitations').where({ id: createRes.body.id }).first();
+    expect(invitationRow.status).toBe('PENDING');
+  });
+
+  test('an organization archived after the invitation was created can no longer be joined via that token', async () => {
+    const admin = await seedSystemAdmin('orgacceptarchived0');
+    const org = await createOrg(admin.accessToken);
+    const createRes = await request(app)
+      .post(`/api/organizations/${org.id}/invitations`)
+      .set(authHeader(admin.accessToken))
+      .send({ role: 'ORG_MEMBER' });
+
+    const archiveRes = await request(app).post(`/api/organizations/${org.id}/archive`).set(authHeader(admin.accessToken));
+    expect(archiveRes.status).toBe(200);
+
+    const res = await request(app)
+      .post(`/api/invitations/${createRes.body.token}/accept`)
+      .send({ username: 'orgarchivedaccept0', email: 'orgarchivedaccept0@example.com', password: 'correct-horse-battery' });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Invitation not found');
+
+    const user = await db('users').where({ username: 'orgarchivedaccept0' }).first();
+    expect(user).toBeUndefined();
+  });
 });
 
 describe('POST /api/invitations/:id/revoke', () => {

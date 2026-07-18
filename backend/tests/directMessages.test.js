@@ -120,6 +120,41 @@ describe('GET /api/direct-messages', () => {
   });
 });
 
+// Security.md (2026-07-15, LOW: "Group DM Creation Allows Unbounded Member
+// Arrays") — memberIds previously had no maximum, only a non-empty check
+// and per-element UUID validation.
+describe('POST /api/group-direct-messages', () => {
+  test('rejects a memberIds array larger than the product-level cap, before touching the database', async () => {
+    const alice = await signup('groupdmcapalice0');
+    const oversized = Array.from({ length: 21 }, (_, i) => `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`);
+
+    const res = await request(app)
+      .post('/api/group-direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ memberIds: oversized });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at most 20 users/);
+
+    const channels = await db('channels').where({ type: 'GROUP_DM' });
+    expect(channels).toHaveLength(0);
+  });
+
+  test('accepts a memberIds array at exactly the cap', async () => {
+    const alice = await signup('groupdmcapalice1');
+    const others = [];
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      others.push(await signup(`groupdmcapmember1_${i}`));
+    }
+
+    const res = await request(app)
+      .post('/api/group-direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ memberIds: others.map((u) => u.userId) });
+    expect(res.status).toBe(201);
+  });
+});
+
 describe('GET /api/organizations/:orgId/members-search', () => {
   test('rejects an unauthenticated request', async () => {
     const res = await request(app).get('/api/organizations/00000000-0000-0000-0000-000000000000/members-search');
