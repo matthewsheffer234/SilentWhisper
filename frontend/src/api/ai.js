@@ -4,7 +4,7 @@ import { apiFetch, API_BASE, getAccessToken, refreshAccessToken } from './client
 // plain-text body, not JSON, so they can't go through apiFetch — but they
 // still need the same in-memory-token + silent-refresh-and-retry treatment
 // every other authenticated request gets (PROJECT_PLAN.md Section 3).
-async function streamPost(path, body, onChunk, { signal, _isRetry = false } = {}) {
+async function streamPost(path, body, onChunk, { signal, onQueued, _isRetry = false } = {}) {
   const token = getAccessToken();
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
@@ -20,7 +20,7 @@ async function streamPost(path, body, onChunk, { signal, _isRetry = false } = {}
   if (res.status === 401 && !_isRetry) {
     const newToken = await refreshAccessToken();
     if (newToken) {
-      return streamPost(path, body, onChunk, { signal, _isRetry: true });
+      return streamPost(path, body, onChunk, { signal, onQueued, _isRetry: true });
     }
   }
 
@@ -30,6 +30,16 @@ async function streamPost(path, body, onChunk, { signal, _isRetry = false } = {}
     const error = new Error(data?.error || `Request failed: ${res.status}`);
     error.status = res.status;
     throw error;
+  }
+
+  // FEATURE_REQUEST.md entry 2: present when the backend had to queue this
+  // request behind another in-flight AI generation (backend/src/llm/
+  // concurrencyGate.js) — fetch()'s promise already resolves once headers
+  // arrive, well before the streamed body finishes, so this is available
+  // immediately, same moment `meta` below is.
+  const queuePositionHeader = res.headers.get('x-ai-queue-position');
+  if (queuePositionHeader !== null) {
+    onQueued?.(Number(queuePositionHeader));
   }
 
   const meta = {
@@ -63,18 +73,19 @@ async function streamPost(path, body, onChunk, { signal, _isRetry = false } = {}
   return { text: full, meta };
 }
 
-export const summarizeChannel = (channelId, onChunk, { limit } = {}) =>
-  streamPost(`/channels/${channelId}/ai/summarize`, limit ? { limit } : {}, onChunk);
+export const summarizeChannel = (channelId, onChunk, { limit, onQueued } = {}) =>
+  streamPost(`/channels/${channelId}/ai/summarize`, limit ? { limit } : {}, onChunk, { onQueued });
 
-export const extractTasks = (messageId, onChunk) => streamPost(`/messages/${messageId}/ai/extract-tasks`, {}, onChunk);
+export const extractTasks = (messageId, onChunk, { onQueued } = {}) =>
+  streamPost(`/messages/${messageId}/ai/extract-tasks`, {}, onChunk, { onQueued });
 
 // Cross-channel "Catch Me Up" workspace digest (FEATURE_REQUEST.md entry 6).
 // `signal` is the one caller-facing addition streamPost's other two callers
 // don't need — a digest can run long enough (multiple channels' worth of
 // selection + a larger prompt) that the design calls for a real Cancel
 // affordance, unlike a single-channel summarize/extract-tasks action.
-export const requestWorkspaceDigest = (workspaceId, params, onChunk, { signal } = {}) =>
-  streamPost('/ai/workspace-digest', { workspaceId, ...params }, onChunk, { signal });
+export const requestWorkspaceDigest = (workspaceId, params, onChunk, { signal, onQueued } = {}) =>
+  streamPost('/ai/workspace-digest', { workspaceId, ...params }, onChunk, { signal, onQueued });
 
 export const getAiSettings = () => apiFetch('/ai/settings');
 export const updateAiSettings = (patch) => apiFetch('/ai/settings', { method: 'PATCH', body: patch });

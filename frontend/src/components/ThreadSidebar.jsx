@@ -5,7 +5,7 @@ import Menu from './Menu.jsx';
 import { extractTasks } from '../api/ai.js';
 import { renderMessageContent } from '../markdown.jsx';
 import { isFirstInRun, initials } from './ChannelView.jsx';
-import { AI_THREAD_SCOPE, formatAiActionError } from '../aiPresentation.js';
+import { AI_THREAD_SCOPE, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
 
 const styles = {
   sidebar: {
@@ -170,11 +170,15 @@ export default function ThreadSidebar({
   }
 
   async function handleExtractTasks() {
-    setTasks({ loading: true, text: '', error: null, scope: AI_THREAD_SCOPE });
+    setTasks({ loading: true, text: '', error: null, scope: AI_THREAD_SCOPE, queuePosition: null });
     try {
-      await extractTasks(rootMessage.id, (chunk) => {
-        setTasks((prev) => (prev ? { ...prev, text: prev.text + chunk } : prev));
-      });
+      await extractTasks(
+        rootMessage.id,
+        (chunk) => {
+          setTasks((prev) => (prev ? { ...prev, text: prev.text + chunk, queuePosition: null } : prev));
+        },
+        { onQueued: (position) => setTasks((prev) => (prev ? { ...prev, queuePosition: position } : prev)) },
+      );
       setTasks((prev) => (prev ? { ...prev, loading: false } : prev));
     } catch (err) {
       setTasks({ loading: false, text: '', error: formatAiActionError(err, 'Failed to find action items'), scope: AI_THREAD_SCOPE });
@@ -206,7 +210,7 @@ export default function ThreadSidebar({
             renderTrigger={(triggerProps) => (
               <button type="button" {...triggerProps} style={styles.aiMenuButton} aria-label="Thread AI actions">
                 <Sparkles size={14} aria-hidden="true" />
-                <span>{tasks?.loading ? 'Running AI…' : 'AI Actions'}</span>
+                <span>{tasks?.loading ? (tasks.queuePosition ? formatAiQueueLabel(tasks.queuePosition) : 'Running AI…') : 'AI Actions'}</span>
                 <ChevronDown size={14} aria-hidden="true" />
               </button>
             )}

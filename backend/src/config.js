@@ -68,6 +68,11 @@ export const config = {
     // requests queue for tens of seconds each. Raise once running against
     // GPU-backed vLLM.
     maxConcurrentRequests: Number(process.env.LLM_MAX_CONCURRENT_REQUESTS || 1),
+    // Not an app_settings key — purely operational, like digestMaxWindowHours
+    // below. Bounds concurrencyGate.js's FIFO wait queue (FEATURE_REQUEST.md
+    // entry 2): a request beyond this depth still gets an immediate 503
+    // rather than queuing indefinitely.
+    queueMaxDepth: Number(process.env.AI_QUEUE_MAX_DEPTH || 8),
     temperature: Number(process.env.LLM_TEMPERATURE || 0.3),
     streamingEnabled: process.env.LLM_STREAMING_ENABLED !== 'false',
     summaryPromptVersion: process.env.LLM_SUMMARY_PROMPT_VERSION || 'v1',

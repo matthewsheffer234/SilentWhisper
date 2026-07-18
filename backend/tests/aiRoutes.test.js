@@ -6,6 +6,7 @@ import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 import { LLM_SETTING_KEYS, validateSettingsPatch, updateSettings } from '../src/llm/settingsService.js';
+import { getInFlightCount, getQueueDepth, _resetForTests as resetConcurrencyGate } from '../src/llm/concurrencyGate.js';
 
 // PROJECT_PLAN.md Section 8, Phase 4: "Add tests for ... authorization ...
 // provider configuration and health-check reporting ... disabled-provider
@@ -15,6 +16,39 @@ import { LLM_SETTING_KEYS, validateSettingsPatch, updateSettings } from '../src/
 
 function makeJsonResponse(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+
+// supertest/superagent's Test is lazy: constructing it (even with .send())
+// does nothing over the wire until it's awaited/`.then()`-ed — so firing a
+// request and *not* immediately awaiting it (needed below to have two
+// requests genuinely in flight at once) requires explicitly kicking it off
+// via .end(), wrapped back into a plain Promise.
+function fireNow(req) {
+  return new Promise((resolve, reject) => {
+    req.end((err, res) => {
+      if (err && !res) reject(err);
+      else resolve(res);
+    });
+  });
+}
+
+// Same helper as embeddingIngestion.test.js/mentions.test.js/etc. — a
+// request reaching acquireSlot() takes an unpredictable number of
+// microtask/macrotask ticks (channel-membership lookup, message-history
+// query, ...), so polling the gate's own state is the reliable way to know
+// a request has actually arrived there, rather than guessing a tick count.
+async function pollUntil(fn, { timeoutMs = 2000, intervalMs = 10 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await fn();
+    if (result) return result;
+    if (Date.now() > deadline) {
+      throw new Error('pollUntil timed out');
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }
 
 async function createWorkspace(user) {
@@ -37,6 +71,7 @@ beforeEach(async () => {
   // users.id) would otherwise reject.
   await db('app_settings').whereIn('key', LLM_SETTING_KEYS).del();
   await resetDb(db);
+  resetConcurrencyGate();
 });
 
 afterEach(() => {
@@ -248,4 +283,155 @@ describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
       .send({});
     expect(res.status).toBe(404);
   });
+});
+
+// FEATURE_REQUEST.md entry 2: a request beyond LLM_MAX_CONCURRENT_REQUESTS
+// (1 by default here) now waits in a bounded FIFO queue rather than being
+// refused outright.
+describe('AI concurrency queue', () => {
+  test('a second request while one is in-flight gets queued (not immediately rejected) and completes once the first finishes', async () => {
+    let resolveFirstFetch;
+    const firstFetchGate = new Promise((resolve) => {
+      resolveFirstFetch = resolve;
+    });
+    let fetchCallCount = 0;
+    jest.spyOn(global, 'fetch').mockImplementation(async () => {
+      fetchCallCount += 1;
+      if (fetchCallCount === 1) {
+        await firstFetchGate;
+        return makeJsonResponse({ response: 'first summary' });
+      }
+      return makeJsonResponse({ response: `summary ${fetchCallCount}` });
+    });
+
+    const owner = await signup('queueowner0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hello' });
+
+    const firstReq = fireNow(request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({}));
+    // Let the first request run up to (and block inside) its mocked fetch
+    // call before issuing the second, so the second deterministically finds
+    // the slot already held rather than racing for it.
+    await pollUntil(() => getInFlightCount() === 1);
+    expect(getQueueDepth()).toBe(0);
+
+    const secondReq = fireNow(request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({}));
+    // Proves the second request queued rather than being rejected — checked
+    // before the first request's generation is ever unblocked below.
+    await pollUntil(() => getQueueDepth() === 1);
+    expect(getInFlightCount()).toBe(1);
+
+    resolveFirstFetch();
+    const [firstRes, secondRes] = await Promise.all([firstReq, secondReq]);
+    expect(firstRes.status).toBe(200);
+    expect(firstRes.text).toBe('first summary');
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.headers['x-ai-queue-position']).toBe('1');
+    expect(secondRes.text).toBe('summary 2');
+    expect(getInFlightCount()).toBe(0);
+    expect(getQueueDepth()).toBe(0);
+  });
+
+  test('a third and fourth request queue in FIFO order behind an in-flight and an already-queued request', async () => {
+    const releasers = [];
+    let fetchCallCount = 0;
+    jest.spyOn(global, 'fetch').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          fetchCallCount += 1;
+          const callIndex = fetchCallCount;
+          releasers.push(() => resolve(makeJsonResponse({ response: `summary ${callIndex}` })));
+        }),
+    );
+
+    const owner = await signup('queueowner1');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hello' });
+
+    const reqs = [];
+    for (let i = 0; i < 4; i += 1) {
+      reqs.push(fireNow(request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({})));
+      // eslint-disable-next-line no-await-in-loop
+      await pollUntil(() => getInFlightCount() + getQueueDepth() === i + 1);
+    }
+    expect(getInFlightCount()).toBe(1);
+    expect(getQueueDepth()).toBe(3);
+
+    // Release strictly one at a time, confirming FIFO order: the Nth
+    // release must be the one that unblocks the Nth request, not any other.
+    // Waits for each generate() call to actually reach the mock (rather than
+    // assuming HTTP round-trip vs. microtask timing) before triggering it,
+    // then awaits every response together at the end.
+    for (let i = 0; i < 4; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await pollUntil(() => releasers.length === i + 1);
+      releasers[i]();
+    }
+    const results = await Promise.all(reqs);
+    results.forEach((res, i) => {
+      expect(res.status).toBe(200);
+      expect(res.text).toBe(`summary ${i + 1}`);
+    });
+    expect(getInFlightCount()).toBe(0);
+    expect(getQueueDepth()).toBe(0);
+  });
+
+  // Slower than the default 5000ms budget: config.llm.queueMaxDepth + 2 real
+  // HTTP round trips through the full auth/membership stack, fired and
+  // drained one at a time to keep arrival order deterministic.
+  test('a request arriving when the queue is already at capacity still gets an immediate 503', async () => {
+    const pendingResolvers = [];
+    jest.spyOn(global, 'fetch').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          pendingResolvers.push(() => resolve(makeJsonResponse({ response: 'drained' })));
+        }),
+    );
+
+    const owner = await signup('queueowner2');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hello' });
+
+    const reqs = [];
+    // 1 in-flight + config.llm.queueMaxDepth queued = queue completely full.
+    for (let i = 0; i < 1 + config.llm.queueMaxDepth; i += 1) {
+      reqs.push(fireNow(request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({})));
+      // eslint-disable-next-line no-await-in-loop
+      await pollUntil(() => getInFlightCount() + getQueueDepth() === i + 1);
+    }
+    expect(getInFlightCount()).toBe(1);
+    expect(getQueueDepth()).toBe(config.llm.queueMaxDepth);
+
+    const overflowRes = await request(app)
+      .post(`/api/channels/${channelId}/ai/summarize`)
+      .set(authHeader(owner.accessToken))
+      .send({});
+    expect(overflowRes.status).toBe(503);
+    expect(overflowRes.body.error).toMatch(/at capacity/);
+    // Rejected outright — never joined the queue itself.
+    expect(getQueueDepth()).toBe(config.llm.queueMaxDepth);
+
+    const auditRow = await db('audit_logs').where({ action_type: 'AI_SUMMARIZE_REQUESTED' }).first();
+    expect(auditRow).toBeUndefined();
+
+    // Drain every still-pending request so nothing dangles past this test —
+    // an unawaited, never-resolving mocked fetch would otherwise leak an
+    // open connection into later tests/the process exit. Only the currently
+    // in-flight request has actually reached fetch (queued requests haven't
+    // gotten there yet), so resolvers must be triggered one at a time as
+    // each subsequent request is granted its slot and reaches fetch in turn
+    // — resolving whatever exists at a single point in time would leave the
+    // rest permanently blocked.
+    for (let i = 0; i < reqs.length; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await pollUntil(() => pendingResolvers.length === i + 1);
+      pendingResolvers[i]();
+    }
+    await Promise.all(reqs);
+    expect(getInFlightCount()).toBe(0);
+    expect(getQueueDepth()).toBe(0);
+  }, 15000);
 });

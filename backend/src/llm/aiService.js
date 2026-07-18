@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { getEffectiveSettings } from './settingsService.js';
 import { getAdapter } from './adapterFactory.js';
-import { tryAcquire, release } from './concurrencyGate.js';
+import { acquireSlot, release } from './concurrencyGate.js';
 import { ServiceUnavailableError } from '../errors.js';
 
 // Shared by all three AI routes (summarize, extract-tasks, workspace-digest)
@@ -22,23 +22,53 @@ export async function runStreamingCompletion({ db, res, promptBuilder, promptVer
   if (settings.provider === 'disabled') {
     throw new ServiceUnavailableError('AI features are disabled on this deployment');
   }
-  if (!tryAcquire(settings.maxConcurrentRequests)) {
-    throw new ServiceUnavailableError('AI service is at capacity, please try again shortly');
-  }
 
-  try {
-    const { prompt, truncatedInputLength, wasTruncated } = promptBuilder({
-      messages,
-      maxInputChars: settings.maxInputChars,
-      promptVersion: settings[promptVersionField],
-    });
+  // Prompt construction is pure, local truncation/formatting — it needs no
+  // provider call and so needs no concurrency slot. Computing it up front
+  // (a deliberate reordering vs. this entry's own design text, which had
+  // this run after acquiring) means every response header, including the
+  // queue-position one set below, can go out in a single flush whether or
+  // not this request ends up waiting — setHeader() after headers have
+  // already been flushed throws, so the two header-setting paths (queued vs.
+  // not) can't be allowed to race each other.
+  const { prompt, truncatedInputLength, wasTruncated } = promptBuilder({
+    messages,
+    maxInputChars: settings.maxInputChars,
+    promptVersion: settings[promptVersionField],
+  });
 
+  function setCompletionHeaders() {
     res.status(200);
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('X-Ai-Provider', settings.provider);
     res.setHeader('X-Ai-Prompt-Version', settings[promptVersionField]);
     res.setHeader('X-Ai-Truncated-Input-Length', String(truncatedInputLength));
     res.setHeader('X-Ai-Was-Truncated', String(wasTruncated));
+  }
+
+  let headersFlushed = false;
+  try {
+    await acquireSlot(settings.maxConcurrentRequests, {
+      onQueued: (position) => {
+        // Client-visible "queued, position N" signal (FEATURE_REQUEST.md
+        // entry 2) rather than a request that silently hangs until its turn.
+        setCompletionHeaders();
+        res.setHeader('X-Ai-Queue-Position', String(position));
+        res.flushHeaders();
+        headersFlushed = true;
+      },
+    });
+  } catch {
+    // This entry narrows *when* the capacity rejection fires (only once the
+    // bounded wait queue itself is full), it doesn't remove it — same
+    // message callers/tests already expect.
+    throw new ServiceUnavailableError('AI service is at capacity, please try again shortly');
+  }
+
+  try {
+    if (!headersFlushed) {
+      setCompletionHeaders();
+    }
 
     const adapter = getAdapter(settings.provider);
     // Wired up when streaming is on, but an adapter may still fall back to a

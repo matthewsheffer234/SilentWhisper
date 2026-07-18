@@ -5,6 +5,7 @@ import {
   AI_THREAD_SCOPE,
   AI_DIGEST_WINDOW_OPTIONS,
   formatAiActionError,
+  formatAiQueueLabel,
 } from './aiPresentation.js';
 
 describe('AI presentation helpers', () => {
@@ -43,5 +44,12 @@ describe('AI presentation helpers', () => {
       { sinceHours: 72, label: 'Last 3 days' },
       { sinceHours: 168, label: 'Last 7 days' },
     ]);
+  });
+
+  // FEATURE_REQUEST.md entry 2: a client-visible "queued, position N" label
+  // distinct from "Running AI..."/"Generating..." once a slot is granted.
+  test('formats a plain-language queue-position label', () => {
+    expect(formatAiQueueLabel(1)).toBe('Queued (position 1)…');
+    expect(formatAiQueueLabel(3)).toBe('Queued (position 3)…');
   });
 });

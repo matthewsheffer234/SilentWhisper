@@ -7,7 +7,7 @@ import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
 import { searchEntities } from '../api/entities.js';
 import { renderMessageContent } from '../markdown.jsx';
-import { AI_SUMMARY_LIMIT, AI_SUMMARY_SCOPE, formatAiActionError } from '../aiPresentation.js';
+import { AI_SUMMARY_LIMIT, AI_SUMMARY_SCOPE, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
 
 // FEATURE_REQUEST.md's @mention autocomplete entry.
 const AUTOCOMPLETE_DEBOUNCE_MS = 200;
@@ -549,14 +549,19 @@ export default function ChannelView({
   }
 
   async function handleSummarize() {
-    setSummary({ loading: true, text: '', error: null, scope: AI_SUMMARY_SCOPE });
+    setSummary({ loading: true, text: '', error: null, scope: AI_SUMMARY_SCOPE, queuePosition: null });
     try {
       await summarizeChannel(
         channel.id,
         (chunk) => {
-          setSummary((prev) => (prev ? { ...prev, text: prev.text + chunk } : prev));
+          // A chunk arriving means the slot was granted and generation is
+          // actually underway — clear any stale queue-position label.
+          setSummary((prev) => (prev ? { ...prev, text: prev.text + chunk, queuePosition: null } : prev));
         },
-        { limit: AI_SUMMARY_LIMIT },
+        {
+          limit: AI_SUMMARY_LIMIT,
+          onQueued: (position) => setSummary((prev) => (prev ? { ...prev, queuePosition: position } : prev)),
+        },
       );
       setSummary((prev) => (prev ? { ...prev, loading: false } : prev));
     } catch (err) {
@@ -611,7 +616,7 @@ export default function ChannelView({
             renderTrigger={(triggerProps) => (
               <button type="button" {...triggerProps} style={styles.aiMenuButton} aria-label="AI actions">
                 <Sparkles size={14} aria-hidden="true" />
-                <span>{summary?.loading ? 'Running AI…' : 'AI Actions'}</span>
+                <span>{summary?.loading ? (summary.queuePosition ? formatAiQueueLabel(summary.queuePosition) : 'Running AI…') : 'AI Actions'}</span>
                 <ChevronDown size={14} aria-hidden="true" />
               </button>
             )}

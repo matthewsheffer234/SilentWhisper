@@ -308,7 +308,8 @@ Every `LLM_*` env var (`backend/.env.example`) is a **default**, not the final w
 | `LLM_TIMEOUT_MS` | `30000` | per-request timeout before the adapter gives up |
 | `LLM_MAX_INPUT_CHARS` | `12000` | server-side truncation cap, applied before prompt construction |
 | `LLM_MAX_OUTPUT_TOKENS` | `512` | passed to the provider as `num_predict`/`max_tokens` |
-| `LLM_MAX_CONCURRENT_REQUESTS` | `1` | global in-flight cap — a request beyond this gets an immediate `503`, not a queue |
+| `LLM_MAX_CONCURRENT_REQUESTS` | `1` | global in-flight cap — a request beyond this waits in a bounded FIFO queue (see `AI_QUEUE_MAX_DEPTH` below) rather than being refused outright |
+| `AI_QUEUE_MAX_DEPTH` | `8` | not an `app_settings` key — how many requests beyond `LLM_MAX_CONCURRENT_REQUESTS` may wait in the in-memory queue before a new arrival gets an immediate `503` |
 | `LLM_TEMPERATURE` | `0.3` | |
 | `LLM_STREAMING_ENABLED` | `true` | if the provider can't actually stream, the backend still returns the full text in one write |
 | `LLM_SUMMARY_PROMPT_VERSION` / `LLM_TASK_PROMPT_VERSION` | `v1` | logged on every AI audit event; an unrecognized version falls back to the `v1` template rather than failing |
@@ -335,6 +336,8 @@ X-Ai-Prompt-Version: v1
 X-Ai-Truncated-Input-Length: 180
 X-Ai-Was-Truncated: false
 ```
+
+If `LLM_MAX_CONCURRENT_REQUESTS` slots are all in use, the response also carries `X-Ai-Queue-Position: N` (FEATURE_REQUEST.md entry 2) — headers are flushed to the client the moment the request is queued (well before generation starts), giving the frontend a real "queued, position N" state instead of a silent wait. Only present while actually queued; a request that gets a slot immediately never sees this header.
 
 A quick manual check (see also the timed example in Common Problems below):
 
@@ -385,7 +388,7 @@ Changing `LLM_PROVIDER`/`LLM_BASE_URL`/`LLM_MODEL` is a config change only — n
 | Status | Meaning |
 |---|---|
 | `503 "AI features are disabled on this deployment"` | `provider` is `disabled` |
-| `503 "AI service is at capacity, please try again shortly"` | `LLM_MAX_CONCURRENT_REQUESTS` slots are all in use — expected under load with the default of `1` on this CPU-only host, not a bug |
+| `503 "AI service is at capacity, please try again shortly"` | `LLM_MAX_CONCURRENT_REQUESTS` slots are all in use **and** the `AI_QUEUE_MAX_DEPTH` wait queue is also full — a request that still has queue room instead waits and completes normally (see `X-Ai-Queue-Position` above) |
 | `429 "Too many AI requests..."` | per-user rate limit (10 requests / 5 min) |
 | `400 "No messages to summarize in this channel yet"` | empty channel |
 
@@ -691,7 +694,7 @@ Confirm the provider container is actually up and has the model: `docker compose
 
 ### Summarize/Extract Tasks returns `503 "AI service is at capacity"`
 
-Not a bug — `LLM_MAX_CONCURRENT_REQUESTS` (default `1` on this CPU-only host) is a hard, non-queued cap: a request that can't get a slot is refused immediately rather than waiting behind whatever's already generating. Retry after the in-flight request finishes (summaries/extractions typically take 10-20s against `mistral` on this host — see Resource Usage above), or raise the limit via the AI Settings panel if this host has headroom to actually sustain more concurrent CPU-bound generations (it usually doesn't, until this moves to GPU-backed vLLM).
+Not a bug — `LLM_MAX_CONCURRENT_REQUESTS` (default `1` on this CPU-only host) requests beyond that first wait in a bounded FIFO queue (`AI_QUEUE_MAX_DEPTH`, default 8) rather than being refused outright; this specific `503` only fires once that wait queue is *also* full. A request within the queue's capacity instead gets an `X-Ai-Queue-Position` header and completes normally once its turn comes (typically 10-20s per queued request ahead of it against `mistral` on this host — see Resource Usage above). If you do hit this `503`, retry shortly, or raise `LLM_MAX_CONCURRENT_REQUESTS`/`AI_QUEUE_MAX_DEPTH` if this host has headroom to actually sustain more concurrent CPU-bound generations (it usually doesn't, until this moves to GPU-backed vLLM).
 
 ### A just-sent message doesn't show up in Search results yet
 

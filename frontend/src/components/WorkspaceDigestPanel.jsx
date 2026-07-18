@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import Sheet from './Sheet.jsx';
 import { requestWorkspaceDigest } from '../api/ai.js';
-import { AI_DIGEST_WINDOW_OPTIONS, formatAiActionError } from '../aiPresentation.js';
+import { AI_DIGEST_WINDOW_OPTIONS, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
 
 // FEATURE_REQUEST.md entry 6, "Cross-channel 'Catch Me Up' workspace
 // digests". Scope call (documented in PROJECT_PLAN.md Section 11): sends an
@@ -84,15 +84,18 @@ export default function WorkspaceDigestPanel({ workspace, channels, onClose }) {
   async function handleGenerate() {
     const controller = new AbortController();
     abortRef.current = controller;
-    setDigest({ loading: true, text: '', error: null, scope: windowLabel });
+    setDigest({ loading: true, text: '', error: null, scope: windowLabel, queuePosition: null });
     try {
       await requestWorkspaceDigest(
         workspace.id,
         { sinceHours, channelIds: selectedChannelIds },
         (chunk) => {
-          setDigest((prev) => (prev ? { ...prev, text: prev.text + chunk } : prev));
+          setDigest((prev) => (prev ? { ...prev, text: prev.text + chunk, queuePosition: null } : prev));
         },
-        { signal: controller.signal },
+        {
+          signal: controller.signal,
+          onQueued: (position) => setDigest((prev) => (prev ? { ...prev, queuePosition: position } : prev)),
+        },
       );
       setDigest((prev) => (prev ? { ...prev, loading: false } : prev));
     } catch (err) {
@@ -147,7 +150,7 @@ export default function WorkspaceDigestPanel({ workspace, channels, onClose }) {
 
       <div style={styles.actions}>
         <button type="button" style={styles.submitButton} onClick={handleGenerate} disabled={digest?.loading}>
-          {digest?.loading ? 'Generating…' : 'Generate Digest'}
+          {digest?.loading ? (digest.queuePosition ? formatAiQueueLabel(digest.queuePosition) : 'Generating…') : 'Generate Digest'}
         </button>
         {digest?.loading ? (
           <button type="button" style={styles.cancelButton} onClick={handleCancel}>

@@ -2,6 +2,11 @@ export const AI_SUMMARY_LIMIT = 50;
 export const AI_SUMMARY_SCOPE = `Last ${AI_SUMMARY_LIMIT} messages`;
 export const AI_THREAD_SCOPE = 'This thread';
 
+// FEATURE_REQUEST.md entry 2: a client-visible "queued, position N" state
+// while waiting on the backend's bounded concurrency queue, distinct from
+// "Running AI..."/"Generating..." once a slot has actually been granted.
+export const formatAiQueueLabel = (position) => `Queued (position ${position})…`;
+
 export function formatAiActionError(err, fallback) {
   if (err?.name === 'AbortError') {
     return 'Cancelled.';
