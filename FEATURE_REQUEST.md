@@ -42,7 +42,7 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 5. Bounded AI concurrency queue instead of hard-rejecting
+### 2. Bounded AI concurrency queue instead of hard-rejecting
 
 **Status**: Proposed
 **Utility**: `ARCHITECTURE_REVIEW_(Claude).md` P1 Recommendation 6 — today, `llm/concurrencyGate.js`'s `tryAcquire` is non-blocking by design: a second person clicking "Summarize"/"Find Action Items"/"Catch Me Up" while one AI request is already in flight gets an immediate `503`, not a queue position. At `LLM_MAX_CONCURRENT_REQUESTS=1` (this environment's default, per `PROJECT_PLAN.md` Section 2's CPU-only-Ollama reasoning), two people using AI features within the same ~10–20s window already hits this today, not just at higher scale.
@@ -55,7 +55,7 @@ Design:
 - **No schema/authz/audit implications** — same audit events, same rate limiter, same routes; this only changes what happens between "request accepted" and "generation starts."
 - **Tests**: a second concurrent request while one is in-flight gets queued (not immediately rejected) and completes once the first finishes, in FIFO order for a third/fourth request; a request arriving when the queue is already at `AI_QUEUE_MAX_DEPTH` still gets an immediate `503`; the queued response's headers (including `X-Ai-Queue-Position`) arrive before the queued request's slot is granted, not after (provable by asserting header receipt happens before the first request's generation is unblocked in the test).
 
-### 6. Channel and workspace canvases
+### 3. Channel and workspace canvases
 
 **Status**: Proposed
 **Utility**: Modern team messengers are turning persistent context into a first-class surface, not leaving every plan, link, note, and checklist buried in message history. Silent Whisper already has workspaces, channels, Markdown, entity references, search, and local AI, so local canvases are the most natural product-level expansion.
@@ -71,7 +71,7 @@ Design:
 - Audit: `CANVAS_CREATED`, `CANVAS_UPDATED`, `CANVAS_ARCHIVED`, and optional `AI_CANVAS_DRAFT_REQUESTED`; audit payloads store ids, revision numbers, provider/prompt metadata, and content lengths, not full document text.
 - Tests: backend authz tests for workspace vs private-channel visibility, revision creation, archive behavior, and no cross-workspace leakage; frontend e2e for creating/editing a channel canvas, entity links inside canvas content, and a non-member failing to access a private-channel canvas.
 
-### 7. Inline markdown task checkboxes with a workspace task dashboard
+### 4. Inline markdown task checkboxes with a workspace task dashboard
 
 **Status**: Proposed
 **Utility**: A durable list of what's open and who owns it, without an AI extraction/review step in the way. Users declare tasks inline while typing a normal message (`- [ ] Ship the thing [assignee:: @jdoe]`); the dashboard is a live projection of channel content, not a second system of record that can drift from it.
@@ -95,7 +95,7 @@ Design:
 
 **3. Scope correction — message editing/deletion don't exist yet.** The submitted spec's "Fallback Behavior & State Edits" (re-tokenize on edit, gracefully unmount on delete) assumes `PATCH`/`DELETE /messages/:messageId` routes that **do not exist** in this codebase today — `backend/src/routes/messages.js` only has `GET` (history), `GET .../members`, and `POST` (send). Since content is otherwise immutable once sent, `taskIndex` is stable for a message's entire life except through the toggle endpoint itself (which never changes line count or order, only one character). So: v1 ships with no edit/delete-driven re-evaluation because there's nothing to re-evaluate against — the dashboard is correct because it's computed fresh on every fetch/broadcast, not because of any special-cased edit handling. If message editing ships later, this feature needs zero changes to benefit from it; that's a property worth preserving, not a gap to fill now.
 
-**4. Dashboard data path — bounded, not an unbounded LIKE scan.** The submitted spec's `WHERE content LIKE '%- [ ]%' OR content LIKE '%- [x]%'` across every message in every channel of a workspace is a leading-wildcard scan with no usable index, over a table this project's own Scalability Target explicitly expects to grow large — the exact shape entry 4's admin-list pagination and the message-history route's cursor pagination both already went out of their way to avoid. Bound it the same way the already-shipped "Cross-channel 'Catch Me Up' workspace digest" (Done section) bounds its own cross-channel scan: default to a rolling window (`TASK_DASHBOARD_WINDOW_DAYS`, env-configurable, default 30) via `messages.created_at > now() - interval`, with a "Load older" affordance if the dashboard is empty/sparse rather than defaulting to unbounded. Add a new migration for a `pg_trgm` GIN index on `messages.content` (the extension already exists because entity search uses it, but no message-content trigram index exists today) so the `LIKE` itself is index-assisted within that window rather than a sequential scan even at moderate history sizes. Query via Knex (`db('messages').where('content', 'like', ...)`, parameterized by construction — no `knex.raw` string interpolation), joined against `channel_members` filtered to the caller's own membership rows, scoped to the requested workspace's channels only. **DMs and group DMs are out of scope by construction**, not by an extra check: they carry no `workspace_id` (identical precedent to entity linking already skipping them, `entityService.js`), so they were never candidates for a *workspace*-scoped dashboard query to begin with. Rows that come back from the bounded LIKE query are then run through `parseTasks()` server-side to get real `{index, checked, text, assignee}` tuples — the SQL only narrows candidates, it never trusts a substring match as proof of a well-formed task line.
+**4. Dashboard data path — bounded, not an unbounded LIKE scan.** The submitted spec's `WHERE content LIKE '%- [ ]%' OR content LIKE '%- [x]%'` across every message in every channel of a workspace is a leading-wildcard scan with no usable index, over a table this project's own Scalability Target explicitly expects to grow large — the exact shape the already-shipped "Paginate admin list endpoints" entry (Done section) and the message-history route's cursor pagination both already went out of their way to avoid. Bound it the same way the already-shipped "Cross-channel 'Catch Me Up' workspace digest" (Done section) bounds its own cross-channel scan: default to a rolling window (`TASK_DASHBOARD_WINDOW_DAYS`, env-configurable, default 30) via `messages.created_at > now() - interval`, with a "Load older" affordance if the dashboard is empty/sparse rather than defaulting to unbounded. Add a new migration for a `pg_trgm` GIN index on `messages.content` (the extension already exists because entity search uses it, but no message-content trigram index exists today) so the `LIKE` itself is index-assisted within that window rather than a sequential scan even at moderate history sizes. Query via Knex (`db('messages').where('content', 'like', ...)`, parameterized by construction — no `knex.raw` string interpolation), joined against `channel_members` filtered to the caller's own membership rows, scoped to the requested workspace's channels only. **DMs and group DMs are out of scope by construction**, not by an extra check: they carry no `workspace_id` (identical precedent to entity linking already skipping them, `entityService.js`), so they were never candidates for a *workspace*-scoped dashboard query to begin with. Rows that come back from the bounded LIKE query are then run through `parseTasks()` server-side to get real `{index, checked, text, assignee}` tuples — the SQL only narrows candidates, it never trusts a substring match as proof of a well-formed task line.
 
   - New API endpoint: `GET /api/workspaces/:workspaceId/tasks?windowDays=&cursor=` or equivalent, gated by `requireWorkspaceMember` and then live `channel_members` joins for message visibility. Return bounded rows shaped for the dashboard (`messageId`, `channelId`, `channelName`, `taskIndex`, `checked`, `text`, `assignee`, `messageCreatedAt`, and enough author/source metadata to render the card). Keep response size capped even if a single message contains many task lines.
   - Frontend dashboard state must be explicit, not derived from whatever channels happen to be open in memory. `WorkspaceHome.jsx` currently avoids a dashboard query entirely; this feature needs loading/error/empty states, a refresh after successful toggles, and WS-driven reconciliation for `message_updated` events in visible task rows.
@@ -109,7 +109,7 @@ Design:
 
 - Tests: `backend/tests/taskParser.test.js` (pure tokenizer — multi-task lines get sequential indices, assignee bound accepts/rejects like `assertUsername` does, malformed/partial checkbox syntax is ignored, `setTaskChecked` returns `null` on an out-of-range index); `backend/tests/messages.test.js` gains the toggle endpoint's negative-authorization coverage (a non-member of the channel gets the existing existence-hiding 404; a `channelId`/`messageId` mismatch across channels 404s the same way the cross-workspace channel-member-injection fix's own test does; a private-channel task never appears in another workspace member's dashboard query; concurrent toggles of the same task converge on the requested checked state); dashboard API tests cover the rolling-window bound, pagination/cursor behavior, private-channel filtering, and max response size; `frontend/src/markdown.test.jsx` gains multi-checkbox-per-message node generation, assignee parsing, and the shared-fixture parity assertion against `taskParser.test.js`'s fixture file; frontend integration/e2e tests cover posting a multi-task message, opening Workspace Home, switching segmented tabs, toggling from the dashboard, and confirming via WS push that only the targeted index changed. If the deep-link slice ships in the same pass, add the deep-link click landing on the real source message; otherwise keep that test with the follow-up slice.
 
-### 8. AI search answers with citations
+### 5. AI search answers with citations
 
 **Status**: Proposed
 **Utility**: Semantic search currently returns matching messages; modern AI chat/search surfaces answer the user's question directly while citing the underlying messages. Silent Whisper already has pgvector and local LLM plumbing, so this is a high-leverage extension.
@@ -120,11 +120,11 @@ Design:
 - The response must include citations: each answer paragraph or bullet references message ids/channel ids/timestamps used as sources. The UI renders citations as clickable chips that open the channel/thread/message when the caller still has access.
 - Prompt template must explicitly instruct the model to say when the answer is not supported by the supplied sources. The frontend should show a "Sources used" section and a "No supported answer found" state rather than hallucinated confidence.
 - Authorization is identical to semantic search: only channels the caller can read are candidate sources. Admin/system routes do not get a special wider search by default.
-- Rate limiting uses the AI proxy limit, and the global concurrency cap/queue from entry 5 should apply. If entry 5 has not shipped, this feature should still reuse the current hard capacity behavior rather than introducing a second gate.
+- Rate limiting uses the AI proxy limit, and the global concurrency cap/queue from entry 2 should apply. If entry 2 has not shipped, this feature should still reuse the current hard capacity behavior rather than introducing a second gate.
 - Audit as `AI_SEARCH_ANSWER_REQUESTED` with query length, provider, prompt version, candidate count, cited result count, and truncated input length. Never audit raw query or raw message content.
 - Tests: semantic candidate authorization, private-channel exclusion, answer-with-citations shape, unsupported-answer fallback, truncation behavior, and frontend source navigation from a cited result.
 
-### 9. Workflow and playbook runs inside channels
+### 6. Workflow and playbook runs inside channels
 
 **Status**: Proposed
 **Utility**: Repeatable team processes should not depend on someone remembering the right checklist in chat. Mattermost Playbooks-style runs would make Silent Whisper useful for incidents, deployments, investigations, onboarding, approvals, and recurring operational rituals.
@@ -139,7 +139,7 @@ Design:
 - Audit: `PLAYBOOK_CREATED`, `PLAYBOOK_UPDATED`, `PLAYBOOK_RUN_STARTED`, `PLAYBOOK_RUN_UPDATED`, `PLAYBOOK_RUN_COMPLETED`, plus optional AI draft/summarize events. Payloads should log ids/status transitions/counts, not full checklist content unless a clear audit decision is made first.
 - Tests: template CRUD permissions, run visibility through private channels, checklist update concurrency, archive/read-only behavior, timeline ordering, and e2e for starting and completing a simple run.
 
-### 10. Conversation-linked live checklists
+### 7. Conversation-linked live checklists
 
 **Status**: Proposed
 **Utility**: Lightweight checklists are the smaller version of playbooks: useful when a team needs shared to-dos in a thread or channel without creating a full process template.
@@ -149,11 +149,11 @@ Design:
 - Add `checklists` and `checklist_items`, scoped to workspace/channel/thread. Channel checklist read/write permissions inherit channel membership; thread checklists inherit the root message channel.
 - UI: a channel or thread action "Create checklist" opens a compact sheet. Checklist blocks can be pinned to the channel header/details panel and optionally posted as a message linking to the live checklist.
 - Items support title, completion status, optional assignee, optional due date, and source message id. Completion/uncompletion should broadcast over WebSocket to current channel/thread viewers.
-- This feature should coexist with entry 9: a checklist can later be saved as a playbook template, but v1 should not require the playbook schema to ship first.
+- This feature should coexist with entry 6: a checklist can later be saved as a playbook template, but v1 should not require the playbook schema to ship first.
 - Audit: `CHECKLIST_CREATED`, `CHECKLIST_ITEM_CREATED`, `CHECKLIST_ITEM_UPDATED`, `CHECKLIST_ARCHIVED`; payloads include ids/status transitions and assignee ids.
 - Tests: membership-gated read/write, private-channel leakage prevention, WebSocket checklist updates, archived workspace/channel read-only behavior, and frontend e2e for creating and completing checklist items in a thread.
 
-### 11. Channel attention and health views
+### 8. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -168,7 +168,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 12. Entity pages as a lightweight knowledge base
+### 9. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
@@ -177,13 +177,13 @@ Design:
 Design:
 - Extend `entities` with editable metadata: description, aliases, owner/steward user id, status, tags, and optional external/local reference fields. Keep metadata workspace-scoped and never global across organizations.
 - Add `entity_relationships` (`source_entity_id`, `target_entity_id`, relationship type) for "depends on", "owned by", "related to", etc. Relationship writes require workspace membership and appropriate edit permission.
-- Entity detail pages should show recent references, linked decisions/action items, related entities, and pinned messages/canvases. This connects entries 6 and 7 if they ship.
+- Entity detail pages should show recent references, linked decisions/action items, related entities, and pinned messages/canvases. This connects entries 3 and 4 if they ship.
 - AI can generate a "What we know" summary from authorized references, clearly labeled with source citations and last-generated time. Store generated summaries as revisions or cached snapshots with prompt version/provider metadata, not as unquestioned canonical truth.
 - Authorization: references and generated summaries must be computed only from channels the caller can read. If entity metadata is workspace-wide but some references are private, the metadata can show while private references remain hidden.
 - Audit: `ENTITY_METADATA_UPDATED`, `ENTITY_RELATIONSHIP_CREATED`, `ENTITY_RELATIONSHIP_REMOVED`, and `AI_ENTITY_SUMMARY_REQUESTED`.
 - Tests: metadata editing, alias normalization/collision behavior, relationship isolation across workspaces, private-reference filtering, and frontend e2e for editing an entity and navigating related context.
 
-### 13. Meeting transcript recap and notes import
+### 10. Meeting transcript recap and notes import
 
 **Status**: Proposed
 **Utility**: Slack huddle notes and Teams recap show that teams increasingly expect meeting output to become searchable, summarized, and actionable. Silent Whisper can support the valuable part first without building real-time calls.
@@ -192,12 +192,12 @@ Design:
 Design:
 - Add a "Create meeting recap" action in a channel/thread that accepts pasted transcript text or a local uploaded text file. Audio/video recording and transcription are explicitly out of scope for v1 unless a local transcription provider is later selected.
 - Backend stores a `meeting_recaps` row linked to workspace/channel/thread, with title, transcript length, generated summary, action items, attendees if supplied, created_by, and timestamps. Raw transcript storage should be a deliberate option: default to not storing raw transcript, or store it only if the user selects "Keep transcript".
-- AI prompt produces sections for topics, decisions, action items, unresolved questions, and suggested follow-up messages. Accepted action items can flow into entry 7's register if that feature exists.
+- AI prompt produces sections for topics, decisions, action items, unresolved questions, and suggested follow-up messages. Accepted action items can flow into entry 4's register if that feature exists.
 - Authorization inherits the channel/thread. Private-channel recaps are visible only to channel members. Uploaded text is untrusted input and must follow the same prompt-injection delimiters and output escaping as message summaries.
 - Audit as `AI_MEETING_RECAP_REQUESTED` with transcript length, provider, prompt version, output length, and whether raw transcript was retained.
 - Tests: transcript length limits, no raw transcript audit leakage, private-channel access checks, retained-vs-discarded transcript behavior, and e2e for importing a transcript and saving generated action items.
 
-### 14. No-code local automations
+### 11. No-code local automations
 
 **Status**: Proposed
 **Utility**: Slack Workflow Builder shows that teams want lightweight automation where work already happens. Silent Whisper can offer local-only automations without external SaaS connectors or public webhooks.
@@ -212,14 +212,14 @@ Design:
 - Audit: `AUTOMATION_CREATED`, `AUTOMATION_UPDATED`, `AUTOMATION_DISABLED`, `AUTOMATION_RUN_STARTED`, `AUTOMATION_RUN_COMPLETED`, `AUTOMATION_RUN_FAILED`; payloads include rule/action ids and counts, not message bodies.
 - Tests: permission checks at creation and run time, archived workspace/channel behavior, allowlist enforcement if any outbound action exists, worker retry/dead-letter behavior, and e2e for a scheduled or manually triggered template.
 
-### 15. Self-hosted calls or call-notes bridge
+### 12. Self-hosted calls or call-notes bridge
 
 **Status**: Proposed
 **Utility**: Voice/screen-share collaboration is table stakes in many team messengers, but it is infrastructure-heavy. Silent Whisper should approach it as a deliberate milestone, not a casual chat feature.
 **Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Mattermost Calls, Slack huddles, and Teams meeting recap patterns.
 
 Design:
-- Preferred v1 is not full calls: ship the meeting transcript recap/import flow from entry 13 first. It captures much of the product value with far lower operational risk and fits the current local LLM architecture.
+- Preferred v1 is not full calls: ship the meeting transcript recap/import flow from entry 10 first. It captures much of the product value with far lower operational risk and fits the current local LLM architecture.
 - If real-time calls are needed later, use a proven self-hosted WebRTC/SFU component rather than hand-rolling media transport. Treat it as a separate service with explicit CPU/network sizing, TURN/STUN strategy for intranet constraints, TLS/nginx upgrade handling, and a separate load test.
 - Calls attach to channels/DMs and inherit channel/DM membership. Users who are disabled, removed from the channel, or in archived workspaces cannot join. Guest/external access is out of scope unless the enterprise auth model grows a guest role.
 - Optional recording/transcription must be local-only. No public transcription API. If local transcription is added, use the same provider-adapter/configuration discipline as the LLM layer and store retention settings explicitly.
