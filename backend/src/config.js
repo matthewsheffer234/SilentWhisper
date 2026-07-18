@@ -128,6 +128,22 @@ export const config = {
     maxAttempts: Number(process.env.EMBEDDING_MAX_ATTEMPTS || 5),
   },
 
+  messageSideEffects: {
+    // FEATURE_REQUEST.md "hot path splitting" entry: mention-notification
+    // writes and [[Entity]] linking moved off the message-send request/
+    // socket-message path onto workers/messageSideEffectsWorker.js, which
+    // polls message_side_effect_jobs on this interval. No external provider
+    // is involved (unlike embedding.*, which throttles calls to an LLM
+    // provider) — this is pure DB work plus an in-process WS push, so the
+    // interval is tighter than embedding's default 2s: these jobs feed a
+    // user-visible "you were mentioned" notification, where added lag is
+    // more noticeable than for background search indexing.
+    workerIntervalMs: Number(process.env.MESSAGE_SIDE_EFFECTS_WORKER_INTERVAL_MS || 1_000),
+    workerBatchSize: Number(process.env.MESSAGE_SIDE_EFFECTS_WORKER_BATCH_SIZE || 10),
+    // Same dead-letter convention as embedding.maxAttempts.
+    maxAttempts: Number(process.env.MESSAGE_SIDE_EFFECTS_MAX_ATTEMPTS || 5),
+  },
+
   ws: {
     // Configurable for reverse-proxy deployment (PROJECT_PLAN.md Section 8,
     // Phase 3: "Make the WebSocket path configurable").

@@ -8,6 +8,7 @@ import { _resetForTests as resetConnectionRegistry } from '../src/ws/connectionR
 import { _resetForTests as resetPresence } from '../src/ws/presence.js';
 import { _resetForTests as resetWsRateLimiter } from '../src/ws/rateLimiter.js';
 import { extractMentionedUserIds } from '../src/services/mentionService.js';
+import { runMessageSideEffectsWorkerTick, _resetForTests as resetSideEffectsWorker } from '../src/workers/messageSideEffectsWorker.js';
 
 let server;
 let port;
@@ -29,6 +30,7 @@ beforeEach(async () => {
   resetConnectionRegistry();
   resetPresence();
   resetWsRateLimiter();
+  resetSideEffectsWorker();
 });
 
 afterEach(() => {
@@ -57,6 +59,26 @@ async function addMember(workspaceId, channelId, user) {
   await request(app)
     .post(`/api/workspaces/${workspaceId}/channels/${channelId}/join`)
     .set(authHeader(user.accessToken));
+}
+
+// The WS handler broadcasts message_created before finishing the awaited
+// enqueueMessageSideEffectJobs call — a client receiving that frame proves
+// nothing about whether the job row has actually landed yet (same "don't
+// assume server-side side effects are done just because the client saw an
+// ack" instinct as embeddingIngestion.test.js's own identically-named
+// helper). Poll for the job row rather than ticking immediately.
+async function pollUntil(fn, { timeoutMs = 2000, intervalMs = 25 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await fn();
+    if (result) return result;
+    if (Date.now() > deadline) {
+      throw new Error('pollUntil timed out');
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }
 
 describe('extractMentionedUserIds (unit)', () => {
@@ -167,6 +189,10 @@ describe('mention delivery (integration)', () => {
       .post(`/api/channels/${channelId}/messages`)
       .set(authHeader(owner.accessToken))
       .send({ content: 'hey @mentrestmember0, check this out' });
+    // Mention delivery moved off the request path onto an async worker
+    // (FEATURE_REQUEST.md "hot path splitting" entry) — nothing pushes the
+    // frame until a tick actually processes the enqueued job.
+    await runMessageSideEffectsWorkerTick(db);
 
     const mention = await mentionPromise;
     expect(mention.channelId).toBe(channelId);
@@ -196,6 +222,9 @@ describe('mention delivery (integration)', () => {
 
     const mentionPromise = waitForMessage(memberWs, (e) => e.type === 'mention');
     sendFrame(ownerWs, { type: 'message', channelId, content: '@mentwsmember0 over the wire' });
+    const created = await waitForMessage(ownerWs, (e) => e.type === 'message_created');
+    await pollUntil(() => db('message_side_effect_jobs').where({ message_id: created.message.id }).first());
+    await runMessageSideEffectsWorkerTick(db);
 
     const mention = await mentionPromise;
     expect(mention.channelId).toBe(channelId);
@@ -215,6 +244,10 @@ describe('mention delivery (integration)', () => {
       .post(`/api/channels/${channelId}/messages`)
       .set(authHeader(owner.accessToken))
       .send({ content: '@mentnonmemberoutsider0 hello?' });
+    // Ticking (rather than just relying on the 300ms wait below to outrun an
+    // unprocessed job) proves this is filtered by channel membership, not
+    // merely "hasn't been processed yet."
+    await runMessageSideEffectsWorkerTick(db);
 
     await expect(waitForMessage(outsiderWs, (e) => e.type === 'mention', 300)).rejects.toThrow();
   });
@@ -239,6 +272,7 @@ describe('mention delivery (integration)', () => {
       .post(`/api/channels/${channelId}/messages`)
       .set(authHeader(owner.accessToken))
       .send({ content: '@mentmultimember0 ping both' });
+    await runMessageSideEffectsWorkerTick(db);
 
     await Promise.all([p1, p2]);
   });
@@ -255,6 +289,7 @@ describe('mention delivery (integration)', () => {
       .post(`/api/channels/${channelId}/messages`)
       .set(authHeader(owner.accessToken))
       .send({ content: '@mentself0 note to self' });
+    await runMessageSideEffectsWorkerTick(db);
 
     await expect(waitForMessage(ownerWs, (e) => e.type === 'mention', 300)).rejects.toThrow();
   });

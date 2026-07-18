@@ -4,9 +4,7 @@ import { db } from '../db.js';
 import { verifyAccessToken } from '../auth/jwt.js';
 import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
 import { createMessage } from '../services/messageService.js';
-import { extractMentionedUserIds } from '../services/mentionService.js';
-import { createMentionNotifications } from '../services/mentionNotificationService.js';
-import { linkMessageEntities } from '../services/entityService.js';
+import { enqueueMessageSideEffectJobs } from '../services/messageSideEffectsQueue.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import {
   registerConnection,
@@ -16,7 +14,6 @@ import {
   leaveRoom,
   leaveAllRooms,
   broadcastToRoom,
-  sendToUser,
 } from './connectionRegistry.js';
 import { recordHeartbeat, handleDisconnect, getAllStatuses } from './presence.js';
 import { isMessageRateLimited } from './rateLimiter.js';
@@ -252,57 +249,18 @@ async function handleMessage(ws, frame) {
     // so they simply ignore it.
     broadcastToRoom(channelId, { type: 'message_created', message, clientNonce: frame.clientNonce ?? null });
 
-    if (channel.workspace_id) {
-      try {
-        await linkMessageEntities(db, {
-          content: message.content,
-          messageId: message.id,
-          workspaceId: channel.workspace_id,
-          createdBy: ws.userId,
-        });
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to link message entities:', err);
-      }
-    }
-
-    // A side effect of message creation, not part of it — see
+    // Side effects of message creation, not part of it — see
     // routes/messages.js's identical call after its own broadcastToRoom, so
-    // the two transports can't drift on when/how mentions fire.
-    const mentionedUserIds = await extractMentionedUserIds(db, {
-      content: message.content,
-      channelId,
-      excludeUserId: ws.userId,
-    });
-    let notificationRows = [];
-    try {
-      notificationRows = await createMentionNotifications(db, {
-        mentionedUserIds,
-        message,
-        workspaceId: channel.workspace_id,
-        mentionedByUserId: ws.userId,
-      });
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to create mention notifications:', err);
-    }
-    const notificationIdsByRecipient = new Map(notificationRows.map((r) => [r.recipient_user_id, r.id]));
-    for (const mentionedUserId of mentionedUserIds) {
-      sendToUser(mentionedUserId, {
-        type: 'mention',
-        message,
-        channelId,
-        workspaceId: channel.workspace_id,
-        mentionedBy: ws.username,
-        mentionedByDisplayName: ws.displayName,
-        notificationId: notificationIdsByRecipient.get(mentionedUserId) ?? null,
-      });
-    }
+    // the two transports can't drift on when/how mention notifications or
+    // entity linking fire. Both now go through a durable job queue
+    // (FEATURE_REQUEST.md "hot path splitting" entry) processed by
+    // workers/messageSideEffectsWorker.js, rather than running inline here.
+    await enqueueMessageSideEffectJobs(db, { messageId: message.id, workspaceId: channel.workspace_id });
 
-    // Same sibling-call pattern as mentions above and as
-    // routes/messages.js's identical REST-path call — semantic search
-    // (FEATURE_REQUEST.md entry 1) ingestion can't be a way the WS send path
-    // silently diverges from REST.
+    // Same sibling-call pattern as above and as routes/messages.js's
+    // identical REST-path call — semantic search (FEATURE_REQUEST.md entry
+    // 1) ingestion can't be a way the WS send path silently diverges from
+    // REST.
     await enqueueEmbeddingJob(db, message.id);
   } catch (err) {
     sendError(ws, err.message || 'Failed to send message', 'message');

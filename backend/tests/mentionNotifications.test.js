@@ -7,6 +7,7 @@ import { connectWs, waitForMessage, sendFrame } from './helpers/wsClient.js';
 import { _resetForTests as resetConnectionRegistry } from '../src/ws/connectionRegistry.js';
 import { _resetForTests as resetPresence } from '../src/ws/presence.js';
 import { _resetForTests as resetWsRateLimiter } from '../src/ws/rateLimiter.js';
+import { runMessageSideEffectsWorkerTick, _resetForTests as resetSideEffectsWorker } from '../src/workers/messageSideEffectsWorker.js';
 
 let server;
 let port;
@@ -28,6 +29,7 @@ beforeEach(async () => {
   resetConnectionRegistry();
   resetPresence();
   resetWsRateLimiter();
+  resetSideEffectsWorker();
 });
 
 afterEach(() => {
@@ -58,6 +60,24 @@ async function addMember(workspaceId, channelId, user) {
     .set(authHeader(user.accessToken));
 }
 
+// The WS handler broadcasts message_created before finishing the awaited
+// enqueueMessageSideEffectJobs call — a client receiving that frame proves
+// nothing about whether the job row has actually landed yet (same instinct
+// as embeddingIngestion.test.js's identically-named helper).
+async function pollUntil(fn, { timeoutMs = 2000, intervalMs = 25 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await fn();
+    if (result) return result;
+    if (Date.now() > deadline) {
+      throw new Error('pollUntil timed out');
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 describe('mention notifications', () => {
   test('REST mentions create a persisted unread notification with list and summary data', async () => {
     const owner = await signup('notifrest0');
@@ -70,6 +90,7 @@ describe('mention notifications', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: 'hey @notifmember0 check this' })
       .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
 
     const res = await request(app)
       .get('/api/notifications/mentions')
@@ -110,6 +131,9 @@ describe('mention notifications', () => {
 
     const mentionPromise = waitForMessage(memberWs, (e) => e.type === 'mention');
     sendFrame(ownerWs, { type: 'message', channelId, content: '@notifwsmember0 from ws' });
+    const created = await waitForMessage(ownerWs, (e) => e.type === 'message_created');
+    await pollUntil(() => db('message_side_effect_jobs').where({ message_id: created.message.id }).first());
+    await runMessageSideEffectsWorkerTick(db);
 
     const mention = await mentionPromise;
     expect(mention.workspaceId).toBe(workspaceId);
@@ -132,6 +156,7 @@ describe('mention notifications', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: '@notifdedupemember0 @notifdedupemember0 @notifdedupe0 @notifdedupeoutsider0' })
       .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
 
     expect(await db('mention_notifications').where({ recipient_user_id: member.userId })).toHaveLength(1);
     expect(await db('mention_notifications').where({ recipient_user_id: owner.userId })).toHaveLength(0);
@@ -156,6 +181,7 @@ describe('mention notifications', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: '@notifreadmember0 second' })
       .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
 
     const list = await request(app).get('/api/notifications/mentions').set(authHeader(member.accessToken)).expect(200);
     const [first] = list.body.notifications;
@@ -192,6 +218,7 @@ describe('mention notifications', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: '@notifstalemember0 private detail' })
       .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
 
     await db('channel_members').where({ channel_id: channelId, user_id: member.userId }).del();
 

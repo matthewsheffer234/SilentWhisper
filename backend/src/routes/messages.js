@@ -4,11 +4,9 @@ import { requireAuth } from '../auth/requireAuth.js';
 import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
 import { assertUuid, assertBoundedInt, parsePagination, MAX_USERNAME_LENGTH } from '../validation.js';
 import { createMessage } from '../services/messageService.js';
-import { extractMentionedUserIds } from '../services/mentionService.js';
-import { createMentionNotifications } from '../services/mentionNotificationService.js';
-import { linkMessageEntities } from '../services/entityService.js';
+import { enqueueMessageSideEffectJobs } from '../services/messageSideEffectsQueue.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
-import { broadcastToRoom, sendToUser } from '../ws/connectionRegistry.js';
+import { broadcastToRoom } from '../ws/connectionRegistry.js';
 import { isMessageRateLimited } from '../ws/rateLimiter.js';
 import { memberSearchLimiter } from '../auth/rateLimit.js';
 import { RateLimitedError, ValidationError } from '../errors.js';
@@ -175,57 +173,18 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
 
     broadcastToRoom(channelId, { type: 'message_created', message });
 
-    if (channel.workspace_id) {
-      try {
-        await linkMessageEntities(db, {
-          content: message.content,
-          messageId: message.id,
-          workspaceId: channel.workspace_id,
-          createdBy: req.user.id,
-        });
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to link message entities:', err);
-      }
-    }
+    // Side effects of message creation, not part of it — mention-notification
+    // writing and [[Entity]] linking used to run inline here (FEATURE_REQUEST.md
+    // "hot path splitting" entry); both now go through a durable job queue
+    // processed by workers/messageSideEffectsWorker.js, so message-send
+    // latency no longer grows with mention/entity count. Same
+    // "side effect, not part of message creation" pattern as the embedding
+    // enqueue below, which predates this and was left as-is.
+    await enqueueMessageSideEffectJobs(db, { messageId: message.id, workspaceId: channel.workspace_id });
 
-    // A side effect of message creation, not part of it — mirrors
-    // messageService.js's own header comment on why mention parsing lives
-    // in a sibling service rather than inside createMessage.
-    const mentionedUserIds = await extractMentionedUserIds(db, {
-      content: message.content,
-      channelId,
-      excludeUserId: req.user.id,
-    });
-    let notificationRows = [];
-    try {
-      notificationRows = await createMentionNotifications(db, {
-        mentionedUserIds,
-        message,
-        workspaceId: channel.workspace_id,
-        mentionedByUserId: req.user.id,
-      });
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to create mention notifications:', err);
-    }
-    const notificationIdsByRecipient = new Map(notificationRows.map((r) => [r.recipient_user_id, r.id]));
-    for (const mentionedUserId of mentionedUserIds) {
-      sendToUser(mentionedUserId, {
-        type: 'mention',
-        message,
-        channelId,
-        workspaceId: channel.workspace_id,
-        mentionedBy: req.user.username,
-        mentionedByDisplayName: req.user.displayName,
-        notificationId: notificationIdsByRecipient.get(mentionedUserId) ?? null,
-      });
-    }
-
-    // Same "side effect, not part of message creation" pattern as mentions
-    // above — enqueues async embedding work for semantic search
-    // (FEATURE_REQUEST.md entry 1). Failure-tolerant by design: see
-    // enqueueEmbeddingJob's own doc comment.
+    // Enqueues async embedding work for semantic search (FEATURE_REQUEST.md
+    // entry 1). Failure-tolerant by design: see enqueueEmbeddingJob's own
+    // doc comment.
     await enqueueEmbeddingJob(db, message.id);
 
     res.status(201).json(message);

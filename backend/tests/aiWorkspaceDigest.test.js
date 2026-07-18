@@ -6,6 +6,7 @@ import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, authHeader } from './helpers/testUsers.js';
 import { LLM_SETTING_KEYS, validateSettingsPatch, updateSettings } from '../src/llm/settingsService.js';
+import { runMessageSideEffectsWorkerTick } from '../src/workers/messageSideEffectsWorker.js';
 
 // FEATURE_REQUEST.md entry 6, "Cross-channel 'Catch Me Up' workspace
 // digests". Same testing shape as aiRoutes.test.js: real HTTP routes against
@@ -144,6 +145,7 @@ describe('POST /api/ai/workspace-digest', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: 'hey @digestmember5 the deploy is done' })
       .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
 
     const res = await request(app)
       .post('/api/ai/workspace-digest')
@@ -175,6 +177,7 @@ describe('POST /api/ai/workspace-digest', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: 'hey @digestmember6 fyi' })
       .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
 
     await db('mention_notifications').where({ recipient_user_id: member.userId }).update({ read_at: db.fn.now() });
 
@@ -289,6 +292,7 @@ describe('POST /api/ai/workspace-digest', () => {
       .set(authHeader(owner.accessToken))
       .send({ content: 'hey @digestmember11 old news' })
       .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
     await db('mention_notifications')
       .where({ recipient_user_id: member.userId })
       .update({ created_at: new Date(Date.now() - 48 * 60 * 60 * 1000) });

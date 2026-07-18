@@ -5,10 +5,12 @@ import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, authHeader } from './helpers/testUsers.js';
 import { extractEntityNames, normalizeEntityName, MAX_ENTITIES_PER_MESSAGE } from '../src/services/entityService.js';
 import { _resetForTests as resetMessageRateLimiter } from '../src/ws/rateLimiter.js';
+import { runMessageSideEffectsWorkerTick, _resetForTests as resetSideEffectsWorker } from '../src/workers/messageSideEffectsWorker.js';
 
 beforeEach(async () => {
   await resetDb(db);
   resetMessageRateLimiter();
+  resetSideEffectsWorker();
 });
 
 afterAll(async () => {
@@ -25,8 +27,16 @@ async function createWorkspaceAndChannel(user, { channelName = 'general', type =
   return { workspace: wsRes.body, channel: chRes.body };
 }
 
+// Entity linking moved off the message-send path onto an async worker
+// (FEATURE_REQUEST.md "hot path splitting" entry) — every call site below
+// used to be able to assert on entities/message_entities immediately after
+// sendMessage returned. Ticking the worker once here, in the one shared
+// helper nearly every test in this file already goes through, keeps that
+// true without touching each test individually.
 async function sendMessage(user, channelId, content) {
-  return request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(user.accessToken)).send({ content });
+  const res = await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(user.accessToken)).send({ content });
+  await runMessageSideEffectsWorkerTick(db);
+  return res;
 }
 
 describe('entity extraction helpers', () => {

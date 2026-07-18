@@ -23,6 +23,7 @@ import { startPresenceSweep, stopPresenceSweep } from './ws/presence.js';
 import { ensureDefaultSettingsSeeded } from './llm/settingsService.js';
 import { startHealthSweep, stopHealthSweep } from './llm/healthCheck.js';
 import { startEmbeddingWorker, stopEmbeddingWorker } from './search/embeddingWorker.js';
+import { startMessageSideEffectsWorker, stopMessageSideEffectsWorker } from './workers/messageSideEffectsWorker.js';
 
 const app = express();
 
@@ -91,6 +92,11 @@ function start(port = config.port) {
   // which calls runEmbeddingWorkerTick directly with fetch mocked.
   if (config.nodeEnv !== 'test') {
     startEmbeddingWorker(db);
+    // Same skip-under-test reasoning as startEmbeddingWorker just above —
+    // tests/messageSideEffectsWorker.test.js and the WS integration tests
+    // that exercise mention delivery call runMessageSideEffectsWorkerTick
+    // directly instead, at whatever point in the test they need it.
+    startMessageSideEffectsWorker(db);
   }
   // Fire-and-forget: seeds app_settings.llm.* rows from env defaults for
   // admin-surface visibility. Not on the request path — getEffectiveSettings
@@ -111,6 +117,7 @@ async function shutdown(server) {
   stopPresenceSweep();
   stopHealthSweep();
   stopEmbeddingWorker();
+  stopMessageSideEffectsWorker();
   await new Promise((resolve) => server.close(resolve));
   await db.destroy();
 }
