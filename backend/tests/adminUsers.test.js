@@ -196,13 +196,16 @@ describe('POST /api/admin/users', () => {
 });
 
 describe('GET /api/admin/users', () => {
-  test('a system admin sees the full roster', async () => {
+  test('a system admin sees the full roster, with pagination metadata', async () => {
     const admin = await seedSystemAdmin('adminlist0');
     const other = await signup('adminlistother0', { displayName: 'Admin List Other' });
 
     const res = await request(app).get('/api/admin/users').set(authHeader(admin.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(
+    expect(res.body.limit).toBe(50);
+    expect(res.body.offset).toBe(0);
+    expect(res.body.total).toBe(2);
+    expect(res.body.users).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           userId: admin.userId,
@@ -220,6 +223,67 @@ describe('GET /api/admin/users', () => {
         }),
       ]),
     );
+  });
+
+  // FEATURE_REQUEST.md entry 4: offset-based pagination — a seeded set of
+  // more than one page's worth of users requires more than one page to see
+  // all of them, `total` reflects the real row count regardless of `limit`,
+  // and an out-of-range `limit`/negative `offset` 400s the same way
+  // parsePagination already does for message history.
+  test('paginates with limit/offset, total matches real row count', async () => {
+    const admin = await seedSystemAdmin('adminpage0');
+    for (let i = 0; i < 4; i += 1) {
+      await signup(`adminpageuser${i}`);
+    }
+    // 1 admin + 4 users = 5 total.
+
+    const firstPage = await request(app)
+      .get('/api/admin/users?limit=2&offset=0')
+      .set(authHeader(admin.accessToken));
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.users).toHaveLength(2);
+    expect(firstPage.body.total).toBe(5);
+    expect(firstPage.body.limit).toBe(2);
+    expect(firstPage.body.offset).toBe(0);
+
+    const secondPage = await request(app)
+      .get('/api/admin/users?limit=2&offset=2')
+      .set(authHeader(admin.accessToken));
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.users).toHaveLength(2);
+
+    const thirdPage = await request(app)
+      .get('/api/admin/users?limit=2&offset=4')
+      .set(authHeader(admin.accessToken));
+    expect(thirdPage.status).toBe(200);
+    expect(thirdPage.body.users).toHaveLength(1);
+
+    const seenIds = new Set([
+      ...firstPage.body.users.map((u) => u.userId),
+      ...secondPage.body.users.map((u) => u.userId),
+      ...thirdPage.body.users.map((u) => u.userId),
+    ]);
+    expect(seenIds.size).toBe(5);
+  });
+
+  test('an out-of-range limit 400s', async () => {
+    const admin = await seedSystemAdmin('adminpage1');
+    const res = await request(app).get('/api/admin/users?limit=1000').set(authHeader(admin.accessToken));
+    expect(res.status).toBe(400);
+  });
+
+  test('a negative offset 400s', async () => {
+    const admin = await seedSystemAdmin('adminpage2');
+    const res = await request(app).get('/api/admin/users?offset=-1').set(authHeader(admin.accessToken));
+    expect(res.status).toBe(400);
+  });
+
+  test('an offset beyond the total row count returns an empty array, not an error', async () => {
+    const admin = await seedSystemAdmin('adminpage3');
+    const res = await request(app).get('/api/admin/users?offset=9999').set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.users).toEqual([]);
+    expect(res.body.total).toBe(1);
   });
 
   test('a non-admin gets 403', async () => {
@@ -333,7 +397,9 @@ describe('GET /api/workspaces/admin/all', () => {
 
     const res = await request(app).get('/api/workspaces/admin/all').set(authHeader(admin.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(
+    expect(res.body.limit).toBe(50);
+    expect(res.body.offset).toBe(0);
+    expect(res.body.workspaces).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: workspaceId,
@@ -343,6 +409,49 @@ describe('GET /api/workspaces/admin/all', () => {
         }),
       ]),
     );
+  });
+
+  // FEATURE_REQUEST.md entry 4: same offset-pagination contract as
+  // GET /api/admin/users.
+  test('paginates with limit/offset, total matches real row count', async () => {
+    const admin = await seedSystemAdmin('wsadminpage0');
+    const owner = await signup('wsadminpageowner0');
+    for (let i = 0; i < 3; i += 1) {
+      await createWorkspace(owner, `Workspace ${i}`);
+    }
+    // 3 workspaces total.
+
+    const firstPage = await request(app)
+      .get('/api/workspaces/admin/all?limit=2&offset=0')
+      .set(authHeader(admin.accessToken));
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.workspaces).toHaveLength(2);
+    expect(firstPage.body.total).toBe(3);
+
+    const secondPage = await request(app)
+      .get('/api/workspaces/admin/all?limit=2&offset=2')
+      .set(authHeader(admin.accessToken));
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.workspaces).toHaveLength(1);
+
+    const seenIds = new Set([
+      ...firstPage.body.workspaces.map((w) => w.id),
+      ...secondPage.body.workspaces.map((w) => w.id),
+    ]);
+    expect(seenIds.size).toBe(3);
+  });
+
+  test('an out-of-range limit 400s', async () => {
+    const admin = await seedSystemAdmin('wsadminpage1');
+    const res = await request(app).get('/api/workspaces/admin/all?limit=0').set(authHeader(admin.accessToken));
+    expect(res.status).toBe(400);
+  });
+
+  test('an offset beyond the total row count returns an empty array, not an error', async () => {
+    const admin = await seedSystemAdmin('wsadminpage2');
+    const res = await request(app).get('/api/workspaces/admin/all?offset=9999').set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.workspaces).toEqual([]);
   });
 
   test('a non-admin gets 403', async () => {

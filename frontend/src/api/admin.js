@@ -17,7 +17,13 @@ export const createAdminUser = ({ username, email, password, displayName, organi
       ...(organizationId ? { organizationId } : {}),
     },
   });
-export const listAdminUsers = () => apiFetch('/admin/users');
+export const listAdminUsers = ({ limit, offset } = {}) => {
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set('limit', limit);
+  if (offset !== undefined) params.set('offset', offset);
+  const qs = params.toString();
+  return apiFetch(`/admin/users${qs ? `?${qs}` : ''}`);
+};
 export const disableUser = (userId) => apiFetch(`/admin/users/${userId}/disable`, { method: 'POST' });
 export const enableUser = (userId) => apiFetch(`/admin/users/${userId}/enable`, { method: 'POST' });
 

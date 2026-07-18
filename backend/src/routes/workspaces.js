@@ -15,6 +15,7 @@ import {
   CREATABLE_CHANNEL_TYPES,
   ASSIGNABLE_WORKSPACE_ROLES,
   WORKSPACE_VISIBILITY,
+  parseOffsetPagination,
 } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
@@ -198,25 +199,31 @@ workspacesRouter.get('/admin/all', async (req, res, next) => {
     if (!(await isSystemAdminUser(db, req.user.id))) {
       throw new ForbiddenError('System admin privileges required');
     }
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('workspaces as w')
-      .join('users as u', 'u.id', 'w.owner_id')
-      .join('organizations as o', 'o.id', 'w.organization_id')
-      .select(
-        'w.id',
-        'w.name',
-        'w.owner_id',
-        'u.username as owner_username',
-        'u.display_name as owner_display_name',
-        'w.organization_id',
-        'o.name as organization_name',
-        'w.visibility',
-        'w.archived_at',
-      )
-      .orderBy('w.created_at', 'asc');
+    const [{ count }, rows] = await Promise.all([
+      db('workspaces').count('id as count').first(),
+      db('workspaces as w')
+        .join('users as u', 'u.id', 'w.owner_id')
+        .join('organizations as o', 'o.id', 'w.organization_id')
+        .select(
+          'w.id',
+          'w.name',
+          'w.owner_id',
+          'u.username as owner_username',
+          'u.display_name as owner_display_name',
+          'w.organization_id',
+          'o.name as organization_name',
+          'w.visibility',
+          'w.archived_at',
+        )
+        .orderBy('w.created_at', 'asc')
+        .limit(limit)
+        .offset(offset),
+    ]);
 
-    res.json(
-      rows.map((r) => ({
+    res.json({
+      workspaces: rows.map((r) => ({
         id: r.id,
         name: r.name,
         ownerId: r.owner_id,
@@ -227,7 +234,10 @@ workspacesRouter.get('/admin/all', async (req, res, next) => {
         visibility: r.visibility,
         archivedAt: r.archived_at,
       })),
-    );
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }

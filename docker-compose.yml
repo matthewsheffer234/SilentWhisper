@@ -28,6 +28,7 @@ services:
   # once it's present locally.
   postgres:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -74,6 +75,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,6 +133,7 @@ services:
   # network, never exposed to nginx or the host.
   silent-whisper-ollama:
     image: ollama/ollama:latest
+    restart: unless-stopped
     volumes:
       - silent_whisper_ollama_models:/root/.ollama
     mem_limit: 6g
@@ -171,6 +174,7 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8101/api}
         VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8101/ws}
+    restart: unless-stopped
     ports:
       - "127.0.0.1:3101:3000"
     # Lowered from 512m (FEATURE_REQUEST.md "the deploy loop" entry,

@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, assertUsername, assertEmail, assertDisplayName } from '../validation.js';
+import { assertUuid, assertUsername, assertEmail, assertDisplayName, parseOffsetPagination } from '../validation.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refreshTokens.js';
 import { adminUserCreateLimiter, adminPasswordResetLimiter } from '../auth/rateLimit.js';
@@ -110,17 +110,24 @@ adminRouter.post('/users', adminUserCreateLimiter, async (req, res, next) => {
 });
 
 // Global account roster — cheap read, no limiter (matches GET /organizations'
-// precedent).
+// precedent). Offset-paginated (FEATURE_REQUEST.md entry 4) — bounded by
+// limit/offset rather than returning every row unconditionally.
 adminRouter.get('/users', async (req, res, next) => {
   try {
     await requireSystemAdmin(req);
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('users')
-      .select('id', 'username', 'display_name', 'email', 'status', 'is_system_admin')
-      .orderBy('username', 'asc');
+    const [{ count }, rows] = await Promise.all([
+      db('users').count('id as count').first(),
+      db('users')
+        .select('id', 'username', 'display_name', 'email', 'status', 'is_system_admin')
+        .orderBy('username', 'asc')
+        .limit(limit)
+        .offset(offset),
+    ]);
 
-    res.json(
-      rows.map((r) => ({
+    res.json({
+      users: rows.map((r) => ({
         userId: r.id,
         username: r.username,
         displayName: r.display_name,
@@ -128,7 +135,10 @@ adminRouter.get('/users', async (req, res, next) => {
         status: r.status,
         isSystemAdmin: r.is_system_admin,
       })),
-    );
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }

@@ -93,6 +93,19 @@ const styles = {
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
+  pager: { display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0 4px' },
+  pagerButton: {
+    minWidth: 44,
+    minHeight: 44,
+    padding: '0 12px',
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'none',
+    color: 'var(--text-2)',
+    fontSize: 'var(--text-xs)',
+    cursor: 'pointer',
+  },
+  pagerLabel: { fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
   rowSelect: {
     minHeight: 36,
     borderRadius: 6,
@@ -121,6 +134,42 @@ const styles = {
   inlineFormRow: { display: 'flex', gap: 6, marginTop: 6, marginBottom: 6 },
   orgRow: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 'var(--text-sm)' },
 };
+
+const PAGE_SIZE = 50;
+
+// FEATURE_REQUEST.md entry 4: prev/next controls for the offset-paginated
+// admin list endpoints — "Showing 1-50 of 340" rather than the caller having
+// to guess whether it received a full page or the last partial one.
+function Pager({ offset, limit, total, onPageChange }) {
+  if (total === 0) return null;
+  const start = total === 0 ? 0 : offset + 1;
+  const end = Math.min(offset + limit, total);
+  const canPrev = offset > 0;
+  const canNext = offset + limit < total;
+  return (
+    <div style={styles.pager}>
+      <button
+        type="button"
+        style={{ ...styles.pagerButton, opacity: canPrev ? 1 : 0.4 }}
+        disabled={!canPrev}
+        onClick={() => onPageChange(Math.max(0, offset - limit))}
+      >
+        Prev
+      </button>
+      <span style={styles.pagerLabel}>
+        Showing {start}-{end} of {total}
+      </span>
+      <button
+        type="button"
+        style={{ ...styles.pagerButton, opacity: canNext ? 1 : 0.4 }}
+        disabled={!canNext}
+        onClick={() => onPageChange(offset + limit)}
+      >
+        Next
+      </button>
+    </div>
+  );
+}
 
 function CreateAccountForm({ organizations, onSubmit }) {
   const [username, setUsername] = useState('');
@@ -468,21 +517,42 @@ export default function SystemAdminPanel({ onClose }) {
   const { user } = useAuth();
   const [organizations, setOrganizations] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [accountsTotal, setAccountsTotal] = useState(0);
+  const [accountsOffset, setAccountsOffset] = useState(0);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [accountsError, setAccountsError] = useState(null);
   const [allWorkspaces, setAllWorkspaces] = useState([]);
+  const [workspacesTotal, setWorkspacesTotal] = useState(0);
+  const [workspacesOffset, setWorkspacesOffset] = useState(0);
   const [managingUserId, setManagingUserId] = useState(null);
   const [orgsError, setOrgsError] = useState(null);
   const [confirmDisable, setConfirmDisable] = useState(null); // account pending disable
   const [createOrgOpen, setCreateOrgOpen] = useState(false);
 
-  function loadAccounts() {
+  function loadAccounts(offset = accountsOffset) {
     setAccountsLoading(true);
     setAccountsError(null);
-    listAdminUsers()
-      .then(setAccounts)
+    listAdminUsers({ limit: PAGE_SIZE, offset })
+      .then((res) => {
+        setAccounts(res.users);
+        setAccountsTotal(res.total);
+        setAccountsOffset(res.offset);
+      })
       .catch((err) => setAccountsError(err.message || 'Failed to load accounts'))
       .finally(() => setAccountsLoading(false));
+  }
+
+  function loadWorkspaces(offset = workspacesOffset) {
+    listAllWorkspacesAdmin({ limit: PAGE_SIZE, offset })
+      .then((res) => {
+        setAllWorkspaces(res.workspaces);
+        setWorkspacesTotal(res.total);
+        setWorkspacesOffset(res.offset);
+      })
+      .catch(() => {
+        setAllWorkspaces([]);
+        setWorkspacesTotal(0);
+      });
   }
 
   function loadOrganizations() {
@@ -491,8 +561,8 @@ export default function SystemAdminPanel({ onClose }) {
 
   useEffect(() => {
     loadOrganizations();
-    loadAccounts();
-    listAllWorkspacesAdmin().then(setAllWorkspaces).catch(() => setAllWorkspaces([]));
+    loadAccounts(0);
+    loadWorkspaces(0);
   }, []);
 
   async function handleCreateAccount(details) {
@@ -684,6 +754,7 @@ export default function SystemAdminPanel({ onClose }) {
             </tbody>
           </table>
         )}
+        <Pager offset={accountsOffset} limit={PAGE_SIZE} total={accountsTotal} onPageChange={loadAccounts} />
 
         <div style={{ ...styles.row, alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={styles.sectionTitle}>Organizations</div>
@@ -744,6 +815,7 @@ export default function SystemAdminPanel({ onClose }) {
             </tbody>
           </table>
         )}
+        <Pager offset={workspacesOffset} limit={PAGE_SIZE} total={workspacesTotal} onPageChange={loadWorkspaces} />
         {confirmDisable && (
           <ConfirmDialog
             title="Disable Account"

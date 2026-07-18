@@ -21,7 +21,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { attachWebSocketServer } from './ws/server.js';
 import { startPresenceSweep, stopPresenceSweep } from './ws/presence.js';
 import { ensureDefaultSettingsSeeded } from './llm/settingsService.js';
-import { startHealthSweep, stopHealthSweep } from './llm/healthCheck.js';
+import { startHealthSweep, stopHealthSweep, getHealthStatus } from './llm/healthCheck.js';
 import { startEmbeddingWorker, stopEmbeddingWorker } from './search/embeddingWorker.js';
 import { startMessageSideEffectsWorker, stopMessageSideEffectsWorker } from './workers/messageSideEffectsWorker.js';
 
@@ -38,13 +38,25 @@ app.use(corsMiddleware);
 app.use(express.json());
 app.use(cookieParser());
 
+// Liveness-only: proves the Node process is up and Express is routing
+// requests, with no DB or provider touch — distinguishes "process wedged,
+// needs a restart" from "process fine, a dependency is briefly down" in a
+// way GET /health's DB-inclusive check can't (FEATURE_REQUEST.md entry 3).
+app.get('/health/live', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
 // Plain /health — no path-prefix collision risk since Silent Whisper owns
 // its whole subdomain (PROJECT_PLAN.md Section 2, Serving Under Silent
 // Lattice).
 app.get('/health', async (_req, res) => {
   try {
     await checkDbConnection();
-    res.json({ status: 'ok', db: 'ok', uptimeSeconds: Math.round(process.uptime()) });
+    // Reuses the health sweep's already-computed cached result (zero new
+    // outbound calls/latency) — purely additive, and ai.healthy never flips
+    // this endpoint's own status/HTTP code (FEATURE_REQUEST.md entry 3: "do
+    // not make provider health a hard dependency for the whole app").
+    res.json({ status: 'ok', db: 'ok', ai: getHealthStatus(), uptimeSeconds: Math.round(process.uptime()) });
   } catch (err) {
     res.status(503).json({ status: 'error', db: 'unreachable', message: err.message });
   }

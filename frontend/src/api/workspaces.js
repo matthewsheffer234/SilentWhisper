@@ -52,7 +52,13 @@ export const archiveWorkspace = (workspaceId) => apiFetch(`/workspaces/${workspa
 export const unarchiveWorkspace = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/unarchive`, { method: 'POST' });
 
 // New (FEATURE_REQUEST.md entry 1, slice 4).
-export const listAllWorkspacesAdmin = () => apiFetch('/workspaces/admin/all');
+export const listAllWorkspacesAdmin = ({ limit, offset } = {}) => {
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set('limit', limit);
+  if (offset !== undefined) params.set('offset', offset);
+  const qs = params.toString();
+  return apiFetch(`/workspaces/admin/all${qs ? `?${qs}` : ''}`);
+};
 export const transferWorkspaceOwnership = (workspaceId, username) =>
   apiFetch(`/workspaces/${workspaceId}/transfer-ownership`, { method: 'POST', body: { username } });
 export const changeWorkspaceVisibility = (workspaceId, visibility) =>

@@ -198,8 +198,8 @@ export function assertSearchQuery(value) {
 // Target: "Paginate all message history queries server-side; never return
 // unbounded result sets"). `before` is an ISO timestamp cursor, not an
 // offset, matching idx_messages_channel_date's (channel_id, created_at DESC).
-const DEFAULT_PAGE_LIMIT = 50;
-const MAX_PAGE_LIMIT = 100;
+export const DEFAULT_PAGE_LIMIT = 50;
+export const MAX_PAGE_LIMIT = 100;
 
 export function parsePagination(query) {
   let limit = DEFAULT_PAGE_LIMIT;
@@ -219,4 +219,33 @@ export function parsePagination(query) {
   }
 
   return { limit, before };
+}
+
+// Offset-based pagination for bounded admin list endpoints (FEATURE_REQUEST.md
+// entry 4) — a deliberate departure from parsePagination's cursor-by-timestamp
+// shape above, which fits unbounded, reverse-chronological message history.
+// Admin lists are bounded by total user/workspace count and browsed in a
+// stable (non-time-based) order today, so plain limit/offset fits better:
+// simple, and OFFSET scanning even several thousand admin-list rows is
+// trivially fast, unlike scanning millions of messages. Shares
+// DEFAULT_PAGE_LIMIT/MAX_PAGE_LIMIT with parsePagination rather than
+// inventing a second set of bounds.
+export function parseOffsetPagination(query) {
+  let limit = DEFAULT_PAGE_LIMIT;
+  if (query.limit !== undefined) {
+    limit = Number(query.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) {
+      throw new ValidationError(`limit must be an integer between 1 and ${MAX_PAGE_LIMIT}`);
+    }
+  }
+
+  let offset = 0;
+  if (query.offset !== undefined) {
+    offset = Number(query.offset);
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new ValidationError('offset must be a non-negative integer');
+    }
+  }
+
+  return { limit, offset };
 }

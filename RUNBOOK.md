@@ -39,7 +39,8 @@ docker compose run --rm ollama-pull-model
 | Service | Local URL | Notes |
 |---|---|---|
 | Frontend (production static build, nginx) | http://localhost:3101 | full chat UI — login, workspaces, channels, threads (self-service signup is closed). A Vite dev server can still be run via `docker-compose.dev.yml` — see Frontend Development below |
-| Backend health | http://localhost:8101/health | `{"status":"ok","db":"ok","uptimeSeconds":N}` |
+| Backend health | http://localhost:8101/health | `{"status":"ok","db":"ok","ai":{...},"uptimeSeconds":N}` |
+| Backend liveness | http://localhost:8101/health/live | `{"status":"ok"}` — process-alive only, no DB/provider touch |
 | Backend REST API | http://localhost:8101/api | see API Reference below |
 | Backend WebSocket | ws://localhost:8101/ws | authenticate-frame handshake — see WebSocket Protocol below |
 | Postgres | localhost:5433 | `psql -h localhost -p 5433 -U <PGUSER> -d silent_whisper` |
@@ -226,12 +227,12 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 |---|---|---|
 | POST | `/api/auth/login` | `{username, password}` → `{accessToken, user}` + refresh cookie — self-service signup no longer exists; see "Create the first user" above and `/api/admin/users`/`/api/*/invitations` below |
 | POST | `/api/admin/users` | system-admin only. `{username, email, password, organizationId?}` → creates a bare account, no workspace tie |
-| GET | `/api/admin/users` | system-admin only. Every account, with `status`/`isSystemAdmin` |
+| GET | `/api/admin/users` | system-admin only. `?limit=&offset=` (default 50, max 100) → `{users, total, limit, offset}`, with `status`/`isSystemAdmin` |
 | POST | `/api/admin/users/:userId/disable` \| `/enable` | system-admin only |
 | POST | `/api/admin/users/:userId/promote` \| `/demote` | system-admin only. Grants/revokes `is_system_admin`; `/demote` 400s against the caller's own account |
 | POST | `/api/admin/users/:userId/reset-password` | system-admin only. `{newPassword}` — global, works regardless of workspace membership |
 | GET | `/api/admin/users/:userId/organizations` | system-admin only. Which orgs a given user belongs to, with role |
-| GET | `/api/workspaces/admin/all` | system-admin only. Every workspace regardless of membership, across every organization |
+| GET | `/api/workspaces/admin/all` | system-admin only. `?limit=&offset=` (default 50, max 100) → `{workspaces, total, limit, offset}`, every workspace regardless of membership, across every organization |
 | PATCH | `/api/organizations/:orgId` | system-admin only. `{name}` — rename |
 | POST | `/api/organizations/:orgId/archive` \| `/unarchive` | system-admin only. Idempotent; an archived org blocks new members/invitations/workspaces but stays browsable |
 | POST | `/api/auth/refresh` | reads refresh cookie, rotates it → `{accessToken}` + new refresh cookie |
@@ -601,12 +602,19 @@ A real, non-hypothetical example of what this suite catches that nothing else wo
 
 ```bash
 curl http://localhost:8101/health
-# {"status":"ok","db":"ok","uptimeSeconds":12}
+# {"status":"ok","db":"ok","ai":{"healthy":true,"message":"ok","provider":"ollama","lastCheckedAt":"..."},"uptimeSeconds":12}
 ```
 
-If `db` comes back `"unreachable"` or the request 503s, Postgres is down, `app_runtime_user` doesn't exist yet (migrations not run), or the backend's `APP_DB_USER`/`APP_DB_PASSWORD` don't match what's actually in the database.
+If `db` comes back `"unreachable"` or the request 503s, Postgres is down, `app_runtime_user` doesn't exist yet (migrations not run), or the backend's `APP_DB_USER`/`APP_DB_PASSWORD` don't match what's actually in the database. `ai` is additive and read-only diagnostic info (FEATURE_REQUEST.md entry 3): it reflects the periodic health sweep's last cached result (`LLM_HEALTH_CHECK_INTERVAL_MS`, default 60s) rather than triggering a fresh provider call on every request, and `ai.healthy: false` never flips `status`/the HTTP code — this endpoint's pass/fail contract stays DB-only.
 
 Docker's own healthcheck (`docker compose ps`) checks the same endpoint from inside the container every 10s.
+
+```bash
+curl http://localhost:8101/health/live
+# {"status":"ok"}
+```
+
+Liveness-only: returns `200` immediately with no DB or provider touch, proving only that the Node process is up and Express is routing requests. Useful for telling "the process itself is wedged, needs a restart" apart from "the process is fine but a dependency (Postgres, the LLM provider) is briefly down" — `/health` alone can't distinguish those two failure modes since it's DB-inclusive by design.
 
 ## Resource Usage
 
