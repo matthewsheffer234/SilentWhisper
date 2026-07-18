@@ -1,0 +1,31 @@
+# Optional local-iteration override — NOT applied by a bare
+# `docker compose up`; Compose only auto-merges a file literally named
+# docker-compose.override.yml, and this is deliberately named something
+# else so a plain `docker compose up` always gets the production static
+# build (docker-compose.yml's own frontend service), never this by accident.
+#
+# Use explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build frontend
+#
+# Swaps the production static-bundle frontend image for the old Vite
+# dev-server image (frontend/Dockerfile.dev), with VITE_API_URL/VITE_WS_URL
+# passed back as runtime `environment:` the way that image expects (see
+# frontend/Dockerfile.dev). The normal way to iterate on the frontend is
+# still running `npm run dev` directly on the host (RUNBOOK.md, Frontend
+# Development) — this override exists only for whoever wants a
+# containerized dev server instead.
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8101/api}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8101/ws}
+    # docker-compose.yml's base mem_limit (64m) is sized for the production
+    # static build's nginx process, not the Vite dev server this override
+    # restores — that needs the same 512m the dev-server image was measured
+    # to actually require (PROJECT_PLAN.md's Local Test Environment Resource
+    # Envelope, "local icon system" entry, 2026-07-16) before this entry
+    # lowered the base service's limit.
+    mem_limit: 512m

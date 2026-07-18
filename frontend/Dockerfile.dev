@@ -1,0 +1,23 @@
+# Dev-server image, kept for optional local iteration only — this is NOT
+# what's built/deployed behind whisper.silentlattice.dev (see
+# frontend/Dockerfile for the production static build that replaced this as
+# the default). Use via docker-compose.dev.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build frontend
+# The normal way to iterate on the frontend is running `npm run dev`
+# directly on the host (RUNBOOK.md, Frontend Development) — this exists only
+# for whoever wants a containerized Vite dev server instead.
+#
+# Code is baked into the image at build time (no source volume mount) —
+# rebuild after source changes, same as before this file existed.
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]

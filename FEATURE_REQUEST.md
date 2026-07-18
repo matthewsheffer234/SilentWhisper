@@ -27,19 +27,7 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-### 1. The deploy loop — production frontend bundle + a scripted deploy step
-
-**Status**: Proposed
-**Utility**: Both reviews independently call this the cheapest, highest-leverage non-security fix available: `ARCHITECTURE_REVIEW_(Claude).md`'s Risk 3 (dev server in production) and Risk 5 (no CI/CD, manual deploy) note that "stale frontend/backend container" has already caused real, user-visible regressions at least four separate times across `PROJECT_PLAN.md` Section 11's own log, each one only caught because e2e tests happened to run immediately afterward. `ARCHITECTURE_REVIEW_(CODEX).md`'s P1 Recommendations 1–2 and Phase 1 item 6 make the same two points independently. This isn't a scale problem — it's a today problem, and it directly undermines "rapid feature iteration."
-**Origin**: `ARCHITECTURE_REVIEW_(Claude).md` P0 Recommendations 2–3; `ARCHITECTURE_REVIEW_(CODEX).md` P1 Recommendation 2 and Phase 1 item 6 (2026-07-17).
-
-Design:
-- **Production frontend bundle**: give `frontend/Dockerfile` a multi-stage build — stage 1 `npm ci && npm run build` producing `dist/`; stage 2 a minimal static file server (`nginx:alpine` or `serve`) serving `dist/` only, nothing else reachable. `docker-compose.yml`'s `frontend` service switches to the built image. The app already builds cleanly today (`npx vite build` is already part of this project's own verification routine per the implementation log), so this is a serving-layer change, not an app change — no source code, routing, or asset-loading change required. A separate local-dev Compose override can keep the current `npm run dev` command for hot-reload iteration; only the image actually deployed behind `whisper.silentlattice.dev` changes.
-- **Scripted deploy step**: new `scripts/deploy.sh` (a shell wrapper, not a `.mjs` script — this is orchestrating `docker`/`docker compose`/`docker exec`, not doing Node-side work, so a Node script would add a dependency for no benefit) that runs, in order: `docker compose build backend frontend`, `docker compose up -d backend frontend`, then `docker exec wireservice-nginx-1 nginx -s reload` — the last step gated behind an explicit flag (e.g. `--reload-nginx`) rather than run unconditionally every time, since most deploys don't touch nginx-relevant config and reloading nginx is a shared-infrastructure action worth being deliberate about. This is the same sequence `RUNBOOK.md`'s Production Deployment section already documents as a manual, human-memory-dependent set of steps; the script doesn't change what happens, it removes the chance of forgetting a step.
-- **No schema, authz, or audit implications** — this is build/deploy tooling only, touching `frontend/Dockerfile`, `docker-compose.yml`, and a new `scripts/deploy.sh`.
-- **Verification**: `npx vite build` runs clean; the new frontend container serves the built `dist/` (confirmed via a direct `curl` to a known route, not just "container starts"); `scripts/deploy.sh` is idempotent (running it twice back to back produces no errors, no duplicate reload side effects beyond the flag being passed twice); `RUNBOOK.md`'s Production Deployment section updated to reference the script as the standard path, keeping the manual sequence documented underneath it as what the script actually does, for anyone debugging it.
-
-### 2. Hot path splitting — move notification writes and entity linking off the message-send path
+### 1. Hot path splitting — move notification writes and entity linking off the message-send path
 
 **Status**: Proposed
 **Utility**: Both reviews flag the message-send path's inline side effects (mention resolution, notification writes, entity linking, embedding enqueue) as a latency risk that grows with mention/entity count per message — `ARCHITECTURE_REVIEW_(Claude).md` Risk 4 and Recommendation 5's outbox-pattern approach (applied there to audit writes, but the same shape); `ARCHITECTURE_REVIEW_(CODEX).md` Risk 3 and P2 Recommendations 1–4 (a durable `message_side_effect_jobs` table, explicitly). Keeps message delivery feeling instantaneous as mention/entity usage grows, without touching the one thing users actually perceive as "sent" — the DB insert and room broadcast.
@@ -55,6 +43,16 @@ Design:
 - **No audit change**: no message side effect is itself an audited action today, so this is silent to the audit log unless that changes separately later.
 
 ## Done
+
+### The deploy loop: production frontend bundle + a scripted deploy step
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "The deploy loop: production frontend bundle + a scripted deploy step" (2026-07-18).
+
+`frontend/Dockerfile` is now a multi-stage build — `node:20-alpine` runs `npm ci && npm run build`, then `nginx:alpine` serves the resulting `dist/` on port 3000 via a new `frontend/nginx.conf`: hashed `/assets/` files cached `immutable` for a year, everything else falling back to `index.html` (`Cache-Control: no-cache`) so React Router's `/invite/:token` route survives a hard refresh or a shared link. `VITE_API_URL`/`VITE_WS_URL` moved from `docker-compose.yml`'s `frontend.environment` to `frontend.build.args`, since Vite bakes them into the bundle at build time and nothing reads them from the container's runtime environment anymore. The previous single-stage dev-server Dockerfile is preserved unchanged at `frontend/Dockerfile.dev`, restorable via a new `docker-compose.dev.yml` (explicitly not `docker-compose.override.yml`, so a bare `docker compose up` never picks it up by accident) for anyone who wants a containerized Vite dev server instead of the documented host-side `npm run dev` path — that override also carries the dev image's own `512m` `mem_limit` forward, since the base service's limit dropped to `64m` (re-measured against the new nginx-only container, not guessed).
+
+New `scripts/deploy.sh` (bash, not `.mjs` — pure `docker`/`docker compose` orchestration, no Node-side work) runs `docker compose build backend frontend` then `docker compose up -d backend frontend` unconditionally, with `docker exec wireservice-nginx-1 nginx -s reload` gated behind an explicit `--reload-nginx` flag since that's the one step touching shared infrastructure fronting two other domains.
+
+**Verification**: built and ran the new image standalone on a spare port first (before touching the live container) — confirmed static serving, immutable asset caching, and the `/invite/:token` SPA fallback all work, and that the built bundle has the real production API/WS URLs baked in. Only then recreated the live `frontend` container, reloaded `wireservice-nginx-1`, and confirmed both `https://whisper.silentlattice.dev/` and its `/invite/:token` route return `200` against the new bundle. Ran `scripts/deploy.sh` twice (bare, then with `--reload-nginx`) to confirm idempotency, and confirmed it rejects an unrecognized flag rather than silently proceeding. 442 backend tests (441 passing, the one failure the same pre-existing unrelated `aiRoutes.test.js` flake), 65/65 frontend Vitest tests (frontend source itself untouched).
 
 ### Security hardening from 2026-07-15 audit: LLM baseUrl allowlist, archived invitation redemption, group-DM member cap
 

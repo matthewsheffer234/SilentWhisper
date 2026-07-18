@@ -38,7 +38,7 @@ docker compose run --rm ollama-pull-model
 
 | Service | Local URL | Notes |
 |---|---|---|
-| Frontend (Vite dev server) | http://localhost:3101 | full chat UI — login, workspaces, channels, threads (self-service signup is closed) |
+| Frontend (production static build, nginx) | http://localhost:3101 | full chat UI — login, workspaces, channels, threads (self-service signup is closed). A Vite dev server can still be run via `docker-compose.dev.yml` — see Frontend Development below |
 | Backend health | http://localhost:8101/health | `{"status":"ok","db":"ok","uptimeSeconds":N}` |
 | Backend REST API | http://localhost:8101/api | see API Reference below |
 | Backend WebSocket | ws://localhost:8101/ws | authenticate-frame handshake — see WebSocket Protocol below |
@@ -64,6 +64,17 @@ Chosen to avoid collision with the existing Silent Lattice stack, which already 
 `https://whisper.silentlattice.dev` is served by the same shared `wireservice-nginx-1` container that fronts `silentlattice.dev` and `dev.silentlattice.dev`. Full incident/deployment writeup: `PROJECT_PLAN.md` Section 11, "Production Deployment: whisper.silentlattice.dev live."
 
 **Everything in this section is an operational change to shared infrastructure outside this repo, not an app-code change** — none of it is versioned alongside Silent Whisper's own commits, none of it is deployed by `docker compose up --build` in this repo, and it isn't reviewed the way a PR to `/backend` or `/frontend` is. `/root/wireservice`'s `nginx.conf`, the certbot renewal hooks, and the bare `docker run` invocation that starts `wireservice-nginx-1` all live in a *different* repo/host state that Silent Lattice deliberately keeps separate from normal app-code promotion, specifically because it's shared by three domains at once — a mistake here doesn't just affect Silent Whisper. Treat any change described below as something to apply deliberately and by hand (confirm with the user first if you're an agent, per this repo's own Rules of Engagement), never as a step to fold into routine Silent Whisper deploys.
+
+### Deploying a code change
+
+`scripts/deploy.sh` (`FEATURE_REQUEST.md` "the deploy loop" entry, `PROJECT_PLAN.md` Section 11, 2026-07-18) scripts the sequence below instead of running each step by hand:
+
+```bash
+scripts/deploy.sh                 # build + recreate backend/frontend only
+scripts/deploy.sh --reload-nginx  # same, plus reload wireservice-nginx-1 (see below)
+```
+
+It doesn't do anything the manual steps in this section didn't already do — it just removes the chance of forgetting one, which is exactly the recurring bug class (`PROJECT_PLAN.md` Section 11's own log: "the running backend/frontend containers had no source volume mount and were still serving pre-change images," repeated across at least four separate feature entries) this entry was written to close. `--reload-nginx` is opt-in, not automatic, since it's the one step that touches shared infrastructure (see "Everything in this section..." above) — most deploys during normal iteration only need the rebuild/recreate half.
 
 ### How nginx actually reaches this stack
 
@@ -103,9 +114,9 @@ To change `nginx.conf`: edit `/root/wireservice/nginx/nginx.conf`, then either:
 
 `/etc/letsencrypt/renewal-hooks/pre/stop-nginx.sh` and `post/start-nginx.sh` both run `docker compose stop/start nginx` from `/root/wireservice` — but there's no `nginx` Compose service (see above), so these hooks silently do nothing. `certbot renew`'s standalone authenticator needs port 80 free; nginx occupies it permanently. Left unaddressed, **all three certs** (not just `whisper.silentlattice.dev`'s) will fail to auto-renew around 60 days after issuance (`renew_before_expiry = 30 days` on a 90-day cert). This predates Silent Whisper and isn't specific to it — flagging here because it was discovered while wiring this domain up, and it now affects Silent Whisper's own cert too. Needs a decision: fix the hook scripts to `docker stop`/`docker start wireservice-nginx-1` directly, or migrate to the `webroot` authenticator (no port-80 contention at all — see `PROJECT_PLAN.md` Section 2's original recommendation, not yet acted on).
 
-### Known cosmetic issue: Vite HMR over the public domain
+### Resolved: Vite HMR over the public domain
 
-Browser console shows `WebSocket connection ... failed: Unexpected response code: 200` and a Vite HMR warning when loading via `https://whisper.silentlattice.dev`. This is Vite's *own* dev-server hot-reload client failing (nginx's `/` location has no WebSocket upgrade headers, only `/ws` does) — it does not affect the application, whose own `/ws` endpoint is proxied correctly and was verified directly. Harmless; the real fix is serving a production static build instead of a dev server behind the public URL, not yet done.
+Previously, the browser console showed a `WebSocket connection ... failed: Unexpected response code: 200` / Vite HMR warning when loading via `https://whisper.silentlattice.dev`, since a Vite dev server (with its own HMR client) was what actually served the public URL. Resolved by "the deploy loop" (`FEATURE_REQUEST.md`, `PROJECT_PLAN.md` Section 11, 2026-07-18) — the public URL now serves a real production static build via nginx, which has no dev-server client to fail in the first place.
 
 ## First-Time Setup
 
@@ -402,7 +413,7 @@ docker exec silentwhisper-postgres-1 psql -U sw_admin -d silent_whisper \
 Like Silent Lattice's dev stack, code is baked into the image at build time — there's no source volume mount. After editing backend or frontend source, rebuild the affected service:
 
 ```bash
-# Rebuild both
+# Rebuild both (or use scripts/deploy.sh — see Production Deployment above)
 docker compose up -d --build backend frontend
 
 # Rebuild only the backend
@@ -411,6 +422,8 @@ docker compose up -d --build backend
 # Rebuild only the frontend
 docker compose up -d --build frontend
 ```
+
+If the public `whisper.silentlattice.dev` URL is what you're testing against, reload nginx afterward too (see "After rebuilding backend or frontend, reload nginx" above) — `scripts/deploy.sh --reload-nginx` does both steps together.
 
 The `backend` and `migrate` services share an image built from repo-root context (`backend/Dockerfile`) specifically so the image also includes `/database` — if you change a migration file, rebuild before running `docker compose run --rm migrate` again, or Compose will silently reuse the stale cached image:
 
@@ -535,11 +548,19 @@ Since code is baked into the image (no volume mount), a plain `restart` only hel
 
 ## Frontend Development
 
-The frontend dev server runs Vite with `--host` (so it's reachable from outside the container) at container port 3000, published as `127.0.0.1:3101`. It reads `VITE_API_URL`/`VITE_WS_URL` at **build time** (Vite bakes `import.meta.env.VITE_*` into the bundle) — changing `frontend/.env` or the root `.env`'s `VITE_*` values requires a rebuild, not just a restart:
+`docker compose up -d --build frontend` (or `scripts/deploy.sh`) now builds and serves a real production static bundle (`frontend/Dockerfile`: `vite build` → `nginx:alpine` serving `dist/`, port 3000 published as `127.0.0.1:3101`) — this is what's actually deployed behind `whisper.silentlattice.dev`. It reads `VITE_API_URL`/`VITE_WS_URL` at **build time** as Docker build args (`docker-compose.yml`'s `frontend.build.args`, sourced from the root `.env`) — Vite bakes `import.meta.env.VITE_*` into the bundle, so changing those values requires a rebuild, not just a restart:
 
 ```bash
 docker compose up -d --build frontend
 ```
+
+**To run a containerized Vite dev server instead** (hot-reload-friendlier iteration, matching how this service worked before "the deploy loop" entry): use the explicit override, which swaps back to `frontend/Dockerfile.dev` and reads `VITE_*` as runtime environment vars the way the dev server expects:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build frontend
+```
+
+This isn't applied by a bare `docker compose up` — `docker-compose.dev.yml` is deliberately not named `docker-compose.override.yml`, so Compose never merges it in automatically. The more common way to iterate on the frontend, though, is running `npm run dev` directly on the host against `frontend/.env` (see First-Time Setup above) rather than through Docker at all.
 
 No component-level unit test suite exists (no Vitest/RTL configured) — real end-to-end coverage against the actual running stack (`frontend/e2e/`, Playwright — see Integration Tests below) is what this project has instead, not a placeholder for it. That real-browser approach is also what caught a React 18 StrictMode double-effect race in Phase 3 that no component-level test could have (see Common Problems below).
 

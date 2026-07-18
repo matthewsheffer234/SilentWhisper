@@ -159,23 +159,28 @@ services:
       OLLAMA_HOST: silent-whisper-ollama:11434
 
   frontend:
+    # Production static build (FEATURE_REQUEST.md "the deploy loop" entry,
+    # 2026-07-18) — Vite inlines VITE_API_URL/VITE_WS_URL into the built
+    # bundle at build time, so they're build args here, not runtime
+    # `environment:` (that stopped taking effect the moment this service
+    # switched off the old dev-server image; see RUNBOOK.md, Frontend
+    # Development). docker-compose.dev.yml is the opt-in override that
+    # restores the old dev-server image + runtime environment vars.
     build:
       context: ./frontend
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8101/api}
-      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8101/ws}
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8101/api}
+        VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8101/ws}
     ports:
       - "127.0.0.1:3101:3000"
-    # Bumped from 128m (FEATURE_REQUEST.md's local icon system entry,
-    # 2026-07-16): adding lucide-react pushed Vite's dev-server dependency
-    # pre-bundling step (esbuild scanning the whole package on cold start)
-    # over the old limit, OOM-killing the container outright — confirmed via
-    # `docker inspect`'s OOMKilled flag, not guessed. 256m still OOM-killed
-    # it; measured actual cold-start usage at ~244MiB via a one-off
-    # `docker run -m 512m`, so 512m is real headroom, not a guess. Same class
-    # of bump as Postgres's mem_limit increase when it moved to
-    # pgvector/pgvector:pg16.
-    mem_limit: 512m
+    # Lowered from 512m (FEATURE_REQUEST.md "the deploy loop" entry,
+    # 2026-07-18): that limit was sized for the old Vite dev server's esbuild
+    # dependency pre-bundling on cold start (see the lucide-react entry this
+    # comment used to describe) — nginx serving a handful of static files has
+    # nothing comparable to pre-bundle. Measured actual usage at ~8MiB via
+    # `docker stats` against a standalone container, so 64m is real headroom
+    # (~8x), not a guess.
+    mem_limit: 64m
     networks:
       - default
       - wireservice_default
