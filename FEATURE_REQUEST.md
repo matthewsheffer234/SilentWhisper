@@ -27,7 +27,72 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-*(Empty — every entry considered so far has shipped; see Done below. Add the next one here when a new feature is requested or a gap is found.)*
+### 1. Minimal CI workflow
+
+**Status**: Proposed
+**Utility**: `ARCHITECTURE_REVIEW_(Claude).md` calls this "the single cheapest fix on this list" (P0 Recommendation 1) — nothing currently gates a broken build or a failing test from reaching `main`. Confirmed still true: no `.github/workflows` directory exists at all. This is the complementary half of "the deploy loop" entry (already shipped): that entry stops a *stale* container from being deployed; this stops a *broken* one from ever being deployable in the first place.
+**Origin**: `ARCHITECTURE_REVIEW_(Claude).md` P0 Recommendation 1 (2026-07-17), re-confirmed against the live repo on 2026-07-18.
+
+Design:
+- New `.github/workflows/ci.yml`, triggered on every push to `main` and every pull request targeting it. Two independent jobs so a frontend-only or backend-only PR isn't blocked waiting on the other:
+  - **`backend`**: a `postgres` service container (`pgvector/pgvector:pg16`, matching `docker-compose.yml`'s own image choice so `CREATE EXTENSION vector` works — plain `postgres:16-alpine` would fail migration `0009`), `POSTGRES_DB: silent_whisper_test` directly (no separate create-database step needed). Steps: checkout, `actions/setup-node@v4` (node 20, matching every `Dockerfile`'s `FROM node:20-alpine`), `npm ci` in `backend/`, `npm run migrate` (creates the schema *and* the `app_runtime_user` role — see `database/migrations/0007_grants.js`), `npm test`.
+  - **`frontend`**: checkout, setup-node, `npm ci` in `frontend/`, `npm run test:unit`, `npm run build`.
+  - **Deliberately out of scope**: `frontend/e2e` (Playwright) — needs a live Ollama instance, real Docker Compose stack, cached browser binaries, and careful rate-limiter batching (`RUNBOOK.md`'s Integration Tests section documents exactly why a single unbatched run 429s). That's a meaningfully bigger lift than "run the existing unit/integration suites," and Claude review's own P0 framing only ever asked for `npm test`/`npm run test:unit`/`npm run build` — e2e-in-CI is a separate future entry if wanted, not bundled into this one.
+- **Env vars for the `backend` job** (`PGHOST: localhost`, `PGPORT: 5432`, `PGUSER`/`PGPASSWORD` matching the service container's admin credentials, `PGDATABASE: silent_whisper_test`, `APP_DB_USER`, `APP_DB_PASSWORD`, `JWT_SECRET`) come from **GitHub Actions repository secrets** (`secrets.CI_PGPASSWORD`, `secrets.CI_APP_DB_PASSWORD`, `secrets.CI_JWT_SECRET`), not literals in the workflow file — `PROJECT_PLAN.md` Section 3 says exactly this for any future CI secret ("reference secrets only as repository secrets... never embed raw values in workflow YAML or IaC templates") with no carve-out for "it's only a throwaway CI database," so this follows that literally rather than deciding it's a special case. These three repository secrets need to be added once (any generated value works — nothing in the ephemeral CI Postgres container persists or is reachable outside that one workflow run) before the workflow can pass.
+- **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
+- **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
+
+### 2. Docker Compose restart policies
+
+**Status**: Proposed
+**Utility**: `ARCHITECTURE_REVIEW_(CODEX).md` P1 Recommendation 1 — confirmed still true: zero `restart:` policies exist anywhere in `docker-compose.yml`. On a host that serves real traffic at `whisper.silentlattice.dev`, a container crash today (OOM, an uncaught exception, a Docker daemon restart) leaves that service down until someone notices and runs `docker compose up -d` by hand. This is a one-line-per-service change with no behavioral downside.
+**Origin**: `ARCHITECTURE_REVIEW_(CODEX).md` P1 Recommendation 1 (2026-07-17), re-confirmed against the live `docker-compose.yml` on 2026-07-18.
+
+Design:
+- Add `restart: unless-stopped` to the four long-running services: `postgres`, `backend`, `silent-whisper-ollama`, `frontend`. `unless-stopped` (not `always`) so a deliberate `docker compose stop` is respected — an operator stopping a service on purpose shouldn't have Docker silently bring it back.
+- **Do not** add a restart policy to `migrate` or `ollama-pull-model` — both are one-shot, `profiles: ["tools"]`-gated jobs meant to run once and exit `0`; a restart policy on either would make Docker treat their normal successful exit as something to retry forever.
+- **No schema/authz/audit implications** — `docker-compose.yml` only.
+- **Verification**: `docker compose config` still validates; `docker kill` each of the four long-running containers in turn and confirm Docker recreates it automatically (`docker compose ps` shows it `Up` again within a few seconds) without a manual `docker compose up -d`.
+
+### 3. Deeper `/health` checks
+
+**Status**: Proposed
+**Utility**: `ARCHITECTURE_REVIEW_(CODEX).md` P1 Recommendation 4 — confirmed still true: `GET /health` (`backend/src/index.js`) only ever checks DB reachability. There's no way to tell "the Node process is alive but the DB is briefly unreachable" apart from "the process itself is wedged," and no visibility into AI provider health from the same endpoint an operator would check first.
+**Origin**: `ARCHITECTURE_REVIEW_(CODEX).md` P1 Recommendation 4 (2026-07-17), re-confirmed against the live route on 2026-07-18.
+
+Design:
+- **New `GET /health/live`**: liveness-only — returns `{"status":"ok"}` immediately with no DB or provider touch, proving only that the Node process is up and Express is routing requests. Useful for distinguishing "process wedged, needs a restart" from "process fine, dependency briefly down" — the two failure modes `GET /health`'s current DB-inclusive check can't tell apart on its own.
+- **`GET /health` gains an additive `ai` field**, reusing the already-running periodic sweep's cached result (`llm/healthCheck.js`'s existing `getHealthStatus()` — zero new outbound calls, zero new latency, it's already computed every `LLM_HEALTH_CHECK_INTERVAL_MS`): `{"status":"ok","db":"ok","ai":{"healthy":true,"provider":"ollama","lastCheckedAt":"..."},"uptimeSeconds":N}`. Purely additive, so existing consumers reading `.status`/`.db`/`.uptimeSeconds` (the Docker Compose `healthcheck:` block, `RUNBOOK.md`'s documented `curl` example) are unaffected. Per the review's own explicit instruction ("do not make provider health a hard dependency for the whole app unless AI is critical"), `ai.healthy: false` never flips the top-level `status`/HTTP code — `/health`'s pass/fail contract stays DB-only, exactly as today.
+- **No schema/authz implications** — both are unauthenticated, matching `/health`'s existing access level (no bearer token required, same as today).
+- **Docs**: `RUNBOOK.md`'s Health Checks section gains the new endpoint and the `ai` field; `docker-compose.yml`'s `backend.healthcheck` stays pointed at `/health` unchanged (still the right check for "is this container actually ready to serve," not just "is the process alive").
+- **Tests**: `GET /health/live` returns `200` even when instrumented to simulate a DB outage (mock `checkDbConnection` to reject) — proving it's genuinely liveness-only, not a thin wrapper around the existing check. `GET /health`'s `ai` field reflects `getHealthStatus()`'s current value without triggering a new health check call (assert the provider adapter's `checkHealth` isn't invoked by the `/health` request itself).
+
+### 4. Paginate admin list endpoints
+
+**Status**: Proposed
+**Utility**: `ARCHITECTURE_REVIEW_(CODEX).md` P4 Recommendation 1 — confirmed still true: `GET /api/admin/users` (`backend/src/routes/admin.js`) and `GET /workspaces/admin/all` (`backend/src/routes/workspaces.js`) both return every matching row with no `limit`/`offset` at all. Harmless at today's scale (Far distance-to-failure per that review), but a real, easy-to-close gap before it isn't.
+**Origin**: `ARCHITECTURE_REVIEW_(CODEX).md` P4 Recommendation 1 (2026-07-17), re-confirmed against both routes on 2026-07-18.
+
+Design:
+- **Offset-based, not cursor-based** — a deliberate departure from this app's usual cursor-by-timestamp convention (`parsePagination`'s `before`, used for message history). Message history is unbounded and reverse-chronological, where cursor pagination is the only sane choice; these two admin lists are bounded by total user/workspace count (not "every message ever sent") and are alphabetically browsed today (`ORDER BY username`/`w.name`) — an ordering worth preserving rather than silently switching to `created_at DESC` just to make cursor pagination easier. `?limit=&offset=` fits that shape better: simple, and `OFFSET` scanning even several thousand admin-list rows is trivially fast, unlike scanning millions of messages.
+- Both routes accept `limit` (reuse `validation.js`'s existing `MAX_PAGE_LIMIT`/`DEFAULT_PAGE_LIMIT` bounds — a new `assertBoundedInt`-based helper mirroring `parsePagination`'s `limit` validation, or a small sibling function `parseOffsetPagination` if the shape diverges enough to not share code cleanly) and `offset` (non-negative integer, default `0`).
+- Response gains a `total` count (a `COUNT(*)` alongside the existing query, or a second lightweight query if combining cleanly with the existing joins is awkward) so the frontend can render "Showing 1–50 of 340" rather than the caller having to guess whether it received a full page or the last partial one.
+- **Frontend**: `SystemAdminPanel.jsx`'s user/workspace tables gain pagination controls (page-number or prev/next, matching whichever pattern already exists elsewhere in the admin UI, or a simple prev/next if none does) — this is the one piece of this entry that touches frontend code, everything else above is backend-only.
+- **No authz/audit implications** — both routes already gate on `is_system_admin`; pagination doesn't change who can call them or what's logged.
+- **Tests**: a seeded set of >`DEFAULT_PAGE_LIMIT` users/workspaces requires more than one page to see all of them; `total` matches the real row count regardless of `limit`; an out-of-range `limit` (too large, non-integer) 400s the same way `parsePagination` already does for message history; `offset` beyond the total row count returns an empty array, not an error.
+
+### 5. Bounded AI concurrency queue instead of hard-rejecting
+
+**Status**: Proposed
+**Utility**: `ARCHITECTURE_REVIEW_(Claude).md` P1 Recommendation 6 — today, `llm/concurrencyGate.js`'s `tryAcquire` is non-blocking by design: a second person clicking "Summarize"/"Find Action Items"/"Catch Me Up" while one AI request is already in flight gets an immediate `503`, not a queue position. At `LLM_MAX_CONCURRENT_REQUESTS=1` (this environment's default, per `PROJECT_PLAN.md` Section 2's CPU-only-Ollama reasoning), two people using AI features within the same ~10–20s window already hits this today, not just at higher scale.
+**Origin**: `ARCHITECTURE_REVIEW_(Claude).md` P1 Recommendation 6 (2026-07-17), re-confirmed against the live `concurrencyGate.js`/`aiService.js` on 2026-07-18.
+
+Design:
+- **`llm/concurrencyGate.js`** changes from a synchronous `tryAcquire()`/`release()` pair to an async `acquireSlot(maxConcurrent, { onQueued }?)` that returns a Promise resolving once a slot is actually granted, backed by a small in-memory FIFO array of pending resolvers (bounded — a new `AI_QUEUE_MAX_DEPTH`, default 5–10, matching the review's own suggested range). If the queue is already at that depth when a new request arrives, reject immediately with the existing `503 "AI service is at capacity, please try again shortly"` — this entry narrows *when* that rejection fires, it doesn't remove it. `release()` keeps its current synchronous shape but additionally resolves the next queued Promise, if any, instead of just decrementing the counter.
+- **`llm/aiService.js`'s `runStreamingCompletion`**: replaces `if (!tryAcquire(...))  throw ServiceUnavailableError(...)` with `await acquireSlot(settings.maxConcurrentRequests, { onQueued: (position) => { res.setHeader('X-Ai-Queue-Position', String(position)); res.flushHeaders(); } })`. `onQueued` fires synchronously the moment a request is placed in the queue (before the Promise resolves) — `res.flushHeaders()` sends the response headers to the client immediately even though the body write hasn't started yet, giving the frontend a real, client-visible "queued, position N" signal rather than a request that just silently hangs until its turn (the review's own explicit ask: "a client-visible 'queued, position N' state rather than a silent wait"). No change to the three call sites (summarize/extract-tasks/workspace-digest) — they all go through this one shared function already.
+- **Frontend**: `aiPresentation.js` gains a queued-state branch (reading the new `X-Ai-Queue-Position` response header before the streamed body arrives) alongside its existing queued/unavailable states for `429`/`503`; the AI Actions trigger shows "Queued (position N)..." instead of just "Running AI..." while waiting on a slot.
+- **No schema/authz/audit implications** — same audit events, same rate limiter, same routes; this only changes what happens between "request accepted" and "generation starts."
+- **Tests**: a second concurrent request while one is in-flight gets queued (not immediately rejected) and completes once the first finishes, in FIFO order for a third/fourth request; a request arriving when the queue is already at `AI_QUEUE_MAX_DEPTH` still gets an immediate `503`; the queued response's headers (including `X-Ai-Queue-Position`) arrive before the queued request's slot is granted, not after (provable by asserting header receipt happens before the first request's generation is unblocked in the test).
 
 ## Done
 
