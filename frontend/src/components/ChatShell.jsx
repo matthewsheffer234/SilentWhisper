@@ -406,13 +406,18 @@ export default function ChatShell() {
     workspacesApi.listChannels(selectedWorkspaceId).then(setChannels);
   }, [selectedWorkspaceId]);
 
-  // FEATURE_REQUEST.md entry 3: prefetched on workspace switch (same
-  // "loaded up front, not on WorkspaceHome mount" shape as channels[] just
-  // above) — WorkspaceHome only ever renders once no channel is selected,
-  // but the dashboard query itself is already bounded/paginated
-  // server-side, so prefetching here costs nothing extra and keeps this
-  // effect list flat rather than needing WorkspaceHome to own a duplicate
-  // fetch-on-mount effect.
+  // FEATURE_REQUEST.md entry 3. WorkspaceHome only ever renders once no
+  // channel is selected, so this refetches on every transition *into* that
+  // view — both a fresh workspace switch and clicking back to Home from a
+  // channel within the same workspace (handleSelectWorkspace's own
+  // re-clicking-the-active-workspace-clears-selectedChannelId path, the
+  // most common way to reach Home at all). A fetch keyed only on
+  // selectedWorkspaceId (the first version of this effect) missed that
+  // second case entirely: switching workspaces once loaded a stale
+  // snapshot, and returning to Home later without a workspace change never
+  // refreshed it — stale data was invisible until a hard reload remounted
+  // everything. The dashboard query is already bounded/paginated
+  // server-side, so refetching on every arrival at Home costs nothing extra.
   const refreshWorkspaceTasks = useCallback((workspaceId) => {
     if (!workspaceId) {
       setWorkspaceTasks([]);
@@ -433,8 +438,9 @@ export default function ChatShell() {
   }, []);
 
   useEffect(() => {
+    if (!selectedWorkspaceId || selectedChannelId) return;
     refreshWorkspaceTasks(selectedWorkspaceId);
-  }, [selectedWorkspaceId, refreshWorkspaceTasks]);
+  }, [selectedWorkspaceId, selectedChannelId, refreshWorkspaceTasks]);
 
   // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry
   // surfaced a real, pre-existing gap: WorkspaceSidebar.jsx's own org
@@ -859,7 +865,6 @@ export default function ChatShell() {
           tasksLoading={workspaceTasksState.loading}
           tasksError={workspaceTasksState.error}
           onToggleDashboardTask={handleToggleDashboardTask}
-          onRefreshTasks={() => refreshWorkspaceTasks(selectedWorkspace.id)}
         />
       ) : (
         <ChannelView
