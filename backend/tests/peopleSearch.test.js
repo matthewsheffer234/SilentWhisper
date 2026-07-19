@@ -154,6 +154,28 @@ describe('GET /workspaces/:workspaceId/members-search', () => {
     );
   });
 
+  // FEATURE_REQUEST.md entry 1: this endpoint's loose requireWorkspaceMember
+  // gate (no MANAGE_MEMBERS/admin privilege required) previously let any
+  // plain member harvest every other member's email address. Also a
+  // contract test on the response shape so a future change can't silently
+  // reintroduce the field.
+  test('never includes an email field, for a plain member with no MANAGE_MEMBERS/admin privilege', async () => {
+    const owner = await signup('membersearchowner5');
+    const member = await signup('membersearchmember5');
+    const workspaceId = await createWorkspace(owner);
+    await addToWorkspace(owner, workspaceId, member);
+
+    const res = await request(app)
+      .get(`/api/workspaces/${workspaceId}/members-search`)
+      .set(authHeader(member.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.length).toBeGreaterThan(0);
+    for (const row of res.body) {
+      expect(row).not.toHaveProperty('email');
+      expect(Object.keys(row).sort()).toEqual(['displayName', 'isSelf', 'userId', 'username']);
+    }
+  });
+
   test('with a channelId, flags alreadyInChannel and requires the caller be a member of that channel', async () => {
     const owner = await signup('membersearchowner3');
     const member = await signup('membersearchmember3');

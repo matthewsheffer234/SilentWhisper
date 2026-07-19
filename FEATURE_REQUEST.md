@@ -27,30 +27,7 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-### 1. Stop leaking workspace member email addresses via members-search
-
-**Status**: Proposed
-**Utility**: Any authenticated plain workspace member — no `MANAGE_MEMBERS` or admin privilege required — can currently harvest every other member's email address through `members-search`, contradicting that endpoint's own in-code justification for its loose gate and diverging from its org-scoped sibling, which already gets this right. Real, currently-exploitable PII exposure, not a theoretical gap.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 7 (Medium).
-
-Design:
-- `GET /api/workspaces/:workspaceId/members-search` (`backend/src/routes/workspaces.js`) drops `users.email` from its select/response, matching `GET /api/organizations/:orgId/members-search`'s already-correct shape (`id`/`username`/`displayName` only — fields already visible through message authorship/mentions elsewhere).
-- `frontend/src/components/PeoplePicker.jsx` (around line 322) currently renders `person.email` for results sourced from this endpoint; fall back to `username`/`displayName` there, confirming during implementation which pickers are wired to `members-search` versus the tighter, still-email-capable `people-search` before changing rendering.
-- No new audit event needed — this narrows an existing response shape without changing who can call the route.
-- Tests: `members-search` response no longer contains an `email` field for any result, for a plain-member caller; a contract test on the response shape so a future change can't silently reintroduce the field; a frontend test confirming `PeoplePicker` renders correctly without `person.email` when backed by this endpoint.
-
-### 2. Recheck account status when rotating a refresh token
-
-**Status**: Proposed
-**Utility**: Every other credential-issuing path (login, WebSocket re-authenticate) rechecks `users.status === 'ACTIVE'` before granting a session; `POST /api/auth/refresh` is the one exception. Not currently reachable given the app's single disable code path (which already revokes refresh tokens), but a defense-in-depth gap in an otherwise consistently-enforced invariant, cheap to close.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 8 (Medium).
-
-Design:
-- `POST /api/auth/refresh` (`backend/src/routes/auth.js`) re-fetches the user filtered on `status: 'ACTIVE'` in the same lookup used to build the response, rather than an unfiltered lookup by id alone. If the filtered lookup returns nothing, revoke all refresh tokens for that user id, clear the refresh cookie, and respond `401` with the same generic "Invalid refresh token" message used elsewhere, matching login's existing handling rather than introducing a new error shape.
-- No schema change. No new audit event type — the existing `AUTH_TOKEN_REFRESH` event simply stops firing on the now-rejected path.
-- Tests: disable a user while a live, unexpired refresh token exists (isolating this check from the normal disable path's own token revocation); confirm `/api/auth/refresh` 401s, clears the refresh cookie, and issues no access token.
-
-### 3. Minimal CI workflow
+### 1. Minimal CI workflow
 
 **Status**: Proposed
 **Utility**: `ARCHITECTURE_REVIEW_(Claude).md` calls this "the single cheapest fix on this list" (P0 Recommendation 1) — nothing currently gates a broken build or a failing test from reaching `main`. Confirmed still true: no `.github/workflows` directory exists at all. This is the complementary half of "the deploy loop" entry (already shipped): that entry stops a *stale* container from being deployed; this stops a *broken* one from ever being deployable in the first place.
@@ -65,7 +42,7 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 4. Cancel summarize/extract-tasks on client disconnect
+### 2. Cancel summarize/extract-tasks on client disconnect
 
 **Status**: Proposed
 **Utility**: `LLM_MAX_CONCURRENT_REQUESTS` defaults to 1, and `PROJECT_PLAN.md`/`config.js` both call this deliberate on the CPU-only Ollama test environment. A closed tab or superseded retry currently holds that sole slot for up to `LLM_TIMEOUT_MS` (30s) regardless, queuing every other concurrent user's summarize/extract-tasks call behind a dead connection — the one AI feature the design explicitly flags as capacity-constrained.
@@ -76,7 +53,7 @@ Design:
 - No behavior change for the normal (non-disconnected) path. No new audit event; existing `AI_SUMMARY_REQUESTED`/`AI_TASK_EXTRACT_REQUESTED` events are unaffected.
 - Tests: mirror the digest route's existing disconnect-cancellation test for both summarize and extract-tasks — a simulated client disconnect mid-stream releases the concurrency slot promptly rather than holding it to timeout, verified by a second queued request completing sooner than `LLM_TIMEOUT_MS` after the first client disconnects.
 
-### 5. Paginate the remaining unbounded roster/list endpoints
+### 3. Paginate the remaining unbounded roster/list endpoints
 
 **Status**: Proposed
 **Utility**: Message history and the admin user/workspace rosters are already cursor/offset-bounded; several other list routes called on ordinary page loads (workspace sidebar, channel list, DM list) still return every matching row regardless of how large the caller's history has grown, which the 100-concurrent-user target does nothing to cap.
@@ -89,7 +66,7 @@ Design:
 - No authz change — pagination doesn't alter who can see what, only how much comes back per call.
 - Tests: each updated route rejects malformed pagination params consistently with the existing admin routes' behavior and returns the correct bounded page; a regression test confirms `markAllMentionNotificationsRead` still only touches notifications the caller can actually see (channel membership still enforced) under the new single-statement form.
 
-### 6. Unpredictable per-request nonces in LLM prompt delimiters
+### 4. Unpredictable per-request nonces in LLM prompt delimiters
 
 **Status**: Proposed
 **Utility**: Defense-in-depth against prompt injection: every prompt builder currently delimits untrusted message content with fixed, guessable marker strings (`MESSAGES_START`/`MESSAGES_END`, `THREAD_START`/`THREAD_END`), visible in the codebase and therefore spoofable by a message containing the literal marker text. AI output already renders to other users as a trusted-looking summary/task list, so a successful spoof is a misleading-content vector, not classic XSS — the frontend renders AI output as plain text, never HTML.
@@ -101,7 +78,7 @@ Design:
 - No schema/authz/audit change — this is prompt-construction only. Bump `LLM_SUMMARY_PROMPT_VERSION`/`LLM_TASK_PROMPT_VERSION`/`llm.digest_prompt_version` per this codebase's existing convention for any prompt-shape change, so historical audit rows stay attributable to the prompt version that generated them.
 - Tests: a message containing a literal (guessed or copy-pasted) marker string no longer breaks out of the data block, verified against a fixture; prompt-builder unit tests confirm the nonce changes per call and the JSON body round-trips correctly for messages containing markdown/newlines/quotes.
 
-### 7. Serialize DM creation to prevent duplicate-channel races
+### 5. Serialize DM creation to prevent duplicate-channel races
 
 **Status**: Proposed
 **Utility**: Two people clicking "Message" on each other in the same window (a plausible UI interaction — e.g. both opening each other's profile from a shared roster at once) can each pass `POST /api/direct-messages`'s "no existing channel" check under Postgres's default `READ COMMITTED` isolation and create two separate DIRECT channels for the same pair — the endpoint's own "creates or reuses" contract silently fails at exactly the concurrency level this app targets.
@@ -113,7 +90,7 @@ Design:
 - No authz/audit change.
 - Tests: two concurrent `POST /api/direct-messages` calls for the same user pair resolve to the same channel id, with exactly one `created: true` response; existing single-caller behavior is unaffected.
 
-### 8. Channel attention and health views
+### 6. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -128,7 +105,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 9. Entity pages as a lightweight knowledge base
+### 7. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
@@ -144,6 +121,16 @@ Design:
 - Tests: metadata editing, alias normalization/collision behavior, relationship isolation across workspaces, private-reference filtering, and frontend e2e for editing an entity and navigating related context.
 
 ## Done
+
+### Stop leaking workspace member emails via members-search, and recheck account status on refresh-token rotation
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Stop leaking workspace member emails via members-search, and recheck account status on refresh-token rotation" (2026-07-19). Two independent Medium-severity findings from `docs/reviews/security-performance-review-2026-07-19.md` (originally ranked entries 1 and 2) implemented together in one pass since neither touches the other's code.
+
+`GET /api/workspaces/:workspaceId/members-search` (`backend/src/routes/workspaces.js`) no longer selects or returns `users.email`, matching `GET /api/organizations/:orgId/members-search`'s already-correct shape (`id`/`username`/`displayName` only). `frontend/src/components/PeoplePicker.jsx` gained an exported `personSecondaryLabel(person, reason)` helper so members-search-backed pickers fall back to `@username` instead of a blank secondary line, while people-search-backed pickers keep showing email unchanged. `POST /api/auth/refresh` (`backend/src/routes/auth.js`) now re-fetches the user filtered on `status: 'ACTIVE'` in the same lookup that builds the response, rather than an unfiltered lookup by id alone; a filtered-lookup miss revokes every refresh token for that user id (including the one `rotateRefreshToken` had just issued moments earlier) and throws the same generic `UnauthorizedError('Invalid refresh token')` every other invalid-token case throws, letting the route's existing `catch` block clear the cookie with no new error shape.
+
+Tests: `backend/tests/peopleSearch.test.js` gained a case asserting a plain member's `members-search` response never contains an `email` key, pinning the exact response-shape contract. `backend/tests/auth.test.js` gained a case disabling a user via a raw DB update (deliberately skipping `revokeAllRefreshTokensForUser`, isolating this check from the normal disable path's own token revocation) then confirming `/api/auth/refresh` 401s, clears the refresh cookie, and returns no `accessToken`. New `frontend/src/components/PeoplePicker.test.jsx` unit-tests `personSecondaryLabel` directly — no jsdom in this project's Vitest setup, so the pure helper is tested rather than a rendered component.
+
+**Verification**: 521/522 backend tests pass; the one failure is the same pre-existing, previously-documented `aiRoutes.test.js` audit-row race, reproduced identically on a clean `main` via `git stash` before this work began. 92/92 frontend unit tests pass. `scripts/verify-audit-log.mjs` run clean (6515 rows, chain intact). Not independently verified in a live browser this session — both changes are narrow, backend-plus-one-shared-component fixes with existing test coverage of the exact behavior changed, so this rests on the tests above plus the full existing suite rather than a manual UI check.
 
 ### Bounding the AI thread/mention scans and making audit verification non-blocking
 

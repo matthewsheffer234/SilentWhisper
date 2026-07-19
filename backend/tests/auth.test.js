@@ -130,6 +130,29 @@ describe('Account status: disabled users', () => {
     expect(refreshRes.status).toBe(401);
   });
 
+  // FEATURE_REQUEST.md entry 2: every other credential-issuing path (login,
+  // WS re-authenticate) rechecks status === 'ACTIVE' before granting a
+  // session; deliberately disables via a raw DB update and skips
+  // revokeAllRefreshTokensForUser here (unlike the test above) to isolate
+  // this check from the normal disable path's own token revocation — the
+  // token used below is still live and unexpired going into the call.
+  test('refresh 401s, clears the cookie, and issues no access token when disabled without its own token revocation', async () => {
+    const user = await signup('disableduser3');
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'disableduser3', password: 'correct-horse-battery' });
+    const cookie = extractCookie(loginRes, 'refresh_token');
+
+    await db('users').where({ id: user.userId }).update({ status: 'DISABLED' });
+
+    const refreshRes = await request(app).post('/api/auth/refresh').set('Cookie', [`refresh_token=${cookie}`]);
+    expect(refreshRes.status).toBe(401);
+    expect(refreshRes.body.accessToken).toBeUndefined();
+
+    const clearedCookie = (refreshRes.headers['set-cookie'] || []).find((c) => c.startsWith('refresh_token='));
+    expect(clearedCookie).toMatch(/^refresh_token=;/);
+  });
+
   // FEATURE_REQUEST.md entry 1 (WebSocket connection hygiene / immediate
   // eviction): the gap this closes is a still-unexpired access token — the
   // two tests above only cover login and refresh, neither of which is the

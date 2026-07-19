@@ -86,6 +86,16 @@ const styles = {
   optionSecondary: { fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
 };
 
+// Exported for unit testing (no jsdom in this project's Vitest setup — see
+// ChannelView.test.jsx — so this pure helper is tested directly rather than
+// through a rendered component). FEATURE_REQUEST.md entry 1: members-search
+// no longer returns email, so callers backed by that endpoint need a
+// non-blank secondary line; people-search-backed callers still have email
+// and keep showing it.
+export function personSecondaryLabel(person, reason) {
+  return reason || person.email || `@${person.username}`;
+}
+
 function PersonLabel({ person }) {
   const name = person.displayName || person.username;
   const showUsername = person.displayName && person.displayName !== person.username;
@@ -319,7 +329,7 @@ export default function PeoplePicker({
                   <span style={styles.optionName}>
                     <PersonLabel person={person} />
                   </span>
-                  <span style={styles.optionSecondary}>{reason || person.email}</span>
+                  <span style={styles.optionSecondary}>{personSecondaryLabel(person, reason)}</span>
                 </div>
               );
             })}

@@ -194,7 +194,17 @@ authRouter.post('/refresh', async (req, res, next) => {
     }
 
     const { userId, newRawToken } = await rotateRefreshToken(db, rawToken);
-    const user = await db('users').where({ id: userId }).first();
+    // FEATURE_REQUEST.md entry 2: every other credential-issuing path
+    // (login, WS re-authenticate) rechecks status === 'ACTIVE' before
+    // granting a session; this filtered lookup closes the one remaining
+    // gap. rotateRefreshToken has already rotated the token by this point,
+    // so a disabled account's just-issued replacement also needs revoking,
+    // not only the one it swapped out.
+    const user = await db('users').where({ id: userId, status: 'ACTIVE' }).first();
+    if (!user) {
+      await revokeAllRefreshTokensForUser(db, userId);
+      throw new UnauthorizedError('Invalid refresh token');
+    }
 
     const accessToken = signAccessToken({ userId, username: user.username, displayName: user.display_name });
     setRefreshCookie(res, newRawToken);

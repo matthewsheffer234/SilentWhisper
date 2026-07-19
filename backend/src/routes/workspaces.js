@@ -731,6 +731,10 @@ workspacesRouter.get('/:workspaceId/people-search', memberSearchLimiter, async (
 // (transfer), not just a workspace admin. Passing `channelId` additionally
 // requires the caller be a member of that specific channel (matching the
 // add-to-channel endpoint's own gate) and flags `alreadyInChannel` per row.
+// Deliberately omits email (FEATURE_REQUEST.md entry 1) — unlike
+// people-search, this endpoint's loose requireWorkspaceMember gate was never
+// meant to hand every plain member a way to harvest email addresses;
+// matches GET /organizations/:orgId/members-search's already-correct shape.
 workspacesRouter.get('/:workspaceId/members-search', memberSearchLimiter, async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
@@ -772,7 +776,7 @@ workspacesRouter.get('/:workspaceId/members-search', memberSearchLimiter, async 
       });
     }
 
-    const selectCols = ['users.id', 'users.username', 'users.display_name', 'users.email'];
+    const selectCols = ['users.id', 'users.username', 'users.display_name'];
     if (channelId) selectCols.push('cm.user_id as channelMemberUserId');
     const rows = await query.orderBy('users.username', 'asc').limit(limit).select(selectCols);
 
@@ -781,7 +785,6 @@ workspacesRouter.get('/:workspaceId/members-search', memberSearchLimiter, async 
         userId: r.id,
         username: r.username,
         displayName: r.display_name,
-        email: r.email,
         isSelf: r.id === req.user.id,
         ...(channelId ? { alreadyInChannel: r.channelMemberUserId != null } : {}),
       })),
