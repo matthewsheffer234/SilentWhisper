@@ -42,7 +42,7 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 3. Paginate the remaining unbounded roster/list endpoints
+### 2. Paginate the remaining unbounded roster/list endpoints
 
 **Status**: Proposed
 **Utility**: Message history and the admin user/workspace rosters are already cursor/offset-bounded; several other list routes called on ordinary page loads (workspace sidebar, channel list, DM list) still return every matching row regardless of how large the caller's history has grown, which the 100-concurrent-user target does nothing to cap.
@@ -55,7 +55,7 @@ Design:
 - No authz change — pagination doesn't alter who can see what, only how much comes back per call.
 - Tests: each updated route rejects malformed pagination params consistently with the existing admin routes' behavior and returns the correct bounded page; a regression test confirms `markAllMentionNotificationsRead` still only touches notifications the caller can actually see (channel membership still enforced) under the new single-statement form.
 
-### 5. Serialize DM creation to prevent duplicate-channel races
+### 3. Serialize DM creation to prevent duplicate-channel races
 
 **Status**: Proposed
 **Utility**: Two people clicking "Message" on each other in the same window (a plausible UI interaction — e.g. both opening each other's profile from a shared roster at once) can each pass `POST /api/direct-messages`'s "no existing channel" check under Postgres's default `READ COMMITTED` isolation and create two separate DIRECT channels for the same pair — the endpoint's own "creates or reuses" contract silently fails at exactly the concurrency level this app targets.
@@ -67,7 +67,7 @@ Design:
 - No authz/audit change.
 - Tests: two concurrent `POST /api/direct-messages` calls for the same user pair resolve to the same channel id, with exactly one `created: true` response; existing single-caller behavior is unaffected.
 
-### 6. Channel attention and health views
+### 4. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -82,7 +82,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 7. Entity pages as a lightweight knowledge base
+### 5. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
