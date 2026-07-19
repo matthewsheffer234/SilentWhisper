@@ -76,6 +76,14 @@ aiRouter.post('/channels/:channelId/ai/summarize', aiProxyRateLimiter, async (re
     }
     const messages = rows.reverse(); // oldest-first for a coherent summary
 
+    // Client-disconnect cancellation (FEATURE_REQUEST.md entry 2): a closed
+    // tab or superseded retry no longer holds the sole LLM_MAX_CONCURRENT_
+    // REQUESTS slot for up to LLM_TIMEOUT_MS — same pattern already shipped
+    // on POST /ai/workspace-digest below. Aborting after the response has
+    // already finished normally is a harmless no-op.
+    const controller = new AbortController();
+    res.on('close', () => controller.abort());
+
     let result;
     try {
       result = await runStreamingCompletion({
@@ -84,6 +92,7 @@ aiRouter.post('/channels/:channelId/ai/summarize', aiProxyRateLimiter, async (re
         promptBuilder: buildSummaryPrompt,
         promptVersionField: 'summaryPromptVersion',
         messages,
+        signal: controller.signal,
       });
     } catch (err) {
       // Adapter failed after the response had already started streaming —
@@ -154,6 +163,11 @@ aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async
 
     const messages = [{ username: root.username, content: root.content }, ...replyRows];
 
+    // Client-disconnect cancellation (FEATURE_REQUEST.md entry 2) — see the
+    // matching comment on the summarize route above.
+    const controller = new AbortController();
+    res.on('close', () => controller.abort());
+
     let result;
     try {
       result = await runStreamingCompletion({
@@ -162,6 +176,7 @@ aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async
         promptBuilder: buildTaskExtractionPrompt,
         promptVersionField: 'taskPromptVersion',
         messages,
+        signal: controller.signal,
       });
     } catch (err) {
       if (res.headersSent) {

@@ -314,7 +314,7 @@ Every `LLM_*` env var (`backend/.env.example`) is a **default**, not the final w
 | `AI_QUEUE_MAX_DEPTH` | `8` | not an `app_settings` key — how many requests beyond `LLM_MAX_CONCURRENT_REQUESTS` may wait in the in-memory queue before a new arrival gets an immediate `503` |
 | `LLM_TEMPERATURE` | `0.3` | |
 | `LLM_STREAMING_ENABLED` | `true` | if the provider can't actually stream, the backend still returns the full text in one write |
-| `LLM_SUMMARY_PROMPT_VERSION` / `LLM_TASK_PROMPT_VERSION` | `v1` | logged on every AI audit event; an unrecognized version falls back to the `v1` template rather than failing |
+| `LLM_SUMMARY_PROMPT_VERSION` / `LLM_TASK_PROMPT_VERSION` / `LLM_DIGEST_PROMPT_VERSION` | `v2` | logged on every AI audit event; an unrecognized version falls back to the `v1` template rather than failing. `v2` (default since 2026-07-19) delimits prompt data with a fresh per-request random nonce in the marker names and JSON-serializes the message content, instead of `v1`'s fixed marker strings and raw interpolated text — see `backend/src/llm/promptTemplates.js`. `v1` remains a valid override value. |
 | `LLM_HEALTH_CHECK_INTERVAL_MS` | `60000` | not an `app_settings` key — operational only |
 | `ALLOWED_LLM_ORIGINS` | *(empty — falls back to `LLM_BASE_URL`'s own origin)* | not an `app_settings` key — comma-separated allowlist of origins `baseUrl` may be changed to via `PATCH /api/ai/settings`; see Switching providers below |
 

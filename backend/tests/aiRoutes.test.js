@@ -227,6 +227,64 @@ describe('POST /api/channels/:channelId/ai/summarize', () => {
     const auditRow = await db('audit_logs').where({ action_type: 'AI_SUMMARIZE_REQUESTED' }).first();
     expect(auditRow).toBeUndefined();
   });
+
+  // FEATURE_REQUEST.md entry 2: with LLM_MAX_CONCURRENT_REQUESTS=1 (the
+  // test/CPU-only default), a closed tab used to hold the sole slot until
+  // LLM_TIMEOUT_MS regardless. Proven here by a provider call that would
+  // otherwise hang forever (never resolving on its own) — the only way the
+  // queued second request can complete is if the first request's client
+  // disconnect releases the slot promptly, not by the mock ever settling.
+  test('a client disconnect while summarize is in-flight releases the concurrency slot promptly, without waiting for the provider', async () => {
+    let firstSignal;
+    let fetchCallCount = 0;
+    jest.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+      fetchCallCount += 1;
+      if (fetchCallCount === 1) {
+        firstSignal = init.signal;
+        await new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+          // Deliberately never resolves on its own.
+        });
+      }
+      return makeJsonResponse({ response: `summary ${fetchCallCount}` });
+    });
+
+    const owner = await signup('discsumowner0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hello' });
+
+    const firstReqObj = request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({});
+    // Fired but deliberately never awaited: superagent's Request.abort()
+    // suppresses the request's own callback (request-base.js's 'error'
+    // handler checks `_aborted` and returns without invoking
+    // `this.callback`), so this promise never settles once aborted below —
+    // only its side effect (the server observing the disconnect) is under
+    // test here. Attaching a no-op .catch() just avoids an unhandled-
+    // rejection warning on the rare path where it does settle with an error
+    // before the abort takes effect.
+    fireNow(firstReqObj).catch(() => undefined);
+    await pollUntil(() => getInFlightCount() === 1);
+    expect(getQueueDepth()).toBe(0);
+
+    const secondReq = fireNow(
+      request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({}),
+    );
+    await pollUntil(() => getQueueDepth() === 1);
+
+    firstReqObj.abort();
+
+    const secondRes = await secondReq;
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.text).toBe('summary 2');
+    expect(firstSignal.aborted).toBe(true);
+    expect(getInFlightCount()).toBe(0);
+    expect(getQueueDepth()).toBe(0);
+  });
 });
 
 describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
@@ -337,6 +395,61 @@ describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
       .set(authHeader(owner.accessToken))
       .send({});
     expect(res.status).toBe(404);
+  });
+
+  // FEATURE_REQUEST.md entry 2 — mirrors the summarize-route disconnect test
+  // above, applied to extract-tasks.
+  test('a client disconnect while extraction is in-flight releases the concurrency slot promptly, without waiting for the provider', async () => {
+    let firstSignal;
+    let fetchCallCount = 0;
+    jest.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+      fetchCallCount += 1;
+      if (fetchCallCount === 1) {
+        firstSignal = init.signal;
+        await new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+          // Deliberately never resolves on its own.
+        });
+      }
+      return makeJsonResponse({ response: `- [ ] task ${fetchCallCount}` });
+    });
+
+    const owner = await signup('discttaskowner0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    const rootRes = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'root message' });
+
+    const firstReqObj = request(app)
+      .post(`/api/messages/${rootRes.body.id}/ai/extract-tasks`)
+      .set(authHeader(owner.accessToken))
+      .send({});
+    // Fired but deliberately never awaited — see the matching comment on the
+    // summarize disconnect test above (superagent suppresses this callback
+    // once the request is aborted below).
+    fireNow(firstReqObj).catch(() => undefined);
+    await pollUntil(() => getInFlightCount() === 1);
+    expect(getQueueDepth()).toBe(0);
+
+    const secondReq = fireNow(
+      request(app).post(`/api/messages/${rootRes.body.id}/ai/extract-tasks`).set(authHeader(owner.accessToken)).send({}),
+    );
+    await pollUntil(() => getQueueDepth() === 1);
+
+    firstReqObj.abort();
+
+    const secondRes = await secondReq;
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.text).toBe('- [ ] task 2');
+    expect(firstSignal.aborted).toBe(true);
+    expect(getInFlightCount()).toBe(0);
+    expect(getQueueDepth()).toBe(0);
   });
 });
 

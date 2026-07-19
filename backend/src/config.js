@@ -91,11 +91,16 @@ export const config = {
     queueMaxDepth: Number(process.env.AI_QUEUE_MAX_DEPTH || 8),
     temperature: Number(process.env.LLM_TEMPERATURE || 0.3),
     streamingEnabled: process.env.LLM_STREAMING_ENABLED !== 'false',
-    summaryPromptVersion: process.env.LLM_SUMMARY_PROMPT_VERSION || 'v1',
-    taskPromptVersion: process.env.LLM_TASK_PROMPT_VERSION || 'v1',
+    // "v2" default (FEATURE_REQUEST.md entry 4, 2026-07-19): per-request
+    // random nonce in the prompt delimiter markers plus JSON-serialized
+    // message content, instead of v1's fixed, guessable marker strings —
+    // see promptTemplates.js. Bumped from "v1" so historical audit rows
+    // stay attributable to the prompt version that actually generated them.
+    summaryPromptVersion: process.env.LLM_SUMMARY_PROMPT_VERSION || 'v2',
+    taskPromptVersion: process.env.LLM_TASK_PROMPT_VERSION || 'v2',
     // Cross-channel workspace digest (FEATURE_REQUEST.md entry 6), same
     // versioned-template convention as summary/task prompts above.
-    digestPromptVersion: process.env.LLM_DIGEST_PROMPT_VERSION || 'v1',
+    digestPromptVersion: process.env.LLM_DIGEST_PROMPT_VERSION || 'v2',
     // Not an app_settings key — an operational safety cap on how far back a
     // digest request can reach, deliberately env-only like embedding.*
     // below rather than admin-editable through the AI Settings panel.

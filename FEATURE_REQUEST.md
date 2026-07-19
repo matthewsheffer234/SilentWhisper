@@ -42,17 +42,6 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 2. Cancel summarize/extract-tasks on client disconnect
-
-**Status**: Proposed
-**Utility**: `LLM_MAX_CONCURRENT_REQUESTS` defaults to 1, and `PROJECT_PLAN.md`/`config.js` both call this deliberate on the CPU-only Ollama test environment. A closed tab or superseded retry currently holds that sole slot for up to `LLM_TIMEOUT_MS` (30s) regardless, queuing every other concurrent user's summarize/extract-tasks call behind a dead connection — the one AI feature the design explicitly flags as capacity-constrained.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 4 (Medium).
-
-Design:
-- `POST /channels/:channelId/ai/summarize` and `POST /messages/:messageId/ai/extract-tasks` (`backend/src/routes/ai.js`) wire the same `res.on('close', () => controller.abort())` → `AbortController` → `signal` pattern already shipped and proven on `POST /ai/workspace-digest`, passing `signal` through to `runStreamingCompletion()`.
-- No behavior change for the normal (non-disconnected) path. No new audit event; existing `AI_SUMMARY_REQUESTED`/`AI_TASK_EXTRACT_REQUESTED` events are unaffected.
-- Tests: mirror the digest route's existing disconnect-cancellation test for both summarize and extract-tasks — a simulated client disconnect mid-stream releases the concurrency slot promptly rather than holding it to timeout, verified by a second queued request completing sooner than `LLM_TIMEOUT_MS` after the first client disconnects.
-
 ### 3. Paginate the remaining unbounded roster/list endpoints
 
 **Status**: Proposed
@@ -65,18 +54,6 @@ Design:
 - Frontend call sites for each paginated route need matching pager/cursor UI or "load more" affordances wherever the current UI assumes a complete list (sidebar, channel list, member list); scope this per-route during implementation rather than assuming one shared UI pattern fits all six.
 - No authz change — pagination doesn't alter who can see what, only how much comes back per call.
 - Tests: each updated route rejects malformed pagination params consistently with the existing admin routes' behavior and returns the correct bounded page; a regression test confirms `markAllMentionNotificationsRead` still only touches notifications the caller can actually see (channel membership still enforced) under the new single-statement form.
-
-### 4. Unpredictable per-request nonces in LLM prompt delimiters
-
-**Status**: Proposed
-**Utility**: Defense-in-depth against prompt injection: every prompt builder currently delimits untrusted message content with fixed, guessable marker strings (`MESSAGES_START`/`MESSAGES_END`, `THREAD_START`/`THREAD_END`), visible in the codebase and therefore spoofable by a message containing the literal marker text. AI output already renders to other users as a trusted-looking summary/task list, so a successful spoof is a misleading-content vector, not classic XSS — the frontend renders AI output as plain text, never HTML.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 5 (Medium).
-
-Design:
-- `backend/src/llm/promptTemplates.js`'s prompt builders generate a random per-request nonce (`crypto.randomBytes(12).toString('hex')`) and use it in the marker names (`${kind}_START_${nonce}`/`${kind}_END_${nonce}`) instead of fixed strings, with the instruction text telling the model that only content between that exact nonce pair is data.
-- Serialize the delimited message content as JSON (username/content pairs) rather than raw interpolated text, so structural characters are escaped rather than relying purely on marker-avoidance — this also removes ambiguity from literal newlines/markdown in message content confusing the model about block boundaries.
-- No schema/authz/audit change — this is prompt-construction only. Bump `LLM_SUMMARY_PROMPT_VERSION`/`LLM_TASK_PROMPT_VERSION`/`llm.digest_prompt_version` per this codebase's existing convention for any prompt-shape change, so historical audit rows stay attributable to the prompt version that generated them.
-- Tests: a message containing a literal (guessed or copy-pasted) marker string no longer breaks out of the data block, verified against a fixture; prompt-builder unit tests confirm the nonce changes per call and the JSON body round-trips correctly for messages containing markdown/newlines/quotes.
 
 ### 5. Serialize DM creation to prevent duplicate-channel races
 
@@ -121,6 +98,18 @@ Design:
 - Tests: metadata editing, alias normalization/collision behavior, relationship isolation across workspaces, private-reference filtering, and frontend e2e for editing an entity and navigating related context.
 
 ## Done
+
+### Cancel AI summarize/extract-tasks on client disconnect, and nonce-delimited/JSON-serialized LLM prompts
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Cancel AI summarize/extract-tasks on client disconnect, and nonce-delimited/JSON-serialized LLM prompts" (2026-07-19). Two independent Medium-severity findings from `docs/reviews/security-performance-review-2026-07-19.md` (originally ranked entries 2 and 4) implemented together in one pass since neither touches the other's code.
+
+`POST /channels/:channelId/ai/summarize` and `POST /messages/:messageId/ai/extract-tasks` (`backend/src/routes/ai.js`) now wire the same `res.on('close', () => controller.abort())` → `AbortController` → `signal` pattern already shipped on `POST /ai/workspace-digest`, passing `signal` through to `runStreamingCompletion()`. A closed tab or superseded retry no longer holds the sole `LLM_MAX_CONCURRENT_REQUESTS` slot for up to `LLM_TIMEOUT_MS` — `concurrencyGate.js`'s `release()` hands the freed slot directly to the next queued waiter as soon as the disconnecting request's provider call is aborted. `backend/src/llm/promptTemplates.js`'s summary/task/digest prompt builders gained a "v2" template (v1 kept unchanged as the fallback for an unrecognized `promptVersion`): a fresh `crypto.randomBytes(12).toString('hex')` nonce per call baked into the marker names (`MESSAGES_START_<nonce>`/`MESSAGES_END_<nonce>`, `THREAD_START_<nonce>`/`THREAD_END_<nonce>`) instead of v1's fixed strings, and JSON-serialized message content (`{username, content}`, digest: `{channelName, username, content}`) instead of raw line interpolation. `config.js`'s `LLM_SUMMARY_PROMPT_VERSION`/`LLM_TASK_PROMPT_VERSION`/`LLM_DIGEST_PROMPT_VERSION` defaults moved from `v1` to `v2` (an explicit `v1` override still works); `.env.example`/`RUNBOOK.md` updated to match.
+
+A real bug found while writing the disconnect tests: superagent's `Request.abort()` deliberately suppresses that request's own `.end()` callback, so a first attempt at awaiting the aborted request's own promise "to avoid a dangling promise" hung every run instead — fixed by asserting only on the disconnect's effect (the queued second request completing), never awaiting the doomed request's own outcome.
+
+Tests: `promptTemplates.test.js` gained a v2 nonce/JSON-serialization block (nonce changes per call, JSON round-trips markdown/newlines/quotes, a guessed marker string can't forge a boundary, truncation still applies). `aiRoutes.test.js` gained one disconnect-cancellation test per route, each using a provider mock that never resolves on its own so the only way the queued second request completes is via the disconnect.
+
+**Verification**: 530 backend tests, 529 passing (the one failure the same pre-existing, previously-documented `aiRoutes.test.js` audit-row race, reproduced identically on a clean `main` via `git stash` before this work began). 92/92 frontend Vitest tests (frontend untouched — both changes are backend-only). `scripts/verify-audit-log.mjs` run clean (6516 rows, chain intact). Not independently verified in a live browser this session — neither change has a UI surface of its own.
 
 ### Stop leaking workspace member emails via members-search, and recheck account status on refresh-token rotation
 
