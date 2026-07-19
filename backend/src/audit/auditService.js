@@ -114,6 +114,15 @@ export async function appendAuditEvent(db, event) {
   });
 }
 
+// Default page size for verifyAuditChain's batched read below. Large enough
+// that a normally-sized table verifies in a single batch (no behavior change
+// from the old one-shot query in that common case), small enough that no
+// single batch's synchronous hashing loop meaningfully starves the event
+// loop this function shares with every other request/WebSocket message this
+// process serves (docs/reviews/security-performance-review-2026-07-19.md,
+// Finding 3).
+const AUDIT_VERIFY_BATCH_SIZE = 5000;
+
 /**
  * Walks the whole chain in insertion order, recomputing every row's hash
  * from its own fields plus the previous row's `curr_row_hash`, and checks it
@@ -126,40 +135,67 @@ export async function appendAuditEvent(db, event) {
  * dependency there), but calls `computeRowHash`/`GENESIS_HASH` from this same
  * module either way, so the hash math itself is never duplicated.
  *
+ * Reads and hashes the table in `batchSize`-row pages rather than one
+ * unbounded query plus a single synchronous loop, yielding to the event loop
+ * between pages — `audit_logs` is append-only with no retention/deletion
+ * path, and this function runs inside the same single Node process serving
+ * every other request, not the standalone CLI tool's offline process.
+ *
  * @param {import('knex').Knex} db
+ * @param {{ batchSize?: number }} [options]
  * @returns {Promise<{verified: boolean, rowsChecked: number, firstFailure?: {id: number, reason: string}}>}
  */
-export async function verifyAuditChain(db) {
-  const rows = await db('audit_logs')
-    .orderBy('id', 'asc')
-    .select('id', 'actor_id', 'actor_ip', 'action_type', 'target_resource', 'payload', 'prev_row_hash', 'curr_row_hash');
-
+export async function verifyAuditChain(db, { batchSize = AUDIT_VERIFY_BATCH_SIZE } = {}) {
   let expectedPrevHash = GENESIS_HASH;
-  for (const row of rows) {
-    if (row.prev_row_hash !== expectedPrevHash) {
-      return {
-        verified: false,
-        rowsChecked: rows.length,
-        firstFailure: { id: row.id, reason: 'prev_row_hash does not match the previous row\'s curr_row_hash' },
-      };
+  let lastId = 0;
+  let rowsChecked = 0;
+
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const rows = await db('audit_logs')
+      .where('id', '>', lastId)
+      .orderBy('id', 'asc')
+      .limit(batchSize)
+      .select('id', 'actor_id', 'actor_ip', 'action_type', 'target_resource', 'payload', 'prev_row_hash', 'curr_row_hash');
+
+    if (rows.length === 0) break;
+    rowsChecked += rows.length;
+
+    for (const row of rows) {
+      if (row.prev_row_hash !== expectedPrevHash) {
+        return {
+          verified: false,
+          rowsChecked,
+          firstFailure: { id: row.id, reason: 'prev_row_hash does not match the previous row\'s curr_row_hash' },
+        };
+      }
+      const recomputed = computeRowHash({
+        prevRowHash: row.prev_row_hash,
+        actorId: row.actor_id,
+        actorIp: row.actor_ip,
+        actionType: row.action_type,
+        targetResource: row.target_resource,
+        payload: row.payload,
+      });
+      if (recomputed !== row.curr_row_hash) {
+        return {
+          verified: false,
+          rowsChecked,
+          firstFailure: { id: row.id, reason: 'curr_row_hash does not match the recomputed hash — row contents changed' },
+        };
+      }
+      expectedPrevHash = row.curr_row_hash;
     }
-    const recomputed = computeRowHash({
-      prevRowHash: row.prev_row_hash,
-      actorId: row.actor_id,
-      actorIp: row.actor_ip,
-      actionType: row.action_type,
-      targetResource: row.target_resource,
-      payload: row.payload,
-    });
-    if (recomputed !== row.curr_row_hash) {
-      return {
-        verified: false,
-        rowsChecked: rows.length,
-        firstFailure: { id: row.id, reason: 'curr_row_hash does not match the recomputed hash — row contents changed' },
-      };
-    }
-    expectedPrevHash = row.curr_row_hash;
+
+    lastId = rows[rows.length - 1].id;
+    if (rows.length < batchSize) break; // that was the last page — no point yielding before returning
+
+    // Cooperative yield between batches so other requests/WebSocket traffic
+    // get a turn on the event loop while a large table is still being
+    // verified.
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setImmediate(resolve));
   }
 
-  return { verified: true, rowsChecked: rows.length };
+  return { verified: true, rowsChecked };
 }

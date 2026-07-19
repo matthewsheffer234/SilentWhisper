@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import knexFactory from 'knex';
 import request from 'supertest';
 import { app } from '../src/index.js';
@@ -72,6 +73,58 @@ describe('verifyAuditChain', () => {
     expect(result.verified).toBe(false);
     expect(result.firstFailure.id).toBe(second.id);
     expect(result.rowsChecked).toBe(3);
+  });
+
+  // docs/reviews/security-performance-review-2026-07-19.md Finding 3:
+  // verification now reads the table in batches, yielding to the event loop
+  // between them, instead of one unbounded query plus a synchronous loop.
+  // batchSize is overridable for these tests specifically so multi-batch
+  // behavior can be exercised without seeding thousands of real rows.
+  test('verifies correctly across multiple batches when batchSize is smaller than the row count', async () => {
+    for (let i = 0; i < 7; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await appendAuditEvent(db, { actorId: '00000000-0000-0000-0000-000000000001', actorIp: '127.0.0.1', actionType: `EVENT_${i}` });
+    }
+
+    const result = await verifyAuditChain(db, { batchSize: 2 });
+    expect(result).toEqual({ verified: true, rowsChecked: 7 });
+  });
+
+  test('detects tampering in a later batch, not just the first one read', async () => {
+    const appended = [];
+    for (let i = 0; i < 7; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      appended.push(await appendAuditEvent(db, { actorId: '00000000-0000-0000-0000-000000000001', actorIp: '127.0.0.1', actionType: `EVENT_${i}` }));
+    }
+    // With batchSize 2, the 6th appended row (index 5) falls in the third
+    // batch (rows 5-6 of the sequence), not the first.
+    const target = appended[5];
+    await adminDb('audit_logs').where({ id: target.id }).update({ action_type: 'TAMPERED' });
+
+    const result = await verifyAuditChain(db, { batchSize: 2 });
+    expect(result.verified).toBe(false);
+    expect(result.firstFailure.id).toBe(target.id);
+    // Reflects the rows actually read up to and including the batch
+    // containing the failure (2+2+2), not the full table.
+    expect(result.rowsChecked).toBe(6);
+  });
+
+  test('yields to the event loop between batches, but not when everything fits in one batch', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await appendAuditEvent(db, { actorId: '00000000-0000-0000-0000-000000000001', actorIp: '127.0.0.1', actionType: `EVENT_${i}` });
+    }
+
+    const setImmediateSpy = jest.spyOn(global, 'setImmediate');
+
+    await verifyAuditChain(db, { batchSize: 2 });
+    expect(setImmediateSpy).toHaveBeenCalled();
+    setImmediateSpy.mockClear();
+
+    await verifyAuditChain(db, { batchSize: 5000 });
+    expect(setImmediateSpy).not.toHaveBeenCalled();
+
+    setImmediateSpy.mockRestore();
   });
 });
 

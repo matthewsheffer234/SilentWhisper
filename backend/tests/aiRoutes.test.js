@@ -258,6 +258,61 @@ describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
     expect(auditRow.payload).toMatchObject({ messageCount: 2 });
   });
 
+  // docs/reviews/security-performance-review-2026-07-19.md Finding 1: the
+  // SQL read itself must be bounded (MAX_TASK_EXTRACTION_MESSAGES = 200 in
+  // ai.js), not just truncated after every reply is already materialized.
+  test('caps the thread read to the most recent replies and reports how many were omitted', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ response: '- [ ] ok' }));
+
+    const owner = await signup('taskowner3');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    const rootRes = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'root message' });
+
+    // 205 replies, one more than fits after the root's own slot inside a
+    // 200-message cap (199 replies) — 6 should be omitted, and the 6 oldest
+    // (000-005) should never reach the prompt.
+    const totalReplies = 205;
+    const baseTime = Date.now();
+    const replyRows = Array.from({ length: totalReplies }, (_, i) => ({
+      channel_id: channelId,
+      user_id: owner.userId,
+      parent_message_id: rootRes.body.id,
+      content: `REPLY_${String(i).padStart(3, '0')}`,
+      created_at: new Date(baseTime + i * 1000),
+    }));
+    await db('messages').insert(replyRows);
+
+    const res = await request(app)
+      .post(`/api/messages/${rootRes.body.id}/ai/extract-tasks`)
+      .set(authHeader(owner.accessToken))
+      .send({});
+    expect(res.status).toBe(200);
+
+    // The route streams and ends the response (inside runStreamingCompletion)
+    // before its trailing `await appendAuditEvent(...)` resolves — same
+    // "respond first, audit after" order as summarize/digest — so a test
+    // client can observe the response completing a moment before the audit
+    // row commits. pollUntil (already used above for the concurrency gate)
+    // absorbs that gap instead of racing it.
+    const auditRow = await pollUntil(() => db('audit_logs').where({ action_type: 'AI_TASK_EXTRACTION_REQUESTED' }).first());
+    // +1 for the root message itself.
+    expect(auditRow.payload).toMatchObject({ messageCount: 200, omittedReplyCount: 6 });
+
+    const [, requestInit] = global.fetch.mock.calls[0];
+    const sentPrompt = JSON.parse(requestInit.body).prompt;
+    expect(sentPrompt).not.toContain('REPLY_000');
+    expect(sentPrompt).not.toContain('REPLY_005');
+    expect(sentPrompt).toContain('REPLY_006');
+    expect(sentPrompt).toContain('REPLY_204');
+    // Oldest-kept reply still appears before the newest — the DESC-limited
+    // SQL read is re-reversed to chronological order before prompting.
+    expect(sentPrompt.indexOf('REPLY_006')).toBeLessThan(sentPrompt.indexOf('REPLY_204'));
+  });
+
   test('a non-member of the thread\'s channel gets 404', async () => {
     const owner = await signup('taskowner1');
     const outsider = await signup('taskoutsider1');

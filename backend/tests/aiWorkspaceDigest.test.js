@@ -210,6 +210,50 @@ describe('POST /api/ai/workspace-digest', () => {
     expect(auditRow.payload).toMatchObject({ channelMessageCount: 1, selectedMessageCount: 1 });
   });
 
+  // docs/reviews/security-performance-review-2026-07-19.md Finding 2:
+  // selectMentionMessages() must cap its own SQL read (DIGEST_MAX_TOTAL_
+  // MESSAGES = 400 in workspaceDigestService.js) rather than materializing
+  // every unread mention before the merge step ever trims the result —
+  // mentionCount in the audit payload must still report the true total, not
+  // just how many survived the cap.
+  test('caps the mention scan but still reports the true mention count', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ response: '## Urgent Mentions\n- lots' }));
+
+    const owner = await signup('digestowner12');
+    const member = await signup('digestmember12');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    await addMember(workspaceId, channelId, member);
+
+    const totalMentions = 405; // one more batch than DIGEST_MAX_TOTAL_MESSAGES (400)
+    const baseTime = Date.now();
+    const messageRows = Array.from({ length: totalMentions }, (_, i) => ({
+      channel_id: channelId,
+      user_id: owner.userId,
+      content: `mention-source-${i}`,
+      created_at: new Date(baseTime + i * 1000),
+    }));
+    const insertedMessages = await db('messages').insert(messageRows).returning(['id']);
+    const notificationRows = insertedMessages.map((row, i) => ({
+      recipient_user_id: member.userId,
+      message_id: row.id,
+      channel_id: channelId,
+      workspace_id: workspaceId,
+      mentioned_by_user_id: owner.userId,
+      created_at: new Date(baseTime + i * 1000),
+    }));
+    await db('mention_notifications').insert(notificationRows);
+
+    const res = await request(app)
+      .post('/api/ai/workspace-digest')
+      .set(authHeader(member.accessToken))
+      .send({ workspaceId });
+    expect(res.status).toBe(200);
+
+    const auditRow = await waitForAuditRow('AI_WORKSPACE_DIGEST_REQUESTED');
+    expect(auditRow.payload).toMatchObject({ mentionCount: totalMentions, selectedMessageCount: 400 });
+  });
+
   test('silently drops a channelId from another workspace instead of leaking its messages', async () => {
     const owner = await signup('digestowner8');
     const workspaceAId = await createWorkspace(owner);

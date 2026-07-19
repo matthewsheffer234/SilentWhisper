@@ -27,43 +27,7 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-### 1. Bound the AI task-extraction thread scan
-
-**Status**: Proposed
-**Utility**: The single Node process serving all 100 concurrent users can be measurably slowed by one unbounded query on every call; capping it protects the availability invariant `PROJECT_PLAN.md` Section 2 sets, not just one endpoint's own response time.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 1 (High).
-
-Design:
-- `POST /api/messages/:messageId/ai/extract-tasks` (`backend/src/routes/ai.js`) currently loads every reply to a thread's root message with no `LIMIT` before `LLM_MAX_INPUT_CHARS` truncation ever runs — unlike the summarize route's own bounded query a few lines above it in the same file, and unlike `GET /channels/:channelId/messages`. Cap the SQL read itself to the most recent `MAX_THREAD_AI_MESSAGES` (200) replies, restoring chronological order via a subquery (`ORDER BY created_at DESC LIMIT N`, wrapped and re-sorted ascending) — the same shape `GET /channels/:channelId/messages` already uses.
-- Add a cheap `count(*)` only if the audit payload should carry an `omittedReplyCount`; never materialize every row just to learn the total.
-- No schema/authz change — membership gating is unaffected.
-- Tests: a thread with more than `MAX_THREAD_AI_MESSAGES` replies still extracts tasks correctly from the most recent N in chronological order; confirm the SQL query itself is `LIMIT`-bounded (via a query-builder spy or `EXPLAIN`), not just that truncation happens after the full read.
-
-### 2. Bound the workspace digest's mention scan
-
-**Status**: Proposed
-**Utility**: Same availability invariant as above — a two-week-old mention backlog (`AI_DIGEST_MAX_WINDOW_HOURS` defaults to 336 hours) should never force a full unbounded scan before `DIGEST_MAX_TOTAL_MESSAGES` caps the result the caller actually sees.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 2 (High).
-
-Design:
-- `selectMentionMessages()` (`backend/src/services/workspaceDigestService.js`) fetches every unread, non-dismissed mention in the requested window with no `.limit()`, unlike its sibling `selectChannelMessages()`, which already bounds itself to `DIGEST_MAX_MESSAGES_PER_CHANNEL` per channel. Give `selectMentionMessages()` the same treatment: push `DIGEST_MAX_TOTAL_MESSAGES` into the SQL boundary via an ordered/limited subquery, re-sorted chronologically, rather than capping only after `Promise.all`/dedup/sort has already run over the full pre-cap row count.
-- Keep a separate cheap `count(*)` for the `mentionCount` field already in the `AI_WORKSPACE_DIGEST_REQUESTED` audit payload, instead of deriving it from the full materialized array.
-- No authz change.
-- Tests: a user with more unread mentions than `DIGEST_MAX_TOTAL_MESSAGES` still gets a correctly-capped, chronologically-ordered digest; confirm the mention query itself is `LIMIT`-bounded.
-
-### 3. Make audit-chain verification non-blocking
-
-**Status**: Proposed
-**Utility**: `POST /api/audit/verify` currently reads the entire `audit_logs` table and hashes every row synchronously with no yield point, inside the same single Node process serving every REST/WebSocket call for all 100 users — a routine, authorized admin action becomes a full-stack availability incident once the table grows past low tens of thousands of rows, and `audit_logs` is append-only with no retention/deletion path.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 3 (High).
-
-Design:
-- `verifyAuditChain()` (`backend/src/audit/auditService.js`) moves from one unbounded `SELECT` plus a synchronous `for` loop to batched reads (`WHERE id > lastId ORDER BY id LIMIT batchSize`, batch size ~5000) with a cooperative yield (`await new Promise(resolve => setImmediate(resolve))`) between batches, so the event loop can service other requests between chunks. This is the minimal fix, requiring no new infrastructure.
-- Stronger option, worth considering if batching still shows measurable latency under load testing before committing to it (meaningfully more implementation work): move verification into a `worker_thread`, or invoke the already-separate `scripts/verify-audit-log.mjs` CLI logic as a genuinely separate process from the route handler, so a large table's cost never touches the request-serving thread at all.
-- No change to verification semantics or response shape — same early-return-on-first-broken-link contract, same system-admin-only gate, no rate limit added or needed since this is an authorized-admin-only, already-infrequent action.
-- Tests: verification still detects a tampered row correctly under the batched implementation; a synthetic large table (tens of thousands of rows) confirms the event loop actually yields between batches — e.g., a concurrent lightweight request or timer observably completes mid-verification rather than queuing behind it.
-
-### 4. Stop leaking workspace member email addresses via members-search
+### 1. Stop leaking workspace member email addresses via members-search
 
 **Status**: Proposed
 **Utility**: Any authenticated plain workspace member — no `MANAGE_MEMBERS` or admin privilege required — can currently harvest every other member's email address through `members-search`, contradicting that endpoint's own in-code justification for its loose gate and diverging from its org-scoped sibling, which already gets this right. Real, currently-exploitable PII exposure, not a theoretical gap.
@@ -75,7 +39,7 @@ Design:
 - No new audit event needed — this narrows an existing response shape without changing who can call the route.
 - Tests: `members-search` response no longer contains an `email` field for any result, for a plain-member caller; a contract test on the response shape so a future change can't silently reintroduce the field; a frontend test confirming `PeoplePicker` renders correctly without `person.email` when backed by this endpoint.
 
-### 5. Recheck account status when rotating a refresh token
+### 2. Recheck account status when rotating a refresh token
 
 **Status**: Proposed
 **Utility**: Every other credential-issuing path (login, WebSocket re-authenticate) rechecks `users.status === 'ACTIVE'` before granting a session; `POST /api/auth/refresh` is the one exception. Not currently reachable given the app's single disable code path (which already revokes refresh tokens), but a defense-in-depth gap in an otherwise consistently-enforced invariant, cheap to close.
@@ -86,7 +50,7 @@ Design:
 - No schema change. No new audit event type — the existing `AUTH_TOKEN_REFRESH` event simply stops firing on the now-rejected path.
 - Tests: disable a user while a live, unexpired refresh token exists (isolating this check from the normal disable path's own token revocation); confirm `/api/auth/refresh` 401s, clears the refresh cookie, and issues no access token.
 
-### 6. Minimal CI workflow
+### 3. Minimal CI workflow
 
 **Status**: Proposed
 **Utility**: `ARCHITECTURE_REVIEW_(Claude).md` calls this "the single cheapest fix on this list" (P0 Recommendation 1) — nothing currently gates a broken build or a failing test from reaching `main`. Confirmed still true: no `.github/workflows` directory exists at all. This is the complementary half of "the deploy loop" entry (already shipped): that entry stops a *stale* container from being deployed; this stops a *broken* one from ever being deployable in the first place.
@@ -101,7 +65,7 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 7. Cancel summarize/extract-tasks on client disconnect
+### 4. Cancel summarize/extract-tasks on client disconnect
 
 **Status**: Proposed
 **Utility**: `LLM_MAX_CONCURRENT_REQUESTS` defaults to 1, and `PROJECT_PLAN.md`/`config.js` both call this deliberate on the CPU-only Ollama test environment. A closed tab or superseded retry currently holds that sole slot for up to `LLM_TIMEOUT_MS` (30s) regardless, queuing every other concurrent user's summarize/extract-tasks call behind a dead connection — the one AI feature the design explicitly flags as capacity-constrained.
@@ -112,7 +76,7 @@ Design:
 - No behavior change for the normal (non-disconnected) path. No new audit event; existing `AI_SUMMARY_REQUESTED`/`AI_TASK_EXTRACT_REQUESTED` events are unaffected.
 - Tests: mirror the digest route's existing disconnect-cancellation test for both summarize and extract-tasks — a simulated client disconnect mid-stream releases the concurrency slot promptly rather than holding it to timeout, verified by a second queued request completing sooner than `LLM_TIMEOUT_MS` after the first client disconnects.
 
-### 8. Paginate the remaining unbounded roster/list endpoints
+### 5. Paginate the remaining unbounded roster/list endpoints
 
 **Status**: Proposed
 **Utility**: Message history and the admin user/workspace rosters are already cursor/offset-bounded; several other list routes called on ordinary page loads (workspace sidebar, channel list, DM list) still return every matching row regardless of how large the caller's history has grown, which the 100-concurrent-user target does nothing to cap.
@@ -125,7 +89,7 @@ Design:
 - No authz change — pagination doesn't alter who can see what, only how much comes back per call.
 - Tests: each updated route rejects malformed pagination params consistently with the existing admin routes' behavior and returns the correct bounded page; a regression test confirms `markAllMentionNotificationsRead` still only touches notifications the caller can actually see (channel membership still enforced) under the new single-statement form.
 
-### 9. Unpredictable per-request nonces in LLM prompt delimiters
+### 6. Unpredictable per-request nonces in LLM prompt delimiters
 
 **Status**: Proposed
 **Utility**: Defense-in-depth against prompt injection: every prompt builder currently delimits untrusted message content with fixed, guessable marker strings (`MESSAGES_START`/`MESSAGES_END`, `THREAD_START`/`THREAD_END`), visible in the codebase and therefore spoofable by a message containing the literal marker text. AI output already renders to other users as a trusted-looking summary/task list, so a successful spoof is a misleading-content vector, not classic XSS — the frontend renders AI output as plain text, never HTML.
@@ -137,7 +101,7 @@ Design:
 - No schema/authz/audit change — this is prompt-construction only. Bump `LLM_SUMMARY_PROMPT_VERSION`/`LLM_TASK_PROMPT_VERSION`/`llm.digest_prompt_version` per this codebase's existing convention for any prompt-shape change, so historical audit rows stay attributable to the prompt version that generated them.
 - Tests: a message containing a literal (guessed or copy-pasted) marker string no longer breaks out of the data block, verified against a fixture; prompt-builder unit tests confirm the nonce changes per call and the JSON body round-trips correctly for messages containing markdown/newlines/quotes.
 
-### 10. Serialize DM creation to prevent duplicate-channel races
+### 7. Serialize DM creation to prevent duplicate-channel races
 
 **Status**: Proposed
 **Utility**: Two people clicking "Message" on each other in the same window (a plausible UI interaction — e.g. both opening each other's profile from a shared roster at once) can each pass `POST /api/direct-messages`'s "no existing channel" check under Postgres's default `READ COMMITTED` isolation and create two separate DIRECT channels for the same pair — the endpoint's own "creates or reuses" contract silently fails at exactly the concurrency level this app targets.
@@ -149,7 +113,7 @@ Design:
 - No authz/audit change.
 - Tests: two concurrent `POST /api/direct-messages` calls for the same user pair resolve to the same channel id, with exactly one `created: true` response; existing single-caller behavior is unaffected.
 
-### 11. Channel attention and health views
+### 8. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -164,7 +128,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 12. Entity pages as a lightweight knowledge base
+### 9. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
@@ -180,6 +144,16 @@ Design:
 - Tests: metadata editing, alias normalization/collision behavior, relationship isolation across workspaces, private-reference filtering, and frontend e2e for editing an entity and navigating related context.
 
 ## Done
+
+### Bounding the AI thread/mention scans and making audit verification non-blocking
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Bounding the AI thread/mention scans and making audit verification non-blocking" (2026-07-19). Three independent High-severity findings from `docs/reviews/security-performance-review-2026-07-19.md` (originally ranked entries 1, 2, and 3) implemented together in one pass since none touch each other's code.
+
+`POST /messages/:messageId/ai/extract-tasks` (`backend/src/routes/ai.js`) now caps its reply read in SQL (`MAX_TASK_EXTRACTION_MESSAGES = 200`, DESC-ordered `LIMIT` then reversed to chronological order) instead of loading every reply to a thread before `LLM_MAX_INPUT_CHARS` truncation ever ran; a cheap parallel `count(*)` feeds a new `omittedReplyCount` audit field. `workspaceDigestService.js`'s `selectMentionMessages()` gained the same DESC-`LIMIT DIGEST_MAX_TOTAL_MESSAGES` treatment its sibling `selectChannelMessages()` already had, with a new `countMentionMessages()` (sharing filter logic with the row-fetching query via an extracted `mentionMessagesBaseQuery()`) keeping the audit payload's `mentionCount` accurate against the true total rather than the now length-capped array. `auditService.js`'s `verifyAuditChain()` moved from one unbounded `SELECT` plus a synchronous `for` loop to batched reads (`batchSize`, default 5000, overridable per-call) with a cooperative `setImmediate` yield between batches — skipped entirely when everything fits in one batch, so a normally-sized table sees no behavior change from before.
+
+Tests: `aiRoutes.test.js` gained a case seeding 205 replies directly via `db('messages').insert(...)` (avoiding 205 real HTTP round-trips) and asserting both the audit payload's `omittedReplyCount` and that the outbound prompt itself excludes the oldest-omitted replies while including the newest — this test's own extra queries made the pre-existing, already-documented "respond before audit commits" race (see the "Inline Markdown checkbox tasks" entry below) surface more easily, fixed by reusing the file's existing `pollUntil` helper rather than a bare synchronous read. `aiWorkspaceDigest.test.js` gained a 405-mention case (`mention_notifications` bulk-inserted directly) confirming `mentionCount` reports the true total while `selectedMessageCount` stays capped at 400. `auditDashboard.test.js` gained three cases exercising `batchSize` directly: multi-batch verification over 7 rows, tampering detected in a later batch (not just the first, with `rowsChecked` reflecting rows read up through the failing batch), and a `jest.spyOn(global, 'setImmediate')` assertion that yields happen between batches but not on a single-batch run.
+
+**Verification**: 519/520 backend tests pass; the one failure is the same pre-existing, previously-documented `aiRoutes.test.js` audit-row race referenced throughout this section (reproduced identically on a clean `main` via `git stash` before this work began, independent of these changes). Not independently verified in a live browser this session — these are backend-only availability/correctness fixes with no UI surface of their own; rests on the new targeted backend tests above plus the full existing suite.
 
 ### Inline Markdown checkbox tasks with a workspace task dashboard
 

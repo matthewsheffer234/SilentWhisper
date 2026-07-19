@@ -23,7 +23,10 @@ const DIGEST_MAX_TOTAL_MESSAGES = 400;
 // bug fix closed for the mentions panel. Unread and non-dismissed only — a
 // "catch up on what happened while I was away" digest has no reason to
 // re-surface a mention already read or dismissed elsewhere.
-async function selectMentionMessages(db, { userId, workspaceId, since }) {
+//
+// Shared by both the row-fetching and row-counting queries below so the two
+// can never drift out of sync on which rows are actually in scope.
+function mentionMessagesBaseQuery(db, { userId, workspaceId, since }) {
   return db('mention_notifications as mn')
     .join('messages as m', 'm.id', 'mn.message_id')
     .join('channels as c', 'c.id', 'mn.channel_id')
@@ -35,8 +38,22 @@ async function selectMentionMessages(db, { userId, workspaceId, since }) {
     .where('mn.workspace_id', workspaceId)
     .whereNull('mn.read_at')
     .whereNull('mn.dismissed_at')
-    .where('mn.created_at', '>=', since)
-    .orderBy('mn.created_at', 'asc')
+    .where('mn.created_at', '>=', since);
+}
+
+// AI_DIGEST_MAX_WINDOW_HOURS defaults to 14 days, and nothing rate-limits
+// how many times one user can be @mentioned — an ignored mention backlog (or
+// mention spam) could otherwise force this to fully materialize and sort
+// many thousands of rows before DIGEST_MAX_TOTAL_MESSAGES ever trims the
+// result. Bound the SQL read itself to that same ceiling, keeping the most
+// recent candidates (docs/reviews/security-performance-review-2026-07-19.md,
+// Finding 2) — selectDigestMessages re-sorts chronologically after merging,
+// so descending order here only affects which rows survive the cap, not the
+// final output order.
+async function selectMentionMessages(db, { userId, workspaceId, since }) {
+  return mentionMessagesBaseQuery(db, { userId, workspaceId, since })
+    .orderBy('mn.created_at', 'desc')
+    .limit(DIGEST_MAX_TOTAL_MESSAGES)
     .select(
       'm.id as message_id',
       'm.content',
@@ -44,6 +61,17 @@ async function selectMentionMessages(db, { userId, workspaceId, since }) {
       'c.name as channel_name',
       'u.username',
     );
+}
+
+// Cheap count for the audit payload's mentionCount field, kept separate from
+// the now length-capped selectMentionMessages() result so that field still
+// reflects the true number of matching mentions, not just how many survived
+// the cap (same finding as above).
+async function countMentionMessages(db, { userId, workspaceId, since }) {
+  const result = await mentionMessagesBaseQuery(db, { userId, workspaceId, since })
+    .count('mn.id as count')
+    .first();
+  return Number(result.count);
 }
 
 // Only channels the caller is currently a member of *and* that belong to
@@ -86,9 +114,10 @@ async function selectChannelMessages(db, { userId, workspaceId, channelIds, sinc
 // pre-dedupe source counts, kept separate purely for the audit payload
 // (PROJECT_PLAN.md Section 6 — logging what was selected, never raw content).
 export async function selectDigestMessages(db, { userId, workspaceId, since, channelIds }) {
-  const [mentionRows, channelRows] = await Promise.all([
+  const [mentionRows, channelRows, mentionCount] = await Promise.all([
     selectMentionMessages(db, { userId, workspaceId, since }),
     selectChannelMessages(db, { userId, workspaceId, channelIds, since }),
+    countMentionMessages(db, { userId, workspaceId, since }),
   ]);
 
   const byId = new Map();
@@ -112,5 +141,5 @@ export async function selectDigestMessages(db, { userId, workspaceId, since, cha
     content: row.content,
   }));
 
-  return { messages, mentionCount: mentionRows.length, channelMessageCount: channelRows.length };
+  return { messages, mentionCount, channelMessageCount: channelRows.length };
 }

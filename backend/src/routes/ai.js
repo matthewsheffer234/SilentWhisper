@@ -116,9 +116,15 @@ aiRouter.post('/channels/:channelId/ai/summarize', aiProxyRateLimiter, async (re
   }
 });
 
-// Parses the thread rooted at :messageId (the root message plus every reply
-// with parent_message_id = messageId) and streams back an action-item
-// checklist.
+// Total messages (root + replies) a single extract-tasks call will ever read
+// from Postgres, capped in the SQL itself rather than only after the fact —
+// nothing bounds thread length, so an unbounded read here scaled with total
+// thread history instead of the constant amount of data the LLM ever sees
+// (docs/reviews/security-performance-review-2026-07-19.md, Finding 1).
+const MAX_TASK_EXTRACTION_MESSAGES = 200;
+
+// Parses the thread rooted at :messageId (the root message plus its most
+// recent replies, oldest-first) and streams back an action-item checklist.
 aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async (req, res, next) => {
   try {
     const messageId = assertUuid(req.params.messageId, 'messageId');
@@ -133,11 +139,18 @@ aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async
     }
     await requireChannelMember(db, req.user.id, root.channel_id);
 
-    const replyRows = await db('messages as m')
-      .join('users', 'users.id', 'm.user_id')
-      .where('m.parent_message_id', root.id)
-      .orderBy('m.created_at', 'asc')
-      .select('users.username', 'm.content');
+    const replyLimit = MAX_TASK_EXTRACTION_MESSAGES - 1; // room for the root message itself
+    const [replyRowsDesc, totalReplyCountResult] = await Promise.all([
+      db('messages as m')
+        .join('users', 'users.id', 'm.user_id')
+        .where('m.parent_message_id', root.id)
+        .orderBy('m.created_at', 'desc')
+        .limit(replyLimit)
+        .select('users.username', 'm.content'),
+      db('messages').where('parent_message_id', root.id).count('id as count').first(),
+    ]);
+    const replyRows = replyRowsDesc.reverse(); // oldest-first, matching summarize's own convention above
+    const totalReplyCount = Number(totalReplyCountResult.count);
 
     const messages = [{ username: root.username, content: root.content }, ...replyRows];
 
@@ -172,6 +185,7 @@ aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async
         truncatedInputLength: result.truncatedInputLength,
         wasTruncated: result.wasTruncated,
         messageCount: messages.length,
+        omittedReplyCount: Math.max(0, totalReplyCount - replyRows.length),
       },
     });
   } catch (err) {
