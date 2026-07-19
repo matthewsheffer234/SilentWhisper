@@ -128,6 +128,20 @@ directMessagesRouter.post('/', async (req, res, next) => {
     }
 
     const result = await db.transaction(async (trx) => {
+      // Two concurrent POSTs for the same pair (e.g. both users opening
+      // each other's profile from a shared roster at once) can otherwise
+      // both pass the "no existing channel" check under READ COMMITTED and
+      // create two DIRECT channels for the same pair — this endpoint's own
+      // "creates or reuses" contract silently failing at exactly the
+      // concurrency level this app targets
+      // (docs/reviews/security-performance-review-2026-07-19.md Finding 9).
+      // Locked on the sorted pair so the two possible call orderings
+      // (a->b vs b->a) contend for the same key, same
+      // pg_advisory_xact_lock(hashtext(...)) pattern auditService.js's hash
+      // chain append uses for its own race-prone path.
+      const [loId, hiId] = [req.user.id, targetUserId].sort();
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`dm:${loId}:${hiId}`]);
+
       const existingId = await findExistingDirectChannel(trx, req.user.id, targetUserId);
       if (existingId) {
         return { id: existingId, created: false };

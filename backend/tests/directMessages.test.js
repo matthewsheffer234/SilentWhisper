@@ -120,6 +120,58 @@ describe('GET /api/direct-messages', () => {
   });
 });
 
+// supertest/superagent's Test is lazy: constructing it (even with .send())
+// does nothing over the wire until it's awaited/`.then()`-ed — so firing two
+// requests genuinely concurrently requires explicitly kicking each off via
+// .end(), wrapped back into a plain Promise. Same helper as aiRoutes.test.js.
+function fireNow(req) {
+  return new Promise((resolve, reject) => {
+    req.end((err, res) => {
+      if (err && !res) reject(err);
+      else resolve(res);
+    });
+  });
+}
+
+// docs/reviews/security-performance-review-2026-07-19.md Finding 9 (Low):
+// two people clicking "Message" on each other in the same window could each
+// pass the "no existing channel" check under READ COMMITTED and create two
+// separate DIRECT channels for the same pair. Fixed with a
+// pg_advisory_xact_lock keyed on the sorted user-id pair inside the
+// transaction.
+describe('POST /api/direct-messages concurrency', () => {
+  test('two concurrent requests for the same pair resolve to the same channel, with exactly one created: true', async () => {
+    const a = await signup('dmraceuser1');
+    const b = await signup('dmraceuser2');
+
+    const [firstRes, secondRes] = await Promise.all([
+      fireNow(request(app).post('/api/direct-messages').set(authHeader(a.accessToken)).send({ targetUserId: b.userId })),
+      fireNow(request(app).post('/api/direct-messages').set(authHeader(b.accessToken)).send({ targetUserId: a.userId })),
+    ]);
+
+    expect([firstRes.status, secondRes.status].sort()).toEqual([200, 201]);
+    expect(firstRes.body.id).toBe(secondRes.body.id);
+
+    const createdCount = [firstRes, secondRes].filter((r) => r.status === 201).length;
+    expect(createdCount).toBe(1);
+
+    const channels = await db('channels').where({ type: 'DIRECT' });
+    expect(channels).toHaveLength(1);
+  });
+
+  test('existing single-caller behavior is unaffected: reusing a DM still returns 200 with the same id', async () => {
+    const a = await signup('dmraceuser3');
+    const b = await signup('dmraceuser4');
+
+    const first = await request(app).post('/api/direct-messages').set(authHeader(a.accessToken)).send({ targetUserId: b.userId });
+    expect(first.status).toBe(201);
+
+    const second = await request(app).post('/api/direct-messages').set(authHeader(a.accessToken)).send({ targetUserId: b.userId });
+    expect(second.status).toBe(200);
+    expect(second.body.id).toBe(first.body.id);
+  });
+});
+
 // Security.md (2026-07-15, LOW: "Group DM Creation Allows Unbounded Member
 // Arrays") — memberIds previously had no maximum, only a non-empty check
 // and per-element UUID validation.

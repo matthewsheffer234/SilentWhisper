@@ -55,19 +55,7 @@ Design:
 - No authz change — pagination doesn't alter who can see what, only how much comes back per call.
 - Tests: each updated route rejects malformed pagination params consistently with the existing admin routes' behavior and returns the correct bounded page; a regression test confirms `markAllMentionNotificationsRead` still only touches notifications the caller can actually see (channel membership still enforced) under the new single-statement form.
 
-### 3. Serialize DM creation to prevent duplicate-channel races
-
-**Status**: Proposed
-**Utility**: Two people clicking "Message" on each other in the same window (a plausible UI interaction — e.g. both opening each other's profile from a shared roster at once) can each pass `POST /api/direct-messages`'s "no existing channel" check under Postgres's default `READ COMMITTED` isolation and create two separate DIRECT channels for the same pair — the endpoint's own "creates or reuses" contract silently fails at exactly the concurrency level this app targets.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 9 (Low).
-
-Design:
-- `POST /api/direct-messages` (`backend/src/routes/directMessages.js`) takes a `pg_advisory_xact_lock` keyed on the sorted pair of user ids (`hashtext('dm:{lo}:{hi}')`) before the existing-channel check inside its transaction, mirroring the pattern `auditService.js`'s hash-chain append and `invitations.js`'s accept route already use for their own race-prone paths — cheap, no table-wide lock, consistent with existing codebase conventions rather than a new concurrency-control style.
-- Longer-term alternative, not required for this entry: a partial unique index over the DM shape if 1:1 DMs are ever normalized into their own table. The advisory lock is the minimal, schema-preserving fix.
-- No authz/audit change.
-- Tests: two concurrent `POST /api/direct-messages` calls for the same user pair resolve to the same channel id, with exactly one `created: true` response; existing single-caller behavior is unaffected.
-
-### 4. Channel attention and health views
+### 3. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -82,7 +70,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 5. Entity pages as a lightweight knowledge base
+### 4. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
@@ -98,6 +86,16 @@ Design:
 - Tests: metadata editing, alias normalization/collision behavior, relationship isolation across workspaces, private-reference filtering, and frontend e2e for editing an entity and navigating related context.
 
 ## Done
+
+### Serialize DM creation to prevent duplicate-channel races
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Serialize DM creation to prevent duplicate-channel races" (2026-07-19). Single Low-severity finding from `docs/reviews/security-performance-review-2026-07-19.md` Finding 9 (originally ranked entry 3).
+
+`POST /api/direct-messages` (`backend/src/routes/directMessages.js`) now takes `SELECT pg_advisory_xact_lock(hashtext(?))` keyed on the sorted pair of user ids (`dm:{lo}:{hi}`) as the first statement inside its transaction, before the existing-channel check — the same `pg_advisory_xact_lock` pattern `auditService.js`'s hash-chain append already uses for its own race-prone path. Locking on the sorted pair (rather than `req.user.id`/`targetUserId` in call order) means both possible call orderings for the same two users — a-calls-b and b-calls-a — contend for the identical key, so two concurrent requests from either direction serialize correctly instead of only the same-direction case being covered.
+
+**Tests**: `backend/tests/directMessages.test.js` gained a `POST /api/direct-messages concurrency` block — two genuinely concurrent requests (via a `fireNow` helper identical to `aiRoutes.test.js`'s, since supertest/superagent's `Test` is lazy and won't hit the wire until awaited) for the same pair, fired from opposite directions, resolve to the same channel id with exactly one `201`/`created: true` response and exactly one `DIRECT` channel row created; a second test pins that existing sequential single-caller reuse behavior (`authorization.test.js`'s pre-existing "starting a DM twice... reuses the same channel" test) is unaffected.
+
+**Verification**: 532 backend tests, 531 passing (the one failure the same pre-existing, previously-documented `aiRoutes.test.js` audit-row race, reproduced identically on prior unrelated runs). `scripts/verify-audit-log.mjs` run clean (6522 rows, chain intact). Not independently verified in a live browser this session — no UI surface of its own (the DM creation flow's behavior is unchanged in the non-racing case, which the frontend already exercises), so this rests on the new concurrency test plus the full existing suite.
 
 ### Cancel AI summarize/extract-tasks on client disconnect, and nonce-delimited/JSON-serialized LLM prompts
 
