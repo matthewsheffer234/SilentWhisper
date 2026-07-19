@@ -10,7 +10,7 @@ Deployed alongside the existing Silent Lattice stack, served under its own hostn
 **Day-to-day operations (start/stop, migrations, API reference, troubleshooting)**: see [`RUNBOOK.md`](./RUNBOOK.md).
 **Agent-facing rules of engagement and offline run commands**: see [`CLAUDE.md`](./CLAUDE.md).
 **Proposed/planned feature backlog, ranked by utility, with a Done log of everything shipped**: see [`FEATURE_REQUEST.md`](./FEATURE_REQUEST.md).
-**Independent security review and UI/UX review**: see [`Security.md`](./Security.md) and [`UI_UX_REVIEW.md`](./UI_UX_REVIEW.md).
+**Independent security review and UI/UX review**: see [`docs/reviews/security-review.md`](./docs/reviews/security-review.md) and [`docs/reviews/ui-ux-review.md`](./docs/reviews/ui-ux-review.md). Architecture reviews: [`docs/reviews/`](./docs/reviews/).
 
 ## Status
 
@@ -27,7 +27,7 @@ The original five-phase roadmap (Local Foundation And Database Setup; Local Auth
 **Verified**: a 100-concurrent-user load test, a full authorization audit pass, a manual HIG/accessibility pass, and a committed Playwright integration-test suite (`frontend/e2e/`) driving the real UI in a headless browser against the live public URL, in addition to backend unit/integration tests and frontend Vitest tests. See `PROJECT_PLAN.md` Section 11 for current pass counts (they grow with each entry) and `RUNBOOK.md` for operations, the API reference, and troubleshooting.
 
 **Known issues, flagged for a deliberate decision rather than silently fixed**:
-- The remaining Medium/Low findings from the 2026-07-15 security review are not yet fixed: disabled-account access windows (an already-issued access token/WebSocket session stays usable until its ~15-minute expiry even after an admin disables the account), the LLM provider `baseUrl` accepts any admin-supplied origin (SSRF/DoS potential), archived-workspace/org invitations can still be redeemed, and there's no WebSocket payload cap or group-DM member cap. The two High-severity findings from the same review (global admin self-escalation via workspace ownership; cross-workspace channel-member injection) are fixed — see `PROJECT_PLAN.md` Section 11, "Security hardening: global admin boundary and cross-workspace channel-member injection" (2026-07-17). Full detail: [`Security.md`](./Security.md); remaining remediation tracked as backlog entry 1 in [`FEATURE_REQUEST.md`](./FEATURE_REQUEST.md) (**Status: Proposed**).
+- The remaining Medium/Low findings from the 2026-07-15 security review are not yet fixed: disabled-account access windows (an already-issued access token/WebSocket session stays usable until its ~15-minute expiry even after an admin disables the account), the LLM provider `baseUrl` accepts any admin-supplied origin (SSRF/DoS potential), archived-workspace/org invitations can still be redeemed, and there's no WebSocket payload cap or group-DM member cap. The two High-severity findings from the same review (global admin self-escalation via workspace ownership; cross-workspace channel-member injection) are fixed — see `PROJECT_PLAN.md` Section 11, "Security hardening: global admin boundary and cross-workspace channel-member injection" (2026-07-17). Full detail: [`docs/reviews/security-review.md`](./docs/reviews/security-review.md); remaining remediation tracked as backlog entry 1 in [`FEATURE_REQUEST.md`](./FEATURE_REQUEST.md) (**Status: Proposed**).
 - Certbot's renewal hooks are non-functional for all three domains on this server (not just Silent Whisper's).
 - The shared `~/wireservice-dev` design tokens' `--text-3` and dark-mode active-row contrast measure under WCAG AA for their font sizes.
 - `LLM_PROVIDER=vllm` is implemented and unit-tested but not exercised against a real vLLM instance (this test host has no GPU).
@@ -109,4 +109,4 @@ Real-browser integration tests (signup through AI features to the admin audit da
 
 - Never commit `.env`, `.env.local`, or any real credential — only `.env.example` files with placeholders are tracked.
 - Full secrets-handling rules: `PROJECT_PLAN.md` Section 3 (Secrets & Configuration).
-- The two High-severity findings from the 2026-07-15 security review are fixed; several Medium/Low findings remain open — see Known Issues above and [`Security.md`](./Security.md) before relying on this deployment for anything beyond local/intranet testing.
+- The two High-severity findings from the 2026-07-15 security review are fixed; several Medium/Low findings remain open — see Known Issues above and [`docs/reviews/security-review.md`](./docs/reviews/security-review.md) before relying on this deployment for anything beyond local/intranet testing.
