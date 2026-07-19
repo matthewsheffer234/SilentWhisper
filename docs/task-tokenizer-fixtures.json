@@ -1,0 +1,172 @@
+[
+  {
+    "description": "basic unassigned task",
+    "content": "- [ ] Buy milk",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "Buy milk",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "checked with lowercase x",
+    "content": "- [x] Ship the release",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": true,
+        "text": "Ship the release",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "checked with uppercase X",
+    "content": "- [X] Ship the release",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": true,
+        "text": "Ship the release",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "assigned via owner token",
+    "content": "- [ ] Ship the thing [owner:: @jdoe]",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "Ship the thing",
+        "owner": "jdoe"
+      }
+    ]
+  },
+  {
+    "description": "multiple tasks get sequential indices",
+    "content": "- [ ] first task\n- [x] second task [owner:: @al.ice]\n- [ ] third task",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "first task",
+        "owner": null
+      },
+      {
+        "index": 1,
+        "checked": true,
+        "text": "second task",
+        "owner": "al.ice"
+      },
+      {
+        "index": 2,
+        "checked": false,
+        "text": "third task",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "non-task lines interspersed do not consume an index",
+    "content": "Some preamble text\n- [ ] real task\nSome interstitial prose\n- [x] another real task",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "real task",
+        "owner": null
+      },
+      {
+        "index": 1,
+        "checked": true,
+        "text": "another real task",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "malformed checkbox (missing space after dash) is ignored",
+    "content": "-[ ] not a task",
+    "expectedTasks": []
+  },
+  {
+    "description": "malformed checkbox (tab instead of space mark) is ignored",
+    "content": "- [\t] not a task",
+    "expectedTasks": []
+  },
+  {
+    "description": "owner username below the 3-char minimum is not captured as owner, token left as literal text",
+    "content": "- [ ] task with short owner [owner:: @ab]",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "task with short owner [owner:: @ab]",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "owner username at exactly the 50-char maximum is captured",
+    "content": "- [ ] task with long owner [owner:: @aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "task with long owner",
+        "owner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  {
+    "description": "owner username of 51 chars is not captured as owner",
+    "content": "- [ ] task with too-long owner [owner:: @aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "task with too-long owner [owner:: @aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "blank description with trailing whitespace only",
+    "content": "- [ ]    ",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "",
+        "owner": null
+      }
+    ]
+  },
+  {
+    "description": "plain bullet with no checkbox is not a task",
+    "content": "- just a bullet, no checkbox",
+    "expectedTasks": []
+  },
+  {
+    "description": "ordered-list line is not a task",
+    "content": "1. [ ] not this syntax",
+    "expectedTasks": []
+  },
+  {
+    "description": "description text carries markdown/entity/mention syntax through untouched — the tokenizer only ever strips the checkbox mark and the owner token, never renders the remainder",
+    "content": "- [ ] Review **PR** for [[Server Alpha]] and ping @bob [owner:: @carol]",
+    "expectedTasks": [
+      {
+        "index": 0,
+        "checked": false,
+        "text": "Review **PR** for [[Server Alpha]] and ping @bob",
+        "owner": "carol"
+      }
+    ]
+  }
+]

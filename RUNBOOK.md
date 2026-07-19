@@ -255,6 +255,8 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | GET | `/api/audit/logs` | **system admin only** — `?limit=&beforeId=` paginated recent audit events, newest first; **each call is itself audited** (`AUDIT_DASHBOARD_ACCESSED`) |
 | POST | `/api/audit/verify` | system admin only — recomputes the whole hash chain server-side, returns `{verified, rowsChecked, firstFailure?}`; audited as `AUDIT_VERIFICATION_ATTEMPTED` |
 | POST | `/api/search/semantic` | `{query, workspaceId?, channelId?, limit?}` (limit default 20, max 50) — conceptual search over the caller's own channels, ranked by cosine similarity; see Semantic Search below |
+| PATCH | `/api/channels/:channelId/messages/:messageId/tasks/:taskIndex` | `{checked: true\|false}` — explicit target state, not a toggle; requires channel membership; see Task Checkboxes below |
+| GET | `/api/workspaces/:workspaceId/tasks` | `?windowDays=&cursor=&limit=` — bounded, workspace-scoped task dashboard; see Task Checkboxes below |
 
 `audit_logs.id` is `BIGSERIAL` — node-postgres returns it as a JSON **string**, not a number (Postgres `int8` avoids silent precision loss beyond 2^53 by round-tripping through the driver as text). Treat `beforeId` as an opaque cursor, never do arithmetic on it.
 
@@ -413,6 +415,21 @@ docker exec silentwhisper-postgres-1 psql -U sw_admin -d silent_whisper \
 ```
 
 `LLM_PROVIDER=disabled` disables embedding too (search returns `503`), same as summarize/extract-tasks — there's no separate on/off switch for search.
+
+### Task Checkboxes
+
+FEATURE_REQUEST.md entry 3: Obsidian-style inline checkboxes typed directly into a normal message — `- [ ] text [owner:: @username]` — parsed deterministically (`backend/src/services/taskParser.js`), no LLM call involved. The checkbox mark accepts a literal space (unchecked), `x`, or `X`; the owner token is optional.
+
+| Env var | Default here | Meaning |
+|---|---|---|
+| `TASK_OWNER_TOKEN_ALIAS` | `owner` | the Markdown token's *key* — `[owner:: @user]` by default. A configurable alias, not hardcoded: change it (e.g. to `assignee`) to rename the bracket syntax without a code change. The *parsed*/internal field is always `owner` regardless. **Must match `frontend/.env.example`'s `VITE_TASK_OWNER_TOKEN_ALIAS` exactly** — there's no runtime handshake between backend and frontend, only agreement at deploy time; a mismatch means the two sides tokenize differently. |
+| `TASK_DASHBOARD_WINDOW_DAYS` | `30` | default rolling window for `GET /api/workspaces/:workspaceId/tasks` (a caller can widen it per-request via `?windowDays=`, up to a 365-day hard cap) — never an unbounded scan across a workspace's whole history |
+
+`frontend/.env.example`'s `VITE_TASK_OWNER_TOKEN_ALIAS` (default `owner`) is baked into the frontend bundle at build time, like `VITE_API_URL`/`VITE_WS_URL` — changing it requires rebuilding the frontend image, not just restarting the container.
+
+Toggling a checkbox (`PATCH .../tasks/:taskIndex`) is the first intentional post-create mutation of `messages.content` — messages are otherwise immutable once sent. It re-enqueues an embedding refresh (so semantic search doesn't keep serving the pre-toggle vector) but deliberately does **not** re-run entity linking (a checkbox flip can't add/remove a `[[Entity]]` token) or mention notifications (a checkbox state change shouldn't re-notify `@mentions`/the task's owner). Audited as `MESSAGE_TASK_TOGGLED` with `messageId`/`channelId`/`taskIndex`/`checked` — never message content.
+
+The dashboard endpoint's `LIKE '%- [ ]%'`-shaped candidate scan is backed by a `pg_trgm` GIN index on `messages.content` (migration `0021_task_dashboard_index.js`) within its own rolling window — the SQL only narrows candidates, the actual tokenization always runs server-side via `parseTasks()`.
 
 ## Rebuilding After Code Changes
 

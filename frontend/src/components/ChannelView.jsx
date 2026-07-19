@@ -263,6 +263,7 @@ export default function ChannelView({
   onOpenThread,
   onOpenDetails,
   onOpenEntity,
+  onToggleTask,
   workspaceId,
   mainContentId,
 }) {
@@ -704,7 +705,12 @@ export default function ChannelView({
                     <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                   <div style={styles.messageContent}>
-                    {renderMessageContent(m.content, { variant: useMineStyle ? 'mine' : undefined, onEntityClick: onOpenEntity })}
+                    {renderMessageContent(m.content, {
+                      variant: useMineStyle ? 'mine' : undefined,
+                      onEntityClick: onOpenEntity,
+                      onToggleTask: m.pending ? undefined : onToggleTask,
+                      messageId: m.id,
+                    })}
                   </div>
                   {!m.parentMessageId && !m.pending && (
                     <button

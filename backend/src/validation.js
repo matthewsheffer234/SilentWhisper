@@ -6,7 +6,13 @@ import { config } from './config.js';
 // malformed input gets a 400 here, never passed through to the database.
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const USERNAME_RE = /^[a-zA-Z0-9_.-]{3,50}$/;
+// Exported as a source fragment (not just the compiled RegExp) so
+// services/taskParser.js's owner-token capture group can reuse the exact
+// same character class/length bound instead of re-typing it — a future
+// change to username rules can't silently desync the two (FEATURE_REQUEST.md
+// entry 3).
+export const USERNAME_PATTERN_SOURCE = '[a-zA-Z0-9_.-]{3,50}';
+const USERNAME_RE = new RegExp(`^${USERNAME_PATTERN_SOURCE}$`);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const CHANNEL_TYPES = ['PUBLIC', 'PRIVATE', 'DIRECT', 'GROUP_DM'];

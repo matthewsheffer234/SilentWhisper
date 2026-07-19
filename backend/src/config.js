@@ -11,6 +11,22 @@ function required(name, value) {
 // reference the same value baseUrl uses, without duplicating the fallback.
 const llmBaseUrl = process.env.LLM_BASE_URL || 'http://silent-whisper-ollama:11434';
 
+// FEATURE_REQUEST.md entry 3: the inline-checkbox owner token's *key*
+// (`[owner:: @user]` by default) is a configurable alias, not a hardcoded
+// "assignee"/"owner" string — a deployment can rename the Markdown syntax
+// without a code change. The *parsed*/internal field is always `owner`
+// regardless of what this is set to. Hoisted (like llmBaseUrl above) so it
+// can be validated once at module load, before config.tasks references it —
+// it gets compiled into a RegExp (services/taskParser.js), so a malformed
+// value fails loudly at startup rather than producing a broken or
+// unexpectedly-permissive pattern silently.
+const taskOwnerTokenAlias = process.env.TASK_OWNER_TOKEN_ALIAS || 'owner';
+if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/.test(taskOwnerTokenAlias)) {
+  throw new Error(
+    'TASK_OWNER_TOKEN_ALIAS must start with a letter and contain only letters, numbers, "_", or "-" (max 32 chars)',
+  );
+}
+
 export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 8000),
@@ -147,6 +163,20 @@ export const config = {
     workerBatchSize: Number(process.env.MESSAGE_SIDE_EFFECTS_WORKER_BATCH_SIZE || 10),
     // Same dead-letter convention as embedding.maxAttempts.
     maxAttempts: Number(process.env.MESSAGE_SIDE_EFFECTS_MAX_ATTEMPTS || 5),
+  },
+
+  tasks: {
+    // See taskOwnerTokenAlias's own doc comment above (validated at module
+    // load). Frontend mirrors this via VITE_TASK_OWNER_TOKEN_ALIAS
+    // (frontend/.env.example, baked in at build time like VITE_API_URL) —
+    // both must agree for the tokenizer to parse identically on both sides;
+    // there is no runtime handshake between them.
+    ownerTokenAlias: taskOwnerTokenAlias,
+    // Bounds the workspace task dashboard's message scan (Section 2,
+    // Scalability Target: never an unbounded scan) — a rolling window, not
+    // full history. routes/tasks.js lets a caller narrow this per-request
+    // via ?windowDays=, up to MAX_TASK_DASHBOARD_WINDOW_DAYS.
+    dashboardWindowDays: Number(process.env.TASK_DASHBOARD_WINDOW_DAYS || 30),
   },
 
   ws: {

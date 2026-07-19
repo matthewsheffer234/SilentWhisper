@@ -7,6 +7,8 @@ import * as organizationsApi from '../api/organizations.js';
 import * as notificationsApi from '../api/notifications.js';
 import * as directMessagesApi from '../api/directMessages.js';
 import * as entitiesApi from '../api/entities.js';
+import * as tasksApi from '../api/tasks.js';
+import { parseTaskLines } from '../markdown.jsx';
 import { PERMISSIONS, hasPermission, hasAnyWorkspaceAdminAccess, hasOrgManagementAccess } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
 import ChannelView from './ChannelView.jsx';
@@ -131,6 +133,14 @@ export default function ChatShell() {
   // overflow trigger) so WorkspaceHome's "Invite People" action can open
   // the exact same sheet, not a second, duplicate invite surface.
   const [workspaceSettingsId, setWorkspaceSettingsId] = useState(null);
+  // FEATURE_REQUEST.md entry 3: a live projection of task lines across the
+  // selected workspace's channels — lifted up here (not owned locally by
+  // WorkspaceHome) so the same message_updated WS handler that reconciles
+  // messagesByChannel/threadRoot/threadReplies below can also keep this in
+  // sync, per that entry's own "one pane can show stale checkbox state
+  // while another pane or the dashboard is correct" requirement.
+  const [workspaceTasks, setWorkspaceTasks] = useState([]);
+  const [workspaceTasksState, setWorkspaceTasksState] = useState({ loading: false, error: null });
 
   const socketRef = useRef(null);
   const selectedChannelIdRef = useRef(null);
@@ -187,6 +197,52 @@ export default function ChatShell() {
     });
   }, []);
 
+  // FEATURE_REQUEST.md entry 3: the toggle endpoint's own response and the
+  // ws `message_updated` broadcast both carry the same full updated-message
+  // shape (routes/messages.js) — one reconciliation path handles either
+  // trigger. Only ever *replaces* an already-present message in each of the
+  // three places it might be displayed; a client that hasn't loaded this
+  // message yet has nothing to reconcile; it'll just show the current
+  // content next time it's fetched.
+  const reconcileUpdatedMessage = useCallback((message) => {
+    setMessagesByChannel((prev) => {
+      const existing = prev[message.channelId];
+      if (!existing) return prev;
+      const index = existing.findIndex((m) => m.id === message.id);
+      if (index === -1) return prev;
+      const next = [...existing];
+      next[index] = { ...next[index], ...toDisplayMessage(message) };
+      return { ...prev, [message.channelId]: next };
+    });
+    setThreadRoot((prev) => (prev && prev.id === message.id ? { ...prev, ...message } : prev));
+    setThreadReplies((prev) => {
+      const index = prev.findIndex((m) => m.id === message.id);
+      if (index === -1) return prev;
+      const next = [...prev];
+      next[index] = { ...next[index], ...toDisplayMessage(message) };
+      return next;
+    });
+  }, []);
+
+  // Re-derives {checked, text, owner} for whichever task rows in the
+  // dashboard belong to this message from its fresh content, rather than
+  // trusting the caller to say which index/state changed — the same
+  // "recompute live, don't trust a second system of record" principle the
+  // dashboard endpoint itself already follows server-side. A message with no
+  // rows currently in the dashboard's loaded window is left untouched (nil
+  // return from `find` below just keeps that row's existing content).
+  const reconcileWorkspaceTaskMessage = useCallback((message) => {
+    setWorkspaceTasks((prev) => {
+      if (!prev.some((t) => t.messageId === message.id)) return prev;
+      const freshTasks = parseTaskLines(message.content);
+      return prev.map((t) => {
+        if (t.messageId !== message.id) return t;
+        const fresh = freshTasks.find((f) => f.index === t.taskIndex);
+        return fresh ? { ...t, checked: fresh.checked, text: fresh.text, owner: fresh.owner } : t;
+      });
+    });
+  }, []);
+
   // Socket lifecycle: one connection for the lifetime of the authenticated
   // session (PROJECT_PLAN.md Section 8, Phase 3).
   useEffect(() => {
@@ -220,6 +276,15 @@ export default function ChatShell() {
         return;
       }
       reconcileMessage(frame.message.channelId, frame);
+    });
+
+    // FEATURE_REQUEST.md entry 3: the only non-create message event today —
+    // a task checkbox toggle. Reconciles every pane that might currently be
+    // showing this message (main feed, open thread, workspace task
+    // dashboard), not just whichever one triggered the toggle.
+    socket.on('message_updated', (frame) => {
+      reconcileUpdatedMessage(frame.message);
+      reconcileWorkspaceTaskMessage(frame.message);
     });
 
     // A mention frame is a side effect of message creation on the backend
@@ -303,7 +368,7 @@ export default function ChatShell() {
 
     socket.connect();
     return () => socket.disconnect();
-  }, [reconcileMessage, reconcileThreadReply, bumpReplyCount]);
+  }, [reconcileMessage, reconcileThreadReply, bumpReplyCount, reconcileUpdatedMessage, reconcileWorkspaceTaskMessage]);
 
   useEffect(() => {
     workspacesApi.listWorkspaces().then((ws) => {
@@ -340,6 +405,36 @@ export default function ChatShell() {
     if (!selectedWorkspaceId) return;
     workspacesApi.listChannels(selectedWorkspaceId).then(setChannels);
   }, [selectedWorkspaceId]);
+
+  // FEATURE_REQUEST.md entry 3: prefetched on workspace switch (same
+  // "loaded up front, not on WorkspaceHome mount" shape as channels[] just
+  // above) — WorkspaceHome only ever renders once no channel is selected,
+  // but the dashboard query itself is already bounded/paginated
+  // server-side, so prefetching here costs nothing extra and keeps this
+  // effect list flat rather than needing WorkspaceHome to own a duplicate
+  // fetch-on-mount effect.
+  const refreshWorkspaceTasks = useCallback((workspaceId) => {
+    if (!workspaceId) {
+      setWorkspaceTasks([]);
+      setWorkspaceTasksState({ loading: false, error: null });
+      return;
+    }
+    setWorkspaceTasksState({ loading: true, error: null });
+    tasksApi
+      .getWorkspaceTasks(workspaceId)
+      .then((res) => {
+        setWorkspaceTasks(res.tasks);
+        setWorkspaceTasksState({ loading: false, error: null });
+      })
+      .catch((err) => {
+        setWorkspaceTasks([]);
+        setWorkspaceTasksState({ loading: false, error: err.message || 'Failed to load tasks' });
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshWorkspaceTasks(selectedWorkspaceId);
+  }, [selectedWorkspaceId, refreshWorkspaceTasks]);
 
   // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry
   // surfaced a real, pre-existing gap: WorkspaceSidebar.jsx's own org
@@ -516,6 +611,40 @@ export default function ChatShell() {
 
   function handleInviteToChannel(channelId, username) {
     return workspacesApi.addChannelMember(selectedWorkspaceId, channelId, username);
+  }
+
+  // FEATURE_REQUEST.md entry 3. Threaded into both ChannelView and
+  // ThreadSidebar as `onToggleTask` — always the currently selected
+  // channel, matching handleSendReply's own existing assumption that a
+  // thread open at all means its origin channel is the selected one
+  // (handleNavigateToSearchResult/handleNavigateToMention both call
+  // selectChannel before openThread for exactly this reason). Reconciles
+  // immediately from this call's own response rather than waiting on the
+  // WS echo, the same "don't wait for your own broadcast" shape
+  // reconcileMessage's create-path already gets via the POST response.
+  async function handleToggleTask(messageId, taskIndex, checked) {
+    try {
+      const updated = await tasksApi.toggleTask(selectedChannelId, messageId, taskIndex, checked);
+      reconcileUpdatedMessage(updated);
+      reconcileWorkspaceTaskMessage(updated);
+    } catch {
+      // A stale taskIndex (e.g. raced against another toggle) fails
+      // silently client-side — there's no dedicated error UI for this
+      // lightweight action; the next fetch/broadcast shows the real state.
+    }
+  }
+
+  // The dashboard-originated equivalent: a task row already carries its own
+  // channelId (routes/tasks.js's response shape), unlike ChannelView/
+  // ThreadSidebar, which always operate on whatever's currently selected.
+  async function handleToggleDashboardTask(channelId, messageId, taskIndex, checked) {
+    try {
+      const updated = await tasksApi.toggleTask(channelId, messageId, taskIndex, checked);
+      reconcileUpdatedMessage(updated);
+      reconcileWorkspaceTaskMessage(updated);
+    } catch {
+      // Same silent-failure reasoning as handleToggleTask above.
+    }
   }
 
   function handleSend(content) {
@@ -725,6 +854,12 @@ export default function ChatShell() {
           onCreateChannel={() => setCreateChannelOpen(true)}
           onOpenWorkspaceSettings={() => setWorkspaceSettingsId(selectedWorkspace.id)}
           onOpenDigest={() => setDigestOpen(true)}
+          currentUser={user}
+          tasks={workspaceTasks}
+          tasksLoading={workspaceTasksState.loading}
+          tasksError={workspaceTasksState.error}
+          onToggleDashboardTask={handleToggleDashboardTask}
+          onRefreshTasks={() => refreshWorkspaceTasks(selectedWorkspace.id)}
         />
       ) : (
         <ChannelView
@@ -737,6 +872,7 @@ export default function ChatShell() {
           archived={isSelectedChannelArchived}
           onSend={handleSend}
           onOpenThread={openThread}
+          onToggleTask={handleToggleTask}
           onOpenDetails={() => setChannelDetailsOpen(true)}
           workspaceId={selectedDirectMessage ? null : selectedWorkspaceId}
           onOpenEntity={selectedDirectMessage ? undefined : handleOpenEntity}
@@ -751,6 +887,7 @@ export default function ChatShell() {
         onClose={() => setThreadRoot(null)}
         isDirectConversation={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM'}
         onOpenEntity={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM' ? undefined : handleOpenEntity}
+        onToggleTask={handleToggleTask}
       />
       {createWorkspaceOpen && (
         <CreateWorkspaceSheet

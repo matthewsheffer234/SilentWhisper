@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, test, expect } from 'vitest';
-import { renderMessageContent } from './markdown.jsx';
+import { renderMessageContent, parseTaskLines } from './markdown.jsx';
 
 // FEATURE_REQUEST.md's Basic Markdown formatting entry: "unit tests for the
 // tokenizer covering each token type." Inspects the returned React element
@@ -206,5 +209,91 @@ describe('variant: "mine" (iMessage-style bubble layout entry)', () => {
 
     expect(defaultLink.props.style.color).toBe('var(--brg)');
     expect(mineLink.props.style.color).toBe('var(--item-active-fg)');
+  });
+});
+
+// FEATURE_REQUEST.md entry 3: inline Markdown checkbox tasks.
+function elementsOfComponent(nodes, componentName) {
+  return nodes.filter((n) => typeof n === 'object' && n !== null && n.type?.name === componentName);
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const taskFixtures = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '../../docs/task-tokenizer-fixtures.json'), 'utf8'),
+);
+
+// The guardrail against this file's tokenizer and
+// backend/src/services/taskParser.js quietly drifting apart — both sides
+// run the exact same fixture list (docs/task-tokenizer-fixtures.json)
+// through their own implementation. backend/tests/taskParser.test.js runs
+// the same fixtures against parseTasks.
+describe('parseTaskLines — shared fixture parity', () => {
+  for (const fixture of taskFixtures) {
+    test(fixture.description, () => {
+      expect(parseTaskLines(fixture.content)).toEqual(fixture.expectedTasks);
+    });
+  }
+});
+
+describe('task checkboxes', () => {
+  test('a checkbox line renders as a TaskLineRow, not plain text', () => {
+    const nodes = renderMessageContent('- [ ] buy milk');
+    const rows = elementsOfComponent(nodes, 'TaskLineRow');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].props.checked).toBe(false);
+    expect(rows[0].props.owner).toBeNull();
+  });
+
+  test('multiple checkbox lines in one message each become their own row, in order', () => {
+    const nodes = renderMessageContent('- [ ] first\n- [x] second\n- [ ] third');
+    const rows = elementsOfComponent(nodes, 'TaskLineRow');
+    expect(rows.map((r) => r.props.checked)).toEqual([false, true, false]);
+  });
+
+  test('non-task lines around a checkbox line are preserved as plain text, not consumed by the task pass', () => {
+    const nodes = renderMessageContent('Before\n- [ ] the task\nAfter');
+    expect(nodes[0]).toBe('Before');
+    expect(elementsOfComponent(nodes, 'TaskLineRow')).toHaveLength(1);
+    expect(nodes[nodes.length - 1]).toBe('After');
+  });
+
+  test('a message with no checkbox syntax renders exactly as before — no TaskLineRow at all', () => {
+    const nodes = renderMessageContent('just a normal message with **bold** text');
+    expect(elementsOfComponent(nodes, 'TaskLineRow')).toHaveLength(0);
+  });
+
+  test('the owner token parses into the owner prop and renders as a highlighted "@owner" span', () => {
+    const nodes = renderMessageContent('- [ ] ship it [owner:: @jdoe]');
+    const [row] = elementsOfComponent(nodes, 'TaskLineRow');
+    expect(row.props.owner).toBe('jdoe');
+  });
+
+  test('description text keeps going through the rest of the pipeline — bold, entity, and mention still render inside a task row', () => {
+    const nodes = renderMessageContent('- [ ] Review **PR** for [[Server Alpha]] and ping @carol');
+    const [row] = elementsOfComponent(nodes, 'TaskLineRow');
+    const strongs = row.props.children.filter((c) => typeof c === 'object' && c?.type === 'strong');
+    expect(strongs).toHaveLength(1);
+    expect(strongs[0].props.children).toBe('PR');
+  });
+
+  test('clicking the checkbox calls onToggleTask with (messageId, taskIndex, nextChecked)', () => {
+    const calls = [];
+    const nodes = renderMessageContent('- [ ] first\n- [x] second', {
+      messageId: 'msg-1',
+      onToggleTask: (...args) => calls.push(args),
+    });
+    const rows = elementsOfComponent(nodes, 'TaskLineRow');
+    rows[0].props.onToggle(true);
+    rows[1].props.onToggle(false);
+    expect(calls).toEqual([
+      ['msg-1', 0, true],
+      ['msg-1', 1, false],
+    ]);
+  });
+
+  test('without onToggleTask, the row has no toggle handler at all (read-only rendering)', () => {
+    const nodes = renderMessageContent('- [ ] first');
+    const [row] = elementsOfComponent(nodes, 'TaskLineRow');
+    expect(row.props.onToggle).toBeUndefined();
   });
 });

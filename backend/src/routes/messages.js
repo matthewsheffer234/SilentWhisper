@@ -2,14 +2,23 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
-import { assertUuid, assertBoundedInt, parsePagination, MAX_USERNAME_LENGTH } from '../validation.js';
+import {
+  assertUuid,
+  assertBoundedInt,
+  assertBoolean,
+  parsePagination,
+  MAX_USERNAME_LENGTH,
+  MAX_MESSAGE_LENGTH,
+} from '../validation.js';
 import { createMessage } from '../services/messageService.js';
 import { enqueueMessageSideEffectJobs } from '../services/messageSideEffectsQueue.js';
+import { setTaskChecked } from '../services/taskParser.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import { broadcastToRoom } from '../ws/connectionRegistry.js';
 import { isMessageRateLimited } from '../ws/rateLimiter.js';
-import { memberSearchLimiter } from '../auth/rateLimit.js';
-import { RateLimitedError, ValidationError } from '../errors.js';
+import { memberSearchLimiter, taskToggleLimiter } from '../auth/rateLimit.js';
+import { appendAuditEvent } from '../audit/auditService.js';
+import { RateLimitedError, ValidationError, NotFoundError } from '../errors.js';
 
 export const messagesRouter = Router();
 
@@ -192,3 +201,112 @@ messagesRouter.post('/channels/:channelId/messages', async (req, res, next) => {
     next(err);
   }
 });
+
+// A task line is at minimum "- [ ]\n" (6 chars), so MAX_MESSAGE_LENGTH
+// (validation.js) bounds how many task lines a single message could ever
+// contain — used here purely to reject a nonsensical taskIndex before it
+// ever reaches setTaskChecked, not because any real message approaches this
+// many lines.
+const MAX_TASK_INDEX = Math.floor(MAX_MESSAGE_LENGTH / 6);
+
+// FEATURE_REQUEST.md entry 3: inline Markdown checkbox tasks
+// (`- [ ] text [owner:: @user]`, services/taskParser.js). This is the first
+// intentional post-create mutation of messages.content — messages are
+// otherwise immutable once sent, so taskIndex is stable for a message's
+// entire life except through this endpoint itself (which never changes line
+// count or order, only the single checkbox character). Body is an explicit
+// target state (`{checked: true|false}`), deliberately not an implied
+// "swap the bracket" toggle — two people clicking the same checkbox near-
+// simultaneously both converge on the same end state instead of racing to
+// flip it twice back to where it started.
+messagesRouter.patch(
+  '/channels/:channelId/messages/:messageId/tasks/:taskIndex',
+  taskToggleLimiter,
+  async (req, res, next) => {
+    try {
+      const channelId = assertUuid(req.params.channelId, 'channelId');
+      const messageId = assertUuid(req.params.messageId, 'messageId');
+      const taskIndex = assertBoundedInt(req.params.taskIndex, { min: 0, max: MAX_TASK_INDEX }, 'taskIndex');
+      const channel = await requireChannelMember(db, req.user.id, channelId);
+      await requireWorkspaceNotArchived(db, channel.workspace_id);
+      const checked = assertBoolean(req.body?.checked, 'checked');
+
+      // Row-locked so two concurrent toggles of the same message can't both
+      // parse stale content and then overwrite each other — the explicit
+      // target state above prevents double-flip behavior, but the lock is
+      // still the clearer correctness guard once two writers are racing
+      // (same "never rely on default isolation" instinct as the audit
+      // chain's own advisory lock, Section 3).
+      const updated = await db.transaction(async (trx) => {
+        const message = await trx('messages')
+          .where({ id: messageId })
+          .forUpdate()
+          .first('id', 'channel_id', 'user_id', 'content', 'parent_message_id', 'created_at');
+        // Confirms the two path params actually belong together — the same
+        // "prove channelId and messageId belong to each other" check this
+        // codebase already established as its pattern for the cross-
+        // workspace channel-member-injection fix. Existence-hiding: a
+        // missing message and a real message in a different channel 404
+        // identically.
+        if (!message || message.channel_id !== channelId) {
+          throw new NotFoundError('Message not found');
+        }
+
+        const newContent = setTaskChecked(message.content, taskIndex, checked);
+        if (newContent === null) {
+          throw new NotFoundError('Task not found');
+        }
+
+        await trx('messages').where({ id: messageId }).update({ content: newContent });
+        const author = await trx('users').where({ id: message.user_id }).first('username', 'display_name');
+
+        return {
+          id: message.id,
+          channelId: message.channel_id,
+          userId: message.user_id,
+          username: author.username,
+          displayName: author.display_name,
+          content: newContent,
+          parentMessageId: message.parent_message_id,
+          createdAt: message.created_at,
+        };
+      });
+
+      broadcastToRoom(channelId, { type: 'message_updated', message: updated });
+
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'MESSAGE_TASK_TOGGLED',
+        targetResource: messageId,
+        // ids/counts only, never message content (Section 6).
+        payload: { channelId, taskIndex, checked },
+      });
+
+      // Derived-data side effects of the content change, decided explicitly
+      // rather than left implicit (this is the first post-create mutation
+      // of messages.content, so "messages are immutable" can no longer be
+      // assumed everywhere):
+      // - Embeddings: re-enqueue so semantic search doesn't keep serving the
+      //   pre-toggle vector. Cheap, and keeps the "message content changed,
+      //   embedding follows" invariant intact. enqueueEmbeddingJob's own
+      //   onConflict('message_id').ignore() means this only actually
+      //   inserts a fresh job if the original one already completed and was
+      //   deleted — the normal case by the time anyone toggles a checkbox;
+      //   if it's still pending, that job will simply read the now-updated
+      //   content whenever it runs.
+      await enqueueEmbeddingJob(db, messageId);
+      // - Entity links: left untouched. Toggling only ever changes the
+      //   single checkbox character, so it cannot add or remove a
+      //   [[Entity]] token in the description — there is nothing for
+      //   message_entities to recompute.
+      // - Mentions/notifications: deliberately not re-run. A checkbox state
+      //   change should not notify @mentions/the task's owner again; the
+      //   audit event and WS broadcast above are enough.
+
+      res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  },
+);

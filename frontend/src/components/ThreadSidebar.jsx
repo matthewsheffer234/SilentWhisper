@@ -152,6 +152,7 @@ export default function ThreadSidebar({
   onClose,
   isDirectConversation,
   onOpenEntity,
+  onToggleTask,
 }) {
   const [draft, setDraft] = useState('');
   const [tasks, setTasks] = useState(null); // { loading, text, error, scope }
@@ -269,7 +270,12 @@ export default function ThreadSidebar({
                   <PresenceBadge status={presence[rootMessage.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>
-                  {renderMessageContent(rootMessage.content, { variant: useMineStyle ? 'mine' : undefined, onEntityClick: onOpenEntity })}
+                  {renderMessageContent(rootMessage.content, {
+                    variant: useMineStyle ? 'mine' : undefined,
+                    onEntityClick: onOpenEntity,
+                    onToggleTask,
+                    messageId: rootMessage.id,
+                  })}
                 </div>
               </div>
             </div>
@@ -307,7 +313,12 @@ export default function ThreadSidebar({
                   <PresenceBadge status={presence[r.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>
-                  {renderMessageContent(r.content, { variant: useMineStyle ? 'mine' : undefined, onEntityClick: onOpenEntity })}
+                  {renderMessageContent(r.content, {
+                    variant: useMineStyle ? 'mine' : undefined,
+                    onEntityClick: onOpenEntity,
+                    onToggleTask: r.pending ? undefined : onToggleTask,
+                    messageId: r.id,
+                  })}
                 </div>
               </div>
             </div>

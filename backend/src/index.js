@@ -17,6 +17,7 @@ import { aiRouter } from './routes/ai.js';
 import { auditRouter } from './routes/audit.js';
 import { searchRouter } from './routes/search.js';
 import { entitiesRouter } from './routes/entities.js';
+import { tasksRouter } from './routes/tasks.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { attachWebSocketServer } from './ws/server.js';
 import { startPresenceSweep, stopPresenceSweep } from './ws/presence.js';
@@ -75,6 +76,7 @@ app.use('/api', aiRouter);
 app.use('/api', auditRouter);
 app.use('/api', searchRouter);
 app.use('/api', entitiesRouter);
+app.use('/api', tasksRouter);
 app.use('/api/notifications', notificationsRouter);
 
 app.use(errorHandler);

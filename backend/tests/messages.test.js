@@ -296,3 +296,172 @@ describe('REST send rate limiting (Section 3, Rate Limiting & Abuse Prevention)'
     expect(userBFirst.status).toBe(201);
   });
 });
+
+// FEATURE_REQUEST.md entry 3: inline Markdown checkbox tasks.
+describe('task checkbox toggle (PATCH .../tasks/:taskIndex)', () => {
+  async function sendTaskMessage(owner, channelId, content = '- [ ] first task\n- [ ] second task [owner:: @al]') {
+    const res = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content });
+    return res.body.id;
+  }
+
+  test('toggling to checked persists and is idempotent to read back', async () => {
+    const owner = await signup('taskowner0');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('- [x] first task\n- [ ] second task [owner:: @al]');
+
+    const history = await request(app)
+      .get(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken));
+    expect(history.body[0].content).toBe('- [x] first task\n- [ ] second task [owner:: @al]');
+  });
+
+  test('only the targeted index changes — the other task line is untouched', async () => {
+    const owner = await signup('taskowner1');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/1`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('- [ ] first task\n- [x] second task [owner:: @al]');
+  });
+
+  test('explicit target state converges regardless of prior state — setting checked:true twice is a no-op the second time', async () => {
+    const owner = await signup('taskowner2');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId, '- [ ] only task');
+
+    const first = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+    const second = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.content).toBe(first.body.content);
+  });
+
+  test('two concurrent toggles of the same message converge on their respective requested states, not a lost update', async () => {
+    const owner = await signup('taskowner3');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId, '- [ ] first task\n- [ ] second task');
+
+    const [resA, resB] = await Promise.all([
+      request(app)
+        .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+        .set(authHeader(owner.accessToken))
+        .send({ checked: true }),
+      request(app)
+        .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/1`)
+        .set(authHeader(owner.accessToken))
+        .send({ checked: true }),
+    ]);
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+
+    const history = await request(app)
+      .get(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken));
+    expect(history.body[0].content).toBe('- [x] first task\n- [x] second task');
+  });
+
+  test('a non-member of the channel gets the existing existence-hiding 404', async () => {
+    const owner = await signup('taskowner4');
+    const outsider = await signup('taskoutsider0');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+      .set(authHeader(outsider.accessToken))
+      .send({ checked: true });
+    expect(res.status).toBe(404);
+  });
+
+  test('a channelId/messageId mismatch across channels 404s the same way, not a 400/403', async () => {
+    const owner = await signup('taskowner5');
+    const channelId1 = await createChannel(owner);
+    const channelId2 = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId1);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId2}/messages/${messageId}/tasks/0`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+    expect(res.status).toBe(404);
+  });
+
+  test('an out-of-range taskIndex 404s', async () => {
+    const owner = await signup('taskowner6');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId, '- [ ] only one task');
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/7`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+    expect(res.status).toBe(404);
+  });
+
+  test('rejects a non-boolean checked value with 400', async () => {
+    const owner = await signup('taskowner7');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId, '- [ ] only one task');
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: 'yes' });
+    expect(res.status).toBe(400);
+  });
+
+  test('records a MESSAGE_TASK_TOGGLED audit event with ids/counts, never message content', async () => {
+    const owner = await signup('taskowner8');
+    const channelId = await createChannel(owner);
+    const messageId = await sendTaskMessage(owner, channelId, '- [ ] only one task');
+
+    await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+
+    const row = await db('audit_logs').where({ action_type: 'MESSAGE_TASK_TOGGLED' }).first();
+    expect(row).toBeTruthy();
+    expect(row.target_resource).toBe(messageId);
+    expect(row.payload).toEqual({ channelId, taskIndex: 0, checked: true });
+  });
+
+  test('toggling in an archived workspace is rejected', async () => {
+    const owner = await signup('taskowner10');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const chRes = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'general', type: 'PUBLIC' });
+    const channelId = chRes.body.id;
+    const messageId = await sendTaskMessage(owner, channelId, '- [ ] only one task');
+
+    await db('workspaces').where({ id: wsRes.body.id }).update({ archived_at: new Date() });
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}/tasks/0`)
+      .set(authHeader(owner.accessToken))
+      .send({ checked: true });
+    expect(res.status).toBe(409);
+  });
+});

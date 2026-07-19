@@ -1,4 +1,6 @@
+import { useMemo, useState } from 'react';
 import { Hash, Lock, Plus, UserPlus, Sparkles } from 'lucide-react';
+import { TaskCheckbox } from '../markdown.jsx';
 
 // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
 // replaces ChannelView.jsx's plain "Select a channel to get started." text
@@ -100,6 +102,47 @@ const styles = {
     fontSize: 'var(--text-xs)',
     cursor: 'pointer',
   },
+  // FEATURE_REQUEST.md entry 3: workspace task dashboard. A later, deliberate
+  // addition of the "new dashboard query" this file's own header comment
+  // originally avoided — bounded/paginated server-side (routes/tasks.js),
+  // not the kind of unbounded activity feed that comment was steering away
+  // from.
+  segmentedControl: {
+    display: 'inline-flex',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  segmentButton: {
+    minHeight: 44,
+    padding: '0 16px',
+    border: 'none',
+    background: 'none',
+    color: 'var(--text-3)',
+    fontWeight: 600,
+    fontSize: 'var(--text-sm)',
+    cursor: 'pointer',
+  },
+  segmentButtonActive: { background: 'var(--brg)', color: '#fff' },
+  taskList: { listStyle: 'none', margin: '12px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 8 },
+  taskCard: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: '4px 10px',
+    borderRadius: 8,
+    background: 'var(--surface-alt)',
+    border: '1px solid var(--border)',
+  },
+  taskCardBody: { flex: 1, minWidth: 0, paddingTop: 11 },
+  taskCardText: { fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
+  taskCardTextChecked: { color: 'var(--text-3)', textDecoration: 'line-through' },
+  taskCardMeta: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' },
+  taskEmptyText: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', margin: '12px 0 0' },
+  // Same literal color ThreadSidebar.jsx's own AI-action error text already
+  // uses — not a new convention.
+  taskErrorText: { color: '#c0392b', fontSize: 'var(--text-sm)', margin: '12px 0 0' },
 };
 
 export default function WorkspaceHome({
@@ -113,8 +156,23 @@ export default function WorkspaceHome({
   onCreateChannel,
   onOpenWorkspaceSettings,
   onOpenDigest,
+  currentUser,
+  tasks,
+  tasksLoading,
+  tasksError,
+  onToggleDashboardTask,
 }) {
   const hasChannels = channels.length > 0;
+  // FEATURE_REQUEST.md entry 3: "Tasks for Me" / "Tasks for Everyone Else",
+  // matching the submitted spec exactly — "me" filters by owner username,
+  // everyone-else is the complement (unassigned + assigned to anyone else),
+  // not a third "unassigned" segment.
+  const [taskSegment, setTaskSegment] = useState('me');
+  const visibleTasks = useMemo(() => {
+    const list = tasks ?? [];
+    if (taskSegment === 'me') return list.filter((t) => t.owner === currentUser?.username);
+    return list.filter((t) => t.owner !== currentUser?.username);
+  }, [tasks, taskSegment, currentUser?.username]);
 
   return (
     <div id={mainContentId} tabIndex={-1} style={styles.wrapper}>
@@ -194,6 +252,70 @@ export default function WorkspaceHome({
               Catch Me Up
             </button>
           </div>
+        )}
+
+        {/* FEATURE_REQUEST.md entry 3: a live projection of every task line
+            (`- [ ] ... [owner:: @user]`) across the workspace's channels the
+            caller can read — a durable list of what's open and who owns it,
+            not a second system of record that can drift from channel
+            content itself (recomputed server-side on every fetch/broadcast,
+            routes/tasks.js). Read-only w.r.t. workspace archive state, same
+            reasoning as Catch Me Up above. */}
+        {hasChannels && (
+          <>
+            <div style={styles.sectionTitle}>Tasks</div>
+            <div style={styles.segmentedControl} role="tablist" aria-label="Task filter">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={taskSegment === 'me'}
+                style={{ ...styles.segmentButton, ...(taskSegment === 'me' ? styles.segmentButtonActive : {}) }}
+                onClick={() => setTaskSegment('me')}
+              >
+                Tasks for Me
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={taskSegment === 'everyone-else'}
+                style={{ ...styles.segmentButton, ...(taskSegment === 'everyone-else' ? styles.segmentButtonActive : {}) }}
+                onClick={() => setTaskSegment('everyone-else')}
+              >
+                Tasks for Everyone Else
+              </button>
+            </div>
+
+            {tasksError && <p style={styles.taskErrorText}>{tasksError}</p>}
+            {!tasksError && tasksLoading && <p style={styles.taskEmptyText}>Loading tasks…</p>}
+            {!tasksError && !tasksLoading && visibleTasks.length === 0 && (
+              <p style={styles.taskEmptyText}>
+                {taskSegment === 'me' ? 'No tasks assigned to you right now.' : 'No other open tasks right now.'}
+              </p>
+            )}
+            {!tasksError && !tasksLoading && visibleTasks.length > 0 && (
+              <ul style={styles.taskList}>
+                {visibleTasks.map((t) => (
+                  // Composite key, not just messageId — a single message can
+                  // carry several task lines.
+                  <li key={`${t.messageId}-${t.taskIndex}`} style={styles.taskCard}>
+                    <TaskCheckbox
+                      checked={t.checked}
+                      onToggle={(nextChecked) => onToggleDashboardTask(t.channelId, t.messageId, t.taskIndex, nextChecked)}
+                    />
+                    <div style={styles.taskCardBody}>
+                      <div style={{ ...styles.taskCardText, ...(t.checked ? styles.taskCardTextChecked : {}) }}>{t.text}</div>
+                      <div style={styles.taskCardMeta}>
+                        <button type="button" style={styles.openPill} onClick={() => onSelectChannel(t.channelId)}>
+                          #{t.channelName}
+                        </button>
+                        {t.owner && <span>@{t.owner}</span>}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </div>
     </div>

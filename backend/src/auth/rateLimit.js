@@ -150,3 +150,21 @@ export const entitySearchLimiter = rateLimit({
   keyGenerator: (req) => `entity-search:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// Inline task checkbox toggle (FEATURE_REQUEST.md entry 3) — not one of
+// CLAUDE.md's three named-mandatory categories (auth/message-send/AI proxy),
+// but it mutates shared message content on every request and costs nothing
+// to add, so it follows the same convention as every other mutation route
+// in this codebase rather than being the one write endpoint with no
+// limiter. Ceiling sized like memberSearchLimiter/entitySearchLimiter —
+// plausibly clicked in a quick burst (someone checking off several items in
+// a row) but never at real per-keystroke volume.
+export const taskToggleLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `task-toggle:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

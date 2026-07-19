@@ -54,6 +54,60 @@ const ENTITY_RE = /\[\[([^\[\]]{1,255})\]\]/g;
 // know which mentions resolved).
 const MENTION_RE = /@[a-zA-Z0-9_.-]{3,50}/g;
 
+// FEATURE_REQUEST.md entry 3: inline Markdown checkbox tasks. This is the
+// frontend mirror of backend/src/services/taskParser.js's tokenizer — kept
+// in sync via docs/task-tokenizer-fixtures.json, which both sides' test
+// suites run through their own implementation as a guardrail against the
+// two quietly drifting apart (/backend and /frontend are separate npm
+// packages with no shared workspace). If this regex ever changes, that
+// file's own tokenizer must change identically.
+//
+// The owner token's *key* (`[owner:: @user]` by default) is a configurable
+// alias, mirroring config.tasks.ownerTokenAlias/TASK_OWNER_TOKEN_ALIAS on
+// the backend via VITE_TASK_OWNER_TOKEN_ALIAS (baked in at build time, like
+// VITE_API_URL/VITE_WS_URL) — there is no runtime handshake between the two,
+// so a deployment changing one without the other silently desyncs parsing.
+const TASK_OWNER_TOKEN_ALIAS = (import.meta.env.VITE_TASK_OWNER_TOKEN_ALIAS || 'owner').trim();
+
+function escapeForRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// `[ xX]` — a literal space, not `[\sxX]` — matches what an Obsidian-style
+// checkbox actually means. The owner group's username bound
+// (`{3,50}`/`[a-zA-Z0-9_.-]`) is the same literal character class MENTION_RE
+// above already duplicates from the backend's USERNAME_RE, not a new
+// duplication introduced here.
+function buildTaskLineRegex() {
+  const escapedAlias = escapeForRegex(TASK_OWNER_TOKEN_ALIAS);
+  return new RegExp(`^-\\s\\[([ xX])\\]\\s+(.*?)(?:\\s+\\[${escapedAlias}::\\s*@([a-zA-Z0-9_.-]{3,50})\\])?\\s*$`, 'gm');
+}
+
+// Pure, render-free mirror of backend/src/services/taskParser.js's
+// parseTasks — same {index, checked, text, owner} shape, same "only lines
+// matching the checkbox syntax count toward index" rule. Exported
+// specifically so markdown.test.jsx can run docs/task-tokenizer-fixtures.json
+// through this exact function and compare against the same fixture list
+// taskParser.test.js runs on the backend side — the parity guardrail
+// FEATURE_REQUEST.md entry 3 calls for. applyTaskPass below re-derives
+// positions itself (it needs match.index/length for splitting, which would
+// just be dead weight on every other caller of this function), so this
+// isn't wired into rendering directly.
+export function parseTaskLines(content) {
+  const regex = buildTaskLineRegex();
+  const tasks = [];
+  let index = 0;
+  for (const match of String(content ?? '').matchAll(regex)) {
+    tasks.push({
+      index: index++,
+      checked: match[1] !== ' ',
+      text: match[2],
+      owner: match[3] ?? null,
+    });
+  }
+  return tasks;
+}
+
 // FEATURE_REQUEST.md's iMessage-style bubble layout entry: a "mine" bubble
 // fills its background with `var(--brg)` — the same color `mention`/`link`
 // use for their *text*, which would be unreadable green-on-green inside
@@ -88,6 +142,37 @@ const styles = {
   },
   link: { color: 'var(--brg)', textDecoration: 'underline' },
   linkOnMine: { color: 'var(--item-active-fg)', textDecoration: 'underline', fontWeight: 700 },
+  // FEATURE_REQUEST.md entry 3, item 5: checkbox hit target 44×44px minimum
+  // — same literal precedent as ChannelView.jsx's detailsButton
+  // (minWidth/minHeight: 44), not a new convention. The visible glyph is
+  // smaller (18px) and centered inside the full hit target.
+  taskRow: { display: 'flex', alignItems: 'flex-start', gap: 4 },
+  taskCheckboxButton: {
+    minWidth: 44,
+    minHeight: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    flexShrink: 0,
+  },
+  taskCheckboxGlyph: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    border: '2px solid var(--border)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'background 0.1s, border-color 0.1s',
+  },
+  taskCheckboxGlyphChecked: { background: 'var(--brg)', borderColor: 'var(--brg)' },
+  taskCheckMark: { color: '#fff', fontSize: 12, fontWeight: 700, lineHeight: 1 },
+  taskText: { paddingTop: 11 },
+  taskTextChecked: { color: 'var(--text-3)', textDecoration: 'line-through' },
+  taskOwner: { marginLeft: 6 },
 };
 
 // Not `dangerouslySetInnerHTML`, but a rendered `<a href>` is still a live
@@ -250,27 +335,131 @@ function italicUnderscoreToNode(match, nextKey, highlightOptions) {
   return italicToNode(match, nextKey, highlightOptions);
 }
 
+// Factored out of renderMessageContent so applyTaskPass below can run this
+// exact same sequence over a task line's own description text (recursive,
+// one level — "so [[Entity]] links, @mentions, bold/italic inside a task
+// description keep working," FEATURE_REQUEST.md entry 3) without
+// duplicating the pass order.
+function applyInlinePasses(nodes, nextKey, { linkStyle, highlightOptions, entityStyle, mentionStyle, onEntityClick }) {
+  let result = applyPass(nodes, MD_LINK_RE, (m, nk) => mdLinkToNode(m, nk, linkStyle), nextKey);
+  result = applyPass(result, AUTOLINK_RE, (m, nk) => autolinkToNode(m, nk, linkStyle), nextKey);
+  result = applyPass(result, BOLD_STAR_RE, (m, nk) => boldToNode(m, nk, highlightOptions), nextKey);
+  result = applyPass(result, BOLD_UNDERSCORE_RE, (m, nk) => boldUnderscoreToNode(m, nk, highlightOptions), nextKey);
+  result = applyPass(result, ITALIC_STAR_RE, (m, nk) => italicToNode(m, nk, highlightOptions), nextKey);
+  result = applyPass(result, ITALIC_UNDERSCORE_RE, (m, nk) => italicUnderscoreToNode(m, nk, highlightOptions), nextKey);
+  result = applyPass(result, ENTITY_RE, (m, nk) => entityToNode(m, nk, entityStyle, onEntityClick), nextKey);
+  result = applyPass(result, MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
+  return result;
+}
+
+// Exported so WorkspaceHome.jsx's task dashboard can reuse the exact same
+// checkbox visual/hit-target rather than a second, drifting copy — the
+// dashboard's rows aren't rendered through renderMessageContent itself
+// (they're a flat list of already-parsed task rows from the API, not raw
+// message content), but the checkbox affordance should look and behave
+// identically wherever a task appears.
+export function TaskCheckbox({ checked, onToggle }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      disabled={!onToggle}
+      onClick={onToggle ? () => onToggle(!checked) : undefined}
+      style={{ ...styles.taskCheckboxButton, cursor: onToggle ? 'pointer' : 'default' }}
+      aria-label={checked ? 'Mark task as not done' : 'Mark task as done'}
+    >
+      <span style={{ ...styles.taskCheckboxGlyph, ...(checked ? styles.taskCheckboxGlyphChecked : {}) }}>
+        {checked && (
+          <span aria-hidden="true" style={styles.taskCheckMark}>
+            ✓
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+function TaskLineRow({ checked, owner, onToggle, mentionStyle, children }) {
+  return (
+    <div style={styles.taskRow}>
+      <TaskCheckbox checked={checked} onToggle={onToggle} />
+      <span style={{ ...styles.taskText, ...(checked ? styles.taskTextChecked : {}) }}>
+        {children}
+        {owner && <span style={{ ...mentionStyle, ...styles.taskOwner }}>@{owner}</span>}
+      </span>
+    </div>
+  );
+}
+
+// First pass over the raw content, line by line, before any of the other
+// passes (FEATURE_REQUEST.md entry 3, item 5) — task-line syntax is
+// line-anchored (`^-\s\[...\]...$`), so it has to be resolved before bold/
+// italic/link/entity/mention passes, which operate on arbitrary substrings
+// and would otherwise never see the line boundaries this depends on.
+//
+// Adjacent newlines directly touching a matched task line are trimmed from
+// the surrounding plain-text segments (not from the match itself) — the
+// checkbox row renders as its own block-level element, which already forces
+// a line break, so keeping the newline character too would double it into a
+// blank line above/below every task row.
+function applyTaskPass(content, nextKey, { onToggleTask, messageId, inlineOptions }) {
+  const regex = buildTaskLineRegex();
+  const matches = [...content.matchAll(regex)];
+  if (matches.length === 0) return [content];
+
+  const result = [];
+  let cursor = 0;
+  let taskOrdinal = 0;
+  for (const match of matches) {
+    let before = content.slice(cursor, match.index);
+    if (before.endsWith('\n')) before = before.slice(0, -1);
+    if (before) result.push(before);
+
+    const checked = match[1] !== ' ';
+    const owner = match[3] ?? null;
+    const descriptionNodes = applyInlinePasses([match[2]], nextKey, inlineOptions);
+    const currentTaskIndex = taskOrdinal;
+    result.push(
+      <TaskLineRow
+        key={nextKey()}
+        checked={checked}
+        owner={owner}
+        mentionStyle={inlineOptions.mentionStyle}
+        onToggle={onToggleTask ? (nextChecked) => onToggleTask(messageId, currentTaskIndex, nextChecked) : undefined}
+      >
+        {descriptionNodes}
+      </TaskLineRow>,
+    );
+
+    taskOrdinal += 1;
+    cursor = match.index + match[0].length;
+  }
+
+  let after = content.slice(cursor);
+  if (after.startsWith('\n')) after = after.slice(1);
+  if (after) result.push(after);
+  return result;
+}
+
 // `variant: 'mine'` is the one caller-facing option (FEATURE_REQUEST.md's
 // bubble-layout entry) — content rendered inside a "mine" filled bubble
 // needs mention/link styling that stays legible against that same-colored
 // background, everything else (bold/italic wrapping, tokenization order)
-// is identical regardless of variant.
-export function renderMessageContent(content, { variant, onEntityClick } = {}) {
+// is identical regardless of variant. `onToggleTask`/`messageId`
+// (FEATURE_REQUEST.md entry 3) are optional — omitted entirely, a task line
+// still renders as a checked/unchecked row, just not an interactive one
+// (e.g. inside a context with no toggle affordance).
+export function renderMessageContent(content, { variant, onEntityClick, onToggleTask, messageId } = {}) {
   let keyCounter = 0;
   const nextKey = () => keyCounter++;
   const mentionStyle = variant === 'mine' ? styles.mentionOnMine : styles.mention;
   const entityStyle = variant === 'mine' ? styles.entityOnMine : styles.entity;
   const linkStyle = variant === 'mine' ? styles.linkOnMine : styles.link;
   const highlightOptions = { mentionStyle, entityStyle, onEntityClick };
+  const inlineOptions = { linkStyle, highlightOptions, entityStyle, mentionStyle, onEntityClick };
 
-  let nodes = [content];
-  nodes = applyPass(nodes, MD_LINK_RE, (m, nk) => mdLinkToNode(m, nk, linkStyle), nextKey);
-  nodes = applyPass(nodes, AUTOLINK_RE, (m, nk) => autolinkToNode(m, nk, linkStyle), nextKey);
-  nodes = applyPass(nodes, BOLD_STAR_RE, (m, nk) => boldToNode(m, nk, highlightOptions), nextKey);
-  nodes = applyPass(nodes, BOLD_UNDERSCORE_RE, (m, nk) => boldUnderscoreToNode(m, nk, highlightOptions), nextKey);
-  nodes = applyPass(nodes, ITALIC_STAR_RE, (m, nk) => italicToNode(m, nk, highlightOptions), nextKey);
-  nodes = applyPass(nodes, ITALIC_UNDERSCORE_RE, (m, nk) => italicUnderscoreToNode(m, nk, highlightOptions), nextKey);
-  nodes = applyPass(nodes, ENTITY_RE, (m, nk) => entityToNode(m, nk, entityStyle, onEntityClick), nextKey);
-  nodes = applyPass(nodes, MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
+  let nodes = applyTaskPass(content, nextKey, { onToggleTask, messageId, inlineOptions });
+  nodes = applyInlinePasses(nodes, nextKey, inlineOptions);
   return nodes;
 }
