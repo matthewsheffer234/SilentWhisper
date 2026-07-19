@@ -27,7 +27,66 @@ a matter of execution, not re-deciding the approach.
 
 ## Ranked backlog
 
-### 1. Minimal CI workflow
+### 1. Bound the AI task-extraction thread scan
+
+**Status**: Proposed
+**Utility**: The single Node process serving all 100 concurrent users can be measurably slowed by one unbounded query on every call; capping it protects the availability invariant `PROJECT_PLAN.md` Section 2 sets, not just one endpoint's own response time.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 1 (High).
+
+Design:
+- `POST /api/messages/:messageId/ai/extract-tasks` (`backend/src/routes/ai.js`) currently loads every reply to a thread's root message with no `LIMIT` before `LLM_MAX_INPUT_CHARS` truncation ever runs — unlike the summarize route's own bounded query a few lines above it in the same file, and unlike `GET /channels/:channelId/messages`. Cap the SQL read itself to the most recent `MAX_THREAD_AI_MESSAGES` (200) replies, restoring chronological order via a subquery (`ORDER BY created_at DESC LIMIT N`, wrapped and re-sorted ascending) — the same shape `GET /channels/:channelId/messages` already uses.
+- Add a cheap `count(*)` only if the audit payload should carry an `omittedReplyCount`; never materialize every row just to learn the total.
+- No schema/authz change — membership gating is unaffected.
+- Tests: a thread with more than `MAX_THREAD_AI_MESSAGES` replies still extracts tasks correctly from the most recent N in chronological order; confirm the SQL query itself is `LIMIT`-bounded (via a query-builder spy or `EXPLAIN`), not just that truncation happens after the full read.
+
+### 2. Bound the workspace digest's mention scan
+
+**Status**: Proposed
+**Utility**: Same availability invariant as above — a two-week-old mention backlog (`AI_DIGEST_MAX_WINDOW_HOURS` defaults to 336 hours) should never force a full unbounded scan before `DIGEST_MAX_TOTAL_MESSAGES` caps the result the caller actually sees.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 2 (High).
+
+Design:
+- `selectMentionMessages()` (`backend/src/services/workspaceDigestService.js`) fetches every unread, non-dismissed mention in the requested window with no `.limit()`, unlike its sibling `selectChannelMessages()`, which already bounds itself to `DIGEST_MAX_MESSAGES_PER_CHANNEL` per channel. Give `selectMentionMessages()` the same treatment: push `DIGEST_MAX_TOTAL_MESSAGES` into the SQL boundary via an ordered/limited subquery, re-sorted chronologically, rather than capping only after `Promise.all`/dedup/sort has already run over the full pre-cap row count.
+- Keep a separate cheap `count(*)` for the `mentionCount` field already in the `AI_WORKSPACE_DIGEST_REQUESTED` audit payload, instead of deriving it from the full materialized array.
+- No authz change.
+- Tests: a user with more unread mentions than `DIGEST_MAX_TOTAL_MESSAGES` still gets a correctly-capped, chronologically-ordered digest; confirm the mention query itself is `LIMIT`-bounded.
+
+### 3. Make audit-chain verification non-blocking
+
+**Status**: Proposed
+**Utility**: `POST /api/audit/verify` currently reads the entire `audit_logs` table and hashes every row synchronously with no yield point, inside the same single Node process serving every REST/WebSocket call for all 100 users — a routine, authorized admin action becomes a full-stack availability incident once the table grows past low tens of thousands of rows, and `audit_logs` is append-only with no retention/deletion path.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 3 (High).
+
+Design:
+- `verifyAuditChain()` (`backend/src/audit/auditService.js`) moves from one unbounded `SELECT` plus a synchronous `for` loop to batched reads (`WHERE id > lastId ORDER BY id LIMIT batchSize`, batch size ~5000) with a cooperative yield (`await new Promise(resolve => setImmediate(resolve))`) between batches, so the event loop can service other requests between chunks. This is the minimal fix, requiring no new infrastructure.
+- Stronger option, worth considering if batching still shows measurable latency under load testing before committing to it (meaningfully more implementation work): move verification into a `worker_thread`, or invoke the already-separate `scripts/verify-audit-log.mjs` CLI logic as a genuinely separate process from the route handler, so a large table's cost never touches the request-serving thread at all.
+- No change to verification semantics or response shape — same early-return-on-first-broken-link contract, same system-admin-only gate, no rate limit added or needed since this is an authorized-admin-only, already-infrequent action.
+- Tests: verification still detects a tampered row correctly under the batched implementation; a synthetic large table (tens of thousands of rows) confirms the event loop actually yields between batches — e.g., a concurrent lightweight request or timer observably completes mid-verification rather than queuing behind it.
+
+### 4. Stop leaking workspace member email addresses via members-search
+
+**Status**: Proposed
+**Utility**: Any authenticated plain workspace member — no `MANAGE_MEMBERS` or admin privilege required — can currently harvest every other member's email address through `members-search`, contradicting that endpoint's own in-code justification for its loose gate and diverging from its org-scoped sibling, which already gets this right. Real, currently-exploitable PII exposure, not a theoretical gap.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 7 (Medium).
+
+Design:
+- `GET /api/workspaces/:workspaceId/members-search` (`backend/src/routes/workspaces.js`) drops `users.email` from its select/response, matching `GET /api/organizations/:orgId/members-search`'s already-correct shape (`id`/`username`/`displayName` only — fields already visible through message authorship/mentions elsewhere).
+- `frontend/src/components/PeoplePicker.jsx` (around line 322) currently renders `person.email` for results sourced from this endpoint; fall back to `username`/`displayName` there, confirming during implementation which pickers are wired to `members-search` versus the tighter, still-email-capable `people-search` before changing rendering.
+- No new audit event needed — this narrows an existing response shape without changing who can call the route.
+- Tests: `members-search` response no longer contains an `email` field for any result, for a plain-member caller; a contract test on the response shape so a future change can't silently reintroduce the field; a frontend test confirming `PeoplePicker` renders correctly without `person.email` when backed by this endpoint.
+
+### 5. Recheck account status when rotating a refresh token
+
+**Status**: Proposed
+**Utility**: Every other credential-issuing path (login, WebSocket re-authenticate) rechecks `users.status === 'ACTIVE'` before granting a session; `POST /api/auth/refresh` is the one exception. Not currently reachable given the app's single disable code path (which already revokes refresh tokens), but a defense-in-depth gap in an otherwise consistently-enforced invariant, cheap to close.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 8 (Medium).
+
+Design:
+- `POST /api/auth/refresh` (`backend/src/routes/auth.js`) re-fetches the user filtered on `status: 'ACTIVE'` in the same lookup used to build the response, rather than an unfiltered lookup by id alone. If the filtered lookup returns nothing, revoke all refresh tokens for that user id, clear the refresh cookie, and respond `401` with the same generic "Invalid refresh token" message used elsewhere, matching login's existing handling rather than introducing a new error shape.
+- No schema change. No new audit event type — the existing `AUTH_TOKEN_REFRESH` event simply stops firing on the now-rejected path.
+- Tests: disable a user while a live, unexpired refresh token exists (isolating this check from the normal disable path's own token revocation); confirm `/api/auth/refresh` 401s, clears the refresh cookie, and issues no access token.
+
+### 6. Minimal CI workflow
 
 **Status**: Proposed
 **Utility**: `ARCHITECTURE_REVIEW_(Claude).md` calls this "the single cheapest fix on this list" (P0 Recommendation 1) — nothing currently gates a broken build or a failing test from reaching `main`. Confirmed still true: no `.github/workflows` directory exists at all. This is the complementary half of "the deploy loop" entry (already shipped): that entry stops a *stale* container from being deployed; this stops a *broken* one from ever being deployable in the first place.
@@ -42,67 +101,55 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 2. Channel and workspace canvases
+### 7. Cancel summarize/extract-tasks on client disconnect
 
 **Status**: Proposed
-**Utility**: Modern team messengers are turning persistent context into a first-class surface, not leaving every plan, link, note, and checklist buried in message history. Silent Whisper already has workspaces, channels, Markdown, entity references, search, and local AI, so local canvases are the most natural product-level expansion.
-**Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Slack Canvas and Microsoft Teams/Loop-style persistent collaborative pages, adapted to Silent Whisper's offline/intranet constraint.
+**Utility**: `LLM_MAX_CONCURRENT_REQUESTS` defaults to 1, and `PROJECT_PLAN.md`/`config.js` both call this deliberate on the CPU-only Ollama test environment. A closed tab or superseded retry currently holds that sole slot for up to `LLM_TIMEOUT_MS` (30s) regardless, queuing every other concurrent user's summarize/extract-tasks call behind a dead connection — the one AI feature the design explicitly flags as capacity-constrained.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 4 (Medium).
 
 Design:
-- Add workspace-scoped and channel-scoped `canvases`: a persistent, editable Markdown document with optional structured blocks for checklist items and pinned links. A workspace can have a home canvas; each channel can have one attached canvas reachable from the channel header/details panel.
-- Store content locally in PostgreSQL, never external file storage. Suggested tables: `canvases` (`id`, `workspace_id`, nullable `channel_id`, `title`, `content`, `created_by`, `updated_by`, timestamps, `archived_at`) and `canvas_revisions` (`canvas_id`, revision number, content snapshot, actor, timestamp) so edits are recoverable and auditable without relying on hard deletes.
-- Authorization follows the parent object: workspace canvas requires workspace membership to read; channel canvas requires channel membership to read; editing requires a new workspace/channel permission or the same roles that can manage workspace/channel settings. Private-channel canvases must never leak through workspace-level search.
-- Rendering reuses the existing safe Markdown renderer (`frontend/src/markdown.jsx`) and extends entity rendering so `[[Entity Name]]` inside a canvas links to the existing entity details flow. Do not introduce raw HTML or `dangerouslySetInnerHTML`.
-- UI: add a "Canvas" tab or icon in `ChannelView.jsx`/`WorkspaceHome.jsx`, opening a focused sheet or side panel. Keep messages as the default first screen; canvas is attached context, not a replacement for chat.
-- AI: optional "Draft from recent messages" action can create a first-pass canvas section from a channel/thread using the existing provider-adapter and audit conventions. The generated draft stays editable and must show source scope.
-- Audit: `CANVAS_CREATED`, `CANVAS_UPDATED`, `CANVAS_ARCHIVED`, and optional `AI_CANVAS_DRAFT_REQUESTED`; audit payloads store ids, revision numbers, provider/prompt metadata, and content lengths, not full document text.
-- Tests: backend authz tests for workspace vs private-channel visibility, revision creation, archive behavior, and no cross-workspace leakage; frontend e2e for creating/editing a channel canvas, entity links inside canvas content, and a non-member failing to access a private-channel canvas.
+- `POST /channels/:channelId/ai/summarize` and `POST /messages/:messageId/ai/extract-tasks` (`backend/src/routes/ai.js`) wire the same `res.on('close', () => controller.abort())` → `AbortController` → `signal` pattern already shipped and proven on `POST /ai/workspace-digest`, passing `signal` through to `runStreamingCompletion()`.
+- No behavior change for the normal (non-disconnected) path. No new audit event; existing `AI_SUMMARY_REQUESTED`/`AI_TASK_EXTRACT_REQUESTED` events are unaffected.
+- Tests: mirror the digest route's existing disconnect-cancellation test for both summarize and extract-tasks — a simulated client disconnect mid-stream releases the concurrency slot promptly rather than holding it to timeout, verified by a second queued request completing sooner than `LLM_TIMEOUT_MS` after the first client disconnects.
 
-### 3. AI search answers with citations
+### 8. Paginate the remaining unbounded roster/list endpoints
 
 **Status**: Proposed
-**Utility**: Semantic search currently returns matching messages; modern AI chat/search surfaces answer the user's question directly while citing the underlying messages. Silent Whisper already has pgvector and local LLM plumbing, so this is a high-leverage extension.
-**Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Slack AI search answers and Teams Copilot in chats/channels, adapted to local-only providers.
+**Utility**: Message history and the admin user/workspace rosters are already cursor/offset-bounded; several other list routes called on ordinary page loads (workspace sidebar, channel list, DM list) still return every matching row regardless of how large the caller's history has grown, which the 100-concurrent-user target does nothing to cap.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 6 (Medium).
 
 Design:
-- Add `POST /api/search/answer` taking `workspaceId`, `query`, optional channel/entity filters, and a bounded time window. It embeds the query, retrieves an authorized candidate set using the existing semantic search path, then asks the configured local LLM to answer using only those candidates.
-- The response must include citations: each answer paragraph or bullet references message ids/channel ids/timestamps used as sources. The UI renders citations as clickable chips that open the channel/thread/message when the caller still has access.
-- Prompt template must explicitly instruct the model to say when the answer is not supported by the supplied sources. The frontend should show a "Sources used" section and a "No supported answer found" state rather than hallucinated confidence.
-- Authorization is identical to semantic search: only channels the caller can read are candidate sources. Admin/system routes do not get a special wider search by default.
-- Rate limiting uses the AI proxy limit, and should reuse the already-shipped global concurrency queue (see "Bounded AI concurrency queue instead of hard-rejecting" in the Done section) rather than introducing a second gate.
-- Audit as `AI_SEARCH_ANSWER_REQUESTED` with query length, provider, prompt version, candidate count, cited result count, and truncated input length. Never audit raw query or raw message content.
-- Tests: semantic candidate authorization, private-channel exclusion, answer-with-citations shape, unsupported-answer fallback, truncation behavior, and frontend source navigation from a cited result.
+- Extend the existing `parseOffsetPagination`/`parsePagination` helpers (`backend/src/validation.js`) to: `GET /api/direct-messages`, `GET /api/organizations`, `GET /api/organizations/:orgId/members`, `GET /api/workspaces/:workspaceId/members`, `GET /api/workspaces/:workspaceId/channels` (also replacing its per-row correlated `COUNT(*)` member-count subquery with a single pre-aggregated join, still paginating the outer channel rows), and `GET /api/workspaces/:workspaceId/channels/:channelId/members` — following the exact precedent `GET /admin/users`/`GET /workspaces/admin/all` already set (`{items, total, limit, offset}` response shape).
+- Separately, `markAllMentionNotificationsRead()` (`backend/src/services/mentionNotificationService.js`) changes from select-every-matching-id-then-`UPDATE ... WHERE id IN (...)` to a single set-based `UPDATE ... WHERE ... RETURNING id`, with the channel-membership check expressed as an inline `whereExists` rather than a separately materialized id array.
+- Frontend call sites for each paginated route need matching pager/cursor UI or "load more" affordances wherever the current UI assumes a complete list (sidebar, channel list, member list); scope this per-route during implementation rather than assuming one shared UI pattern fits all six.
+- No authz change — pagination doesn't alter who can see what, only how much comes back per call.
+- Tests: each updated route rejects malformed pagination params consistently with the existing admin routes' behavior and returns the correct bounded page; a regression test confirms `markAllMentionNotificationsRead` still only touches notifications the caller can actually see (channel membership still enforced) under the new single-statement form.
 
-### 4. Workflow and playbook runs inside channels
+### 9. Unpredictable per-request nonces in LLM prompt delimiters
 
 **Status**: Proposed
-**Utility**: Repeatable team processes should not depend on someone remembering the right checklist in chat. Mattermost Playbooks-style runs would make Silent Whisper useful for incidents, deployments, investigations, onboarding, approvals, and recurring operational rituals.
-**Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Mattermost collaborative playbooks and Slack Workflow Builder concepts, scoped to local/intranet operation.
+**Utility**: Defense-in-depth against prompt injection: every prompt builder currently delimits untrusted message content with fixed, guessable marker strings (`MESSAGES_START`/`MESSAGES_END`, `THREAD_START`/`THREAD_END`), visible in the codebase and therefore spoofable by a message containing the literal marker text. AI output already renders to other users as a trusted-looking summary/task list, so a successful spoof is a misleading-content vector, not classic XSS — the frontend renders AI output as plain text, never HTML.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 5 (Medium).
 
 Design:
-- Add `playbooks` and `playbook_runs` scoped to a workspace. A playbook template contains ordered checklist sections, default owner/participant rules, optional status-update cadence, and optional channel-creation behavior. A run is a concrete instance attached to an existing channel or a newly created run channel.
-- Permissions: workspace managers/owners can create/edit playbook templates by default; channel members can view and interact with a run only if they can read the run's channel. System admins do not bypass private-channel visibility in the ordinary UI.
-- UI: add a workspace Admin/Settings entry for managing playbook templates and a channel action to "Start playbook". Active runs appear in the channel header/details panel and workspace home.
-- Run state includes owner, status (`ACTIVE`, `PAUSED`, `COMPLETE`, `CANCELED`), checklist item completion, status updates, and a timeline. Finishing a run can prompt for a retrospective note saved into the run.
-- AI assistance can draft a playbook from a completed thread/channel history or summarize a completed run, using the existing local LLM path and source-scope display.
-- Audit: `PLAYBOOK_CREATED`, `PLAYBOOK_UPDATED`, `PLAYBOOK_RUN_STARTED`, `PLAYBOOK_RUN_UPDATED`, `PLAYBOOK_RUN_COMPLETED`, plus optional AI draft/summarize events. Payloads should log ids/status transitions/counts, not full checklist content unless a clear audit decision is made first.
-- Tests: template CRUD permissions, run visibility through private channels, checklist update concurrency, archive/read-only behavior, timeline ordering, and e2e for starting and completing a simple run.
+- `backend/src/llm/promptTemplates.js`'s prompt builders generate a random per-request nonce (`crypto.randomBytes(12).toString('hex')`) and use it in the marker names (`${kind}_START_${nonce}`/`${kind}_END_${nonce}`) instead of fixed strings, with the instruction text telling the model that only content between that exact nonce pair is data.
+- Serialize the delimited message content as JSON (username/content pairs) rather than raw interpolated text, so structural characters are escaped rather than relying purely on marker-avoidance — this also removes ambiguity from literal newlines/markdown in message content confusing the model about block boundaries.
+- No schema/authz/audit change — this is prompt-construction only. Bump `LLM_SUMMARY_PROMPT_VERSION`/`LLM_TASK_PROMPT_VERSION`/`llm.digest_prompt_version` per this codebase's existing convention for any prompt-shape change, so historical audit rows stay attributable to the prompt version that generated them.
+- Tests: a message containing a literal (guessed or copy-pasted) marker string no longer breaks out of the data block, verified against a fixture; prompt-builder unit tests confirm the nonce changes per call and the JSON body round-trips correctly for messages containing markdown/newlines/quotes.
 
-### 5. Conversation-linked live checklists
+### 10. Serialize DM creation to prevent duplicate-channel races
 
 **Status**: Proposed
-**Utility**: Lightweight checklists are the smaller version of playbooks: useful when a team needs shared to-dos in a thread or channel without creating a full process template.
-**Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Microsoft Loop task-list components and Mattermost channel checklists.
+**Utility**: Two people clicking "Message" on each other in the same window (a plausible UI interaction — e.g. both opening each other's profile from a shared roster at once) can each pass `POST /api/direct-messages`'s "no existing channel" check under Postgres's default `READ COMMITTED` isolation and create two separate DIRECT channels for the same pair — the endpoint's own "creates or reuses" contract silently fails at exactly the concurrency level this app targets.
+**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 9 (Low).
 
 Design:
-- Add `checklists` and `checklist_items`, scoped to workspace/channel/thread. Channel checklist read/write permissions inherit channel membership; thread checklists inherit the root message channel.
-- UI: a channel or thread action "Create checklist" opens a compact sheet. Checklist blocks can be pinned to the channel header/details panel and optionally posted as a message linking to the live checklist.
-- Items support title, completion status, optional owner, optional due date, and source message id. Completion/uncompletion should broadcast over WebSocket to current channel/thread viewers. Same terminology call as the already-shipped "Inline Markdown checkbox tasks" entry (Done section): `owner`, not `assignee`.
-- This feature should coexist with entry 4: a checklist can later be saved as a playbook template, but v1 should not require the playbook schema to ship first.
-- Audit: `CHECKLIST_CREATED`, `CHECKLIST_ITEM_CREATED`, `CHECKLIST_ITEM_UPDATED`, `CHECKLIST_ARCHIVED`; payloads include ids/status transitions and owner ids.
-- Tests: membership-gated read/write, private-channel leakage prevention, WebSocket checklist updates, archived workspace/channel read-only behavior, and frontend e2e for creating and completing checklist items in a thread.
+- `POST /api/direct-messages` (`backend/src/routes/directMessages.js`) takes a `pg_advisory_xact_lock` keyed on the sorted pair of user ids (`hashtext('dm:{lo}:{hi}')`) before the existing-channel check inside its transaction, mirroring the pattern `auditService.js`'s hash-chain append and `invitations.js`'s accept route already use for their own race-prone paths — cheap, no table-wide lock, consistent with existing codebase conventions rather than a new concurrency-control style.
+- Longer-term alternative, not required for this entry: a partial unique index over the DM shape if 1:1 DMs are ever normalized into their own table. The advisory lock is the minimal, schema-preserving fix.
+- No authz/audit change.
+- Tests: two concurrent `POST /api/direct-messages` calls for the same user pair resolve to the same channel id, with exactly one `created: true` response; existing single-caller behavior is unaffected.
 
-### 6. Channel attention and health views
+### 11. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -117,7 +164,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 7. Entity pages as a lightweight knowledge base
+### 12. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
@@ -126,55 +173,11 @@ Design:
 Design:
 - Extend `entities` with editable metadata: description, aliases, owner/steward user id, status, tags, and optional external/local reference fields. Keep metadata workspace-scoped and never global across organizations.
 - Add `entity_relationships` (`source_entity_id`, `target_entity_id`, relationship type) for "depends on", "owned by", "related to", etc. Relationship writes require workspace membership and appropriate edit permission.
-- Entity detail pages should show recent references, linked decisions/action items, related entities, and pinned messages/canvases. This connects entry 2 (canvases) if it ships, and can surface the already-shipped "Inline Markdown checkbox tasks" entry's (Done section) owner-tagged tasks as linked action items.
+- Entity detail pages should show recent references, linked decisions/action items, related entities, and pinned messages. Can surface the already-shipped "Inline Markdown checkbox tasks" entry's (Done section) owner-tagged tasks as linked action items.
 - AI can generate a "What we know" summary from authorized references, clearly labeled with source citations and last-generated time. Store generated summaries as revisions or cached snapshots with prompt version/provider metadata, not as unquestioned canonical truth.
 - Authorization: references and generated summaries must be computed only from channels the caller can read. If entity metadata is workspace-wide but some references are private, the metadata can show while private references remain hidden.
 - Audit: `ENTITY_METADATA_UPDATED`, `ENTITY_RELATIONSHIP_CREATED`, `ENTITY_RELATIONSHIP_REMOVED`, and `AI_ENTITY_SUMMARY_REQUESTED`.
 - Tests: metadata editing, alias normalization/collision behavior, relationship isolation across workspaces, private-reference filtering, and frontend e2e for editing an entity and navigating related context.
-
-### 8. Meeting transcript recap and notes import
-
-**Status**: Proposed
-**Utility**: Slack huddle notes and Teams recap show that teams increasingly expect meeting output to become searchable, summarized, and actionable. Silent Whisper can support the valuable part first without building real-time calls.
-**Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Slack AI huddle notes and Microsoft Teams intelligent recap/video recap, adapted to an offline-first app.
-
-Design:
-- Add a "Create meeting recap" action in a channel/thread that accepts pasted transcript text or a local uploaded text file. Audio/video recording and transcription are explicitly out of scope for v1 unless a local transcription provider is later selected.
-- Backend stores a `meeting_recaps` row linked to workspace/channel/thread, with title, transcript length, generated summary, action items, attendees if supplied, created_by, and timestamps. Raw transcript storage should be a deliberate option: default to not storing raw transcript, or store it only if the user selects "Keep transcript".
-- AI prompt produces sections for topics, decisions, action items, unresolved questions, and suggested follow-up messages. Accepted action items can flow into the already-shipped "Inline Markdown checkbox tasks" entry (Done section) — posted as a new `- [ ]` line in the relevant channel, not a separate register.
-- Authorization inherits the channel/thread. Private-channel recaps are visible only to channel members. Uploaded text is untrusted input and must follow the same prompt-injection delimiters and output escaping as message summaries.
-- Audit as `AI_MEETING_RECAP_REQUESTED` with transcript length, provider, prompt version, output length, and whether raw transcript was retained.
-- Tests: transcript length limits, no raw transcript audit leakage, private-channel access checks, retained-vs-discarded transcript behavior, and e2e for importing a transcript and saving generated action items.
-
-### 9. No-code local automations
-
-**Status**: Proposed
-**Utility**: Slack Workflow Builder shows that teams want lightweight automation where work already happens. Silent Whisper can offer local-only automations without external SaaS connectors or public webhooks.
-**Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Slack Workflow Builder and Mattermost slash-command/process automation concepts.
-
-Design:
-- Add workspace-scoped `automation_rules` with simple triggers and local actions. V1 triggers: scheduled time, message posted in channel matching keyword/entity mention, membership invitation accepted, checklist item completed, playbook run completed. V1 actions: send channel message, create checklist item, notify user/group, start playbook, or request AI summary into a canvas draft.
-- Permissions: workspace owners/managers can create automations by default; actions execute with a recorded automation actor plus the creator/manager id, and every action must re-check that the automation still has permission at run time.
-- Keep connectors out of v1. If intranet webhooks are later added, require an explicit allowlist comparable to `ALLOWED_LLM_ORIGINS`; never allow arbitrary outbound URLs from user-created automation.
-- UI: an "Automations" admin/settings surface with templates for common local flows such as daily standup prompt, incident handoff reminder, unanswered-question reminder, and new-member onboarding checklist.
-- Runtime: use a durable jobs table and `FOR UPDATE SKIP LOCKED` worker pattern, not timers held only in process memory, so scheduled automations survive backend restarts.
-- Audit: `AUTOMATION_CREATED`, `AUTOMATION_UPDATED`, `AUTOMATION_DISABLED`, `AUTOMATION_RUN_STARTED`, `AUTOMATION_RUN_COMPLETED`, `AUTOMATION_RUN_FAILED`; payloads include rule/action ids and counts, not message bodies.
-- Tests: permission checks at creation and run time, archived workspace/channel behavior, allowlist enforcement if any outbound action exists, worker retry/dead-letter behavior, and e2e for a scheduled or manually triggered template.
-
-### 10. Self-hosted calls or call-notes bridge
-
-**Status**: Proposed
-**Utility**: Voice/screen-share collaboration is table stakes in many team messengers, but it is infrastructure-heavy. Silent Whisper should approach it as a deliberate milestone, not a casual chat feature.
-**Origin**: User asked for innovative ideas from modern similar applications (2026-07-18), based on Mattermost Calls, Slack huddles, and Teams meeting recap patterns.
-
-Design:
-- Preferred v1 is not full calls: ship the meeting transcript recap/import flow from entry 8 first. It captures much of the product value with far lower operational risk and fits the current local LLM architecture.
-- If real-time calls are needed later, use a proven self-hosted WebRTC/SFU component rather than hand-rolling media transport. Treat it as a separate service with explicit CPU/network sizing, TURN/STUN strategy for intranet constraints, TLS/nginx upgrade handling, and a separate load test.
-- Calls attach to channels/DMs and inherit channel/DM membership. Users who are disabled, removed from the channel, or in archived workspaces cannot join. Guest/external access is out of scope unless the enterprise auth model grows a guest role.
-- Optional recording/transcription must be local-only. No public transcription API. If local transcription is added, use the same provider-adapter/configuration discipline as the LLM layer and store retention settings explicitly.
-- UI: channel/DM header shows active call state, participants, join/leave, mute, and optional screen share if the selected media stack supports it. Avoid adding call controls to the sidebar.
-- Audit: call started/ended, participant joined/left, recording/transcription started/stopped/deleted. Do not audit media content.
-- Tests: authz for join attempts, disabled-account eviction, archived/private-channel behavior, call lifecycle events, and a targeted browser e2e smoke test if the media stack can run in CI/local headless mode.
 
 ## Done
 
