@@ -84,15 +84,31 @@ aiRouter.post('/channels/:channelId/ai/summarize', aiProxyRateLimiter, async (re
     const controller = new AbortController();
     res.on('close', () => controller.abort());
 
-    let result;
     try {
-      result = await runStreamingCompletion({
+      await runStreamingCompletion({
         db,
         res,
         promptBuilder: buildSummaryPrompt,
         promptVersionField: 'summaryPromptVersion',
         messages,
         signal: controller.signal,
+        // FEATURE_REQUEST.md entry 2 ("fix the aiRoutes.test.js audit-row
+        // race at its root"): audited before the response ends, not after —
+        // see aiService.js's onBeforeEnd doc comment for why.
+        onBeforeEnd: (r) =>
+          appendAuditEvent(db, {
+            actorId: req.user.id,
+            actorIp: req.ip,
+            actionType: 'AI_SUMMARIZE_REQUESTED',
+            targetResource: channelId,
+            payload: {
+              provider: r.provider,
+              promptVersion: r.promptVersion,
+              truncatedInputLength: r.truncatedInputLength,
+              wasTruncated: r.wasTruncated,
+              messageCount: messages.length,
+            },
+          }),
       });
     } catch (err) {
       // Adapter failed after the response had already started streaming —
@@ -106,20 +122,6 @@ aiRouter.post('/channels/:channelId/ai/summarize', aiProxyRateLimiter, async (re
       }
       throw err;
     }
-
-    await appendAuditEvent(db, {
-      actorId: req.user.id,
-      actorIp: req.ip,
-      actionType: 'AI_SUMMARIZE_REQUESTED',
-      targetResource: channelId,
-      payload: {
-        provider: result.provider,
-        promptVersion: result.promptVersion,
-        truncatedInputLength: result.truncatedInputLength,
-        wasTruncated: result.wasTruncated,
-        messageCount: messages.length,
-      },
-    });
   } catch (err) {
     next(err);
   }
@@ -168,15 +170,33 @@ aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async
     const controller = new AbortController();
     res.on('close', () => controller.abort());
 
-    let result;
     try {
-      result = await runStreamingCompletion({
+      await runStreamingCompletion({
         db,
         res,
         promptBuilder: buildTaskExtractionPrompt,
         promptVersionField: 'taskPromptVersion',
         messages,
         signal: controller.signal,
+        // FEATURE_REQUEST.md entry 2 ("fix the aiRoutes.test.js audit-row
+        // race at its root"): audited before the response ends, not after —
+        // see aiService.js's onBeforeEnd doc comment for why.
+        onBeforeEnd: (r) =>
+          appendAuditEvent(db, {
+            actorId: req.user.id,
+            actorIp: req.ip,
+            actionType: 'AI_TASK_EXTRACTION_REQUESTED',
+            targetResource: root.id,
+            payload: {
+              channelId: root.channel_id,
+              provider: r.provider,
+              promptVersion: r.promptVersion,
+              truncatedInputLength: r.truncatedInputLength,
+              wasTruncated: r.wasTruncated,
+              messageCount: messages.length,
+              omittedReplyCount: Math.max(0, totalReplyCount - replyRows.length),
+            },
+          }),
       });
     } catch (err) {
       if (res.headersSent) {
@@ -187,22 +207,6 @@ aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async
       }
       throw err;
     }
-
-    await appendAuditEvent(db, {
-      actorId: req.user.id,
-      actorIp: req.ip,
-      actionType: 'AI_TASK_EXTRACTION_REQUESTED',
-      targetResource: root.id,
-      payload: {
-        channelId: root.channel_id,
-        provider: result.provider,
-        promptVersion: result.promptVersion,
-        truncatedInputLength: result.truncatedInputLength,
-        wasTruncated: result.wasTruncated,
-        messageCount: messages.length,
-        omittedReplyCount: Math.max(0, totalReplyCount - replyRows.length),
-      },
-    });
   } catch (err) {
     next(err);
   }
@@ -277,15 +281,36 @@ aiRouter.post('/ai/workspace-digest', aiDigestRateLimiter, async (req, res, next
     const controller = new AbortController();
     res.on('close', () => controller.abort());
 
-    let result;
     try {
-      result = await runStreamingCompletion({
+      await runStreamingCompletion({
         db,
         res,
         promptBuilder: buildDigestPrompt,
         promptVersionField: 'digestPromptVersion',
         messages,
         signal: controller.signal,
+        // FEATURE_REQUEST.md entry 2 ("fix the aiRoutes.test.js audit-row
+        // race at its root"): audited before the response ends, not after —
+        // see aiService.js's onBeforeEnd doc comment for why.
+        onBeforeEnd: (r) =>
+          appendAuditEvent(db, {
+            actorId: req.user.id,
+            actorIp: req.ip,
+            actionType: 'AI_WORKSPACE_DIGEST_REQUESTED',
+            targetResource: workspaceId,
+            payload: {
+              windowHours,
+              channelIds,
+              mentionCount,
+              channelMessageCount,
+              selectedMessageCount: messages.length,
+              chunkCount: 1, // v1 always sends one batch — see the doc comment above
+              provider: r.provider,
+              promptVersion: r.promptVersion,
+              truncatedInputLength: r.truncatedInputLength,
+              wasTruncated: r.wasTruncated,
+            },
+          }),
       });
     } catch (err) {
       if (res.headersSent) {
@@ -296,25 +321,6 @@ aiRouter.post('/ai/workspace-digest', aiDigestRateLimiter, async (req, res, next
       }
       throw err;
     }
-
-    await appendAuditEvent(db, {
-      actorId: req.user.id,
-      actorIp: req.ip,
-      actionType: 'AI_WORKSPACE_DIGEST_REQUESTED',
-      targetResource: workspaceId,
-      payload: {
-        windowHours,
-        channelIds,
-        mentionCount,
-        channelMessageCount,
-        selectedMessageCount: messages.length,
-        chunkCount: 1, // v1 always sends one batch — see the doc comment above
-        provider: result.provider,
-        promptVersion: result.promptVersion,
-        truncatedInputLength: result.truncatedInputLength,
-        wasTruncated: result.wasTruncated,
-      },
-    });
   } catch (err) {
     next(err);
   }

@@ -350,13 +350,13 @@ describe('POST /api/messages/:messageId/ai/extract-tasks', () => {
       .send({});
     expect(res.status).toBe(200);
 
-    // The route streams and ends the response (inside runStreamingCompletion)
-    // before its trailing `await appendAuditEvent(...)` resolves — same
-    // "respond first, audit after" order as summarize/digest — so a test
-    // client can observe the response completing a moment before the audit
-    // row commits. pollUntil (already used above for the concurrency gate)
-    // absorbs that gap instead of racing it.
-    const auditRow = await pollUntil(() => db('audit_logs').where({ action_type: 'AI_TASK_EXTRACTION_REQUESTED' }).first());
+    // FEATURE_REQUEST.md entry 2 ("fix the aiRoutes.test.js audit-row race
+    // at its root"): runStreamingCompletion now awaits the audit write
+    // (onBeforeEnd) before calling res.end(), so the response completing
+    // guarantees the row already exists — a plain synchronous read, not the
+    // pollUntil this test used to need to absorb the old "respond first,
+    // audit after" ordering.
+    const auditRow = await db('audit_logs').where({ action_type: 'AI_TASK_EXTRACTION_REQUESTED' }).first();
     // +1 for the root message itself.
     expect(auditRow.payload).toMatchObject({ messageCount: 200, omittedReplyCount: 6 });
 

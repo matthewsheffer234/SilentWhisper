@@ -16,7 +16,23 @@ import { ServiceUnavailableError } from '../errors.js';
 // optional and only passed by the workspace-digest route today (see
 // adapterInterface.js) — omitted, summarize/extract-tasks behave exactly as
 // before.
-export async function runStreamingCompletion({ db, res, promptBuilder, promptVersionField, messages, signal }) {
+//
+// `onBeforeEnd` (FEATURE_REQUEST.md entry 2, "fix the aiRoutes.test.js
+// audit-row race at its root"): an optional async callback run after
+// `adapter.generate()` resolves but before `res.end()`. Each of the three
+// call sites passes a closure that awaits `appendAuditEvent(...)` here
+// instead of after this function returns — previously every one of them did
+// the audit write *after* this function had already called `res.end()`,
+// meaning a client's response could complete before that action's audit row
+// was guaranteed to exist. If the callback itself throws (a transient DB
+// hiccup), it's logged and swallowed rather than propagated: some response
+// body bytes may already be on the wire via `onChunk` by this point (a
+// partially-streamed response can't be retroactively failed), so this fails
+// open the same way a mid-stream adapter failure already does below —
+// matching `enqueueEmbeddingJob`'s established "rare, narrow, best-effort"
+// precedent elsewhere in this codebase, rather than hanging the connection
+// or crashing the process over an audit-write failure.
+export async function runStreamingCompletion({ db, res, promptBuilder, promptVersionField, messages, signal, onBeforeEnd }) {
   const settings = await getEffectiveSettings(db);
 
   if (settings.provider === 'disabled') {
@@ -90,18 +106,30 @@ export async function runStreamingCompletion({ db, res, promptBuilder, promptVer
       onChunk,
       signal,
     });
-    if (!wroteViaChunk) {
-      res.write(text);
-    }
-    res.end();
 
-    return {
+    const result = {
       text,
       provider: settings.provider,
       promptVersion: settings[promptVersionField],
       truncatedInputLength,
       wasTruncated,
     };
+
+    if (onBeforeEnd) {
+      try {
+        await onBeforeEnd(result);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Audit write before completing AI response failed:', err);
+      }
+    }
+
+    if (!wroteViaChunk) {
+      res.write(text);
+    }
+    res.end();
+
+    return result;
   } finally {
     release();
   }

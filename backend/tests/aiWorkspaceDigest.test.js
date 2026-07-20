@@ -34,23 +34,6 @@ async function addMember(workspaceId, channelId, user) {
   await request(app).post(`/api/workspaces/${workspaceId}/channels/${channelId}/join`).set(authHeader(user.accessToken));
 }
 
-// The route intentionally streams the full response (res.end(), inside
-// runStreamingCompletion) before its trailing `await appendAuditEvent(...)`
-// resolves — the same "respond first, audit after" order summarize/
-// extract-tasks already use. That means a test client can observe the HTTP
-// response completing a moment before the audit row commits. Polling briefly
-// here is a test-robustness concern only; the route always awaits the audit
-// write before the request handler itself returns.
-async function waitForAuditRow(actionType, { timeoutMs = 500, intervalMs = 10 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const row = await db('audit_logs').where({ action_type: actionType }).orderBy('id', 'desc').first();
-    if (row) return row;
-    if (Date.now() > deadline) return undefined;
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-}
-
 beforeEach(async () => {
   // Same ordering reason as aiRoutes.test.js: clear app_settings rows before
   // resetDb() wipes the users those rows' updated_by FKs point at.
@@ -155,7 +138,7 @@ describe('POST /api/ai/workspace-digest', () => {
     expect(res.text).toContain('Urgent Mentions');
     expect(res.headers['x-ai-prompt-version']).toBe(config.llm.digestPromptVersion);
 
-    const auditRow = await waitForAuditRow('AI_WORKSPACE_DIGEST_REQUESTED');
+    const auditRow = await db('audit_logs').where({ action_type: 'AI_WORKSPACE_DIGEST_REQUESTED' }).orderBy('id', 'desc').first();
     expect(auditRow).toBeDefined();
     expect(auditRow.actor_id).toBe(member.userId);
     expect(auditRow.target_resource).toBe(workspaceId);
@@ -206,7 +189,7 @@ describe('POST /api/ai/workspace-digest', () => {
       .send({ workspaceId, channelIds: [channelId] });
     expect(res.status).toBe(200);
 
-    const auditRow = await waitForAuditRow('AI_WORKSPACE_DIGEST_REQUESTED');
+    const auditRow = await db('audit_logs').where({ action_type: 'AI_WORKSPACE_DIGEST_REQUESTED' }).orderBy('id', 'desc').first();
     expect(auditRow.payload).toMatchObject({ channelMessageCount: 1, selectedMessageCount: 1 });
   });
 
@@ -250,7 +233,7 @@ describe('POST /api/ai/workspace-digest', () => {
       .send({ workspaceId });
     expect(res.status).toBe(200);
 
-    const auditRow = await waitForAuditRow('AI_WORKSPACE_DIGEST_REQUESTED');
+    const auditRow = await db('audit_logs').where({ action_type: 'AI_WORKSPACE_DIGEST_REQUESTED' }).orderBy('id', 'desc').first();
     expect(auditRow.payload).toMatchObject({ mentionCount: totalMentions, selectedMessageCount: 400 });
   });
 
@@ -312,7 +295,7 @@ describe('POST /api/ai/workspace-digest', () => {
       .send({ workspaceId, channelIds: [channelId] });
     expect(res.status).toBe(503);
 
-    const auditRow = await waitForAuditRow('AI_WORKSPACE_DIGEST_REQUESTED');
+    const auditRow = await db('audit_logs').where({ action_type: 'AI_WORKSPACE_DIGEST_REQUESTED' }).orderBy('id', 'desc').first();
     expect(auditRow).toBeUndefined();
   });
 
