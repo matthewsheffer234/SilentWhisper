@@ -822,6 +822,7 @@ export default function ChatShell() {
         onOpenCreateOrganization={() => setCreateOrgOpen(true)}
         onOpenAdminPanel={() => setAdminPanelOpen(true)}
         onOpenWorkspaceSettings={setWorkspaceSettingsId}
+        onOpenDigest={() => setDigestOpen(true)}
         notificationSummary={notificationSummary}
         onOpenNotifications={() => setNotificationsOpen(true)}
         onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
@@ -859,7 +860,6 @@ export default function ChatShell() {
           onJoinChannel={handleJoinChannel}
           onCreateChannel={() => setCreateChannelOpen(true)}
           onOpenWorkspaceSettings={() => setWorkspaceSettingsId(selectedWorkspace.id)}
-          onOpenDigest={() => setDigestOpen(true)}
           currentUser={user}
           tasks={workspaceTasks}
           tasksLoading={workspaceTasksState.loading}

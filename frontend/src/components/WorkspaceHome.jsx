@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Hash, Lock, Plus, UserPlus, Sparkles } from 'lucide-react';
+import { Hash, Lock, Plus, UserPlus } from 'lucide-react';
 import { TaskCheckbox } from '../markdown.jsx';
 
 // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
@@ -155,7 +155,6 @@ export default function WorkspaceHome({
   onJoinChannel,
   onCreateChannel,
   onOpenWorkspaceSettings,
-  onOpenDigest,
   currentUser,
   tasks,
   tasksLoading,
@@ -242,25 +241,14 @@ export default function WorkspaceHome({
             )}
           </div>
         )}
-        {/* Read-only, so shown regardless of archived state — unlike Create
-            Channel/Invite People above, generating a digest doesn't require
-            write access to the workspace. FEATURE_REQUEST.md entry 6. */}
-        {hasChannels && (
-          <div style={styles.actions}>
-            <button type="button" style={styles.secondaryButton} onClick={onOpenDigest}>
-              <Sparkles size={14} aria-hidden="true" />
-              Catch Me Up
-            </button>
-          </div>
-        )}
-
         {/* FEATURE_REQUEST.md entry 3: a live projection of every task line
             (`- [ ] ... [owner:: @user]`) across the workspace's channels the
             caller can read — a durable list of what's open and who owns it,
             not a second system of record that can drift from channel
             content itself (recomputed server-side on every fetch/broadcast,
-            routes/tasks.js). Read-only w.r.t. workspace archive state, same
-            reasoning as Catch Me Up above. */}
+            routes/tasks.js). Read-only w.r.t. workspace archive state — same
+            "doesn't require write access" reasoning the now-relocated Catch
+            Me Up trigger (WorkspaceSidebar.jsx's workspace row) uses. */}
         {hasChannels && (
           <>
             <div style={styles.sectionTitle}>Tasks</div>

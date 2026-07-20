@@ -13,6 +13,7 @@ import {
   Plus,
   User,
   Users,
+  Sparkles,
 } from 'lucide-react';
 import PresenceBadge from './PresenceBadge.jsx';
 import Menu from './Menu.jsx';
@@ -31,6 +32,47 @@ function IconLabel({ icon, children }) {
       {icon}
       {children}
     </span>
+  );
+}
+
+// FEATURE_REQUEST.md entry 2 (2026-07-20 backlog): relocated here from a
+// standalone row in WorkspaceHome.jsx, which only rendered while no channel
+// was open — the one feature meant to summarize activity *across* channels
+// disappeared the moment you opened any of them. Icon-only, reusing
+// overflowTrigger's plain-icon styling rather than ChannelView.jsx/
+// ThreadSidebar.jsx's wider pill-with-label "AI Actions" trigger — the
+// sidebar row is already tight on width (workspace name + settings icon
+// competing for room), and `aria-label` carries the meaning a visible label
+// would otherwise. A single button, not a Menu.jsx popover, since there's
+// exactly one workspace-level AI action today; converting to a menu is the
+// natural next step if a second one is ever added, not something to build
+// out now for one item.
+//
+// Kept as a standalone, exported pure function — same pattern
+// ChannelView.jsx's isFirstInRun/formatReplyCount/initials already
+// establish — so it's unit-testable directly (this frontend's Vitest setup
+// has no jsdom, per ChannelView.test.jsx's own documented reasoning).
+// Deliberately has no archived-state parameter: unlike the settings
+// overflow trigger, generating a digest is read-only and doesn't require
+// write access, so both the active- and archived-workspace row blocks call
+// this identically, with no separate "unless archived" branch to hide it.
+export function shouldShowDigestTrigger(workspaceId, selectedWorkspaceId, channelCount) {
+  return workspaceId === selectedWorkspaceId && channelCount > 0;
+}
+
+function DigestTrigger({ onOpenDigest }) {
+  return (
+    <button
+      type="button"
+      style={styles.overflowTrigger}
+      aria-label="Catch Me Up — workspace digest"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenDigest();
+      }}
+    >
+      <Sparkles size={18} aria-hidden="true" />
+    </button>
   );
 }
 
@@ -260,6 +302,7 @@ export default function WorkspaceSidebar({
   onOpenCreateOrganization,
   onOpenAdminPanel,
   onOpenWorkspaceSettings,
+  onOpenDigest,
   notificationSummary,
   onOpenNotifications,
   onOpenCreateWorkspace,
@@ -469,6 +512,12 @@ export default function WorkspaceSidebar({
                 onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
               >
                 <span style={{ flex: 1 }}>{ws.name}</span>
+                {/* Read-only, so shown regardless of the row's own archived
+                    state below — unlike the settings trigger, generating a
+                    digest doesn't require write access to the workspace. */}
+                {shouldShowDigestTrigger(ws.id, selectedWorkspaceId, channels.length) && (
+                  <DigestTrigger onOpenDigest={onOpenDigest} />
+                )}
                 {hasWorkspaceSettings && (
                   <button
                     type="button"
@@ -500,6 +549,11 @@ export default function WorkspaceSidebar({
                 onKeyDown={activateOnKey(() => onSelectWorkspace(ws.id))}
               >
                 <span style={{ flex: 1 }}>{ws.name}</span>
+                {/* Read-only, so shown even for an archived workspace —
+                    same reasoning as the active-workspace row above. */}
+                {shouldShowDigestTrigger(ws.id, selectedWorkspaceId, channels.length) && (
+                  <DigestTrigger onOpenDigest={onOpenDigest} />
+                )}
                 {hasPermission(ws.role, PERMISSIONS.WORKSPACE_ARCHIVE) && (
                   <button
                     type="button"
