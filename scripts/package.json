@@ -11,7 +11,8 @@
     "create-first-admin": "node create-first-admin.mjs",
     "clear-test-artifacts": "node clear-test-artifacts.mjs",
     "seed-springfield-investigation": "node seed-springfield-investigation.mjs",
-    "seed-demo-tv-workspace": "node seed-demo-tv-workspace.mjs"
+    "seed-demo-tv-workspace": "node seed-demo-tv-workspace.mjs",
+    "seed-demo-simpsons-workspace": "node seed-demo-simpsons-workspace.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
