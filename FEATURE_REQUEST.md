@@ -42,7 +42,20 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 2. Channel attention and health views
+### 2. Fix the `aiRoutes.test.js` audit-row race at its root, not by polling around it
+
+**Status**: Proposed
+**Utility**: The same intermittent failure — an `AI_*_REQUESTED` audit row not yet existing immediately after its request's response completes — has been noted as "the same pre-existing, previously-documented `aiRoutes.test.js` audit-row race" across at least five separate Done-log entries (2026-07-17 through 2026-07-19) and worked around per-test with a `pollUntil` helper rather than fixed. It's not purely a test-timing nuisance: the same ordering means a real client's request can complete and return AI-generated output to the user before that action's audit row is guaranteed to have committed, which matters for a system whose audit trail is meant to be a complete, tamper-evident record (`PROJECT_PLAN.md` Section 5) — a crash in that narrow window would silently lose the audit entry for an AI action a user already received.
+**Origin**: User asked (2026-07-20) to add a backlog entry for this after it surfaced yet again (unrelated, pre-existing) during the "Paginate the remaining unbounded roster/list endpoints" entry's verification.
+
+Design:
+- Root cause, found by reading `backend/src/llm/aiService.js`'s `runStreamingCompletion()`: on the success path it calls `res.write(text)`/`res.end()` itself (finishing the HTTP response to the client) and only *then* returns control to the calling route. All three call sites — `POST /channels/:channelId/ai/summarize`, `POST /messages/:messageId/ai/extract-tasks`, and `POST /ai/workspace-digest` (all in `backend/src/routes/ai.js`) — do `await appendAuditEvent(...)` *after* `runStreamingCompletion()` returns, i.e. after the response is already fully delivered. A test (or a real client) that checks for the audit row immediately after receiving the response is racing the server's own trailing `await` against its own read.
+- Fix: reorder so the audit write is committed before the response is considered finished, not after. Since `res.end()` currently lives inside the shared `runStreamingCompletion()` helper, add an async callback param (e.g. `onBeforeEnd(result)`) invoked right after `adapter.generate()` resolves but before `res.write(text)`/`res.end()` — each of the three routes passes a closure that calls `appendAuditEvent(...)` with its own route-specific payload fields (`messageCount`, `omittedReplyCount`, `mentionCount`, etc.), keeping payload construction in the routes rather than pushing route-specific knowledge into the shared helper. The existing mid-stream-failure path (`if (res.headersSent) { res.end(); return; }` in each route) is unaffected — a failed/aborted generation isn't a completed action to audit, and doesn't reach the audit write today either.
+- Explicitly decide during implementation (rather than silently picking one) what happens if `appendAuditEvent` itself throws after the LLM has already generated real content: fail the response (the user loses output they already paid concurrency-slot time for, but the audit trail stays authoritative), or complete the response anyway and log the audit failure out-of-band (matching `enqueueEmbeddingJob`'s already-established "rare, narrow, best-effort" precedent elsewhere in this codebase). This is a real behavioral choice, not a detail to leave implicit.
+- No schema/authz change — this is purely a within-request sequencing fix to already-audited routes.
+- Tests: once the ordering guarantees the row exists by the time the response completes, the existing `pollUntil`-wrapped assertions in `aiRoutes.test.js` can revert to a plain synchronous read — proving the fix, not just continuing to route around it. Run the previously-flaky cases repeatedly (e.g. in a loop, or via `--repeat` if the project's Jest setup supports it) to build real confidence the race is closed rather than just less likely to hit in one run.
+
+### 3. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -57,7 +70,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 3. Entity pages as a lightweight knowledge base
+### 4. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
