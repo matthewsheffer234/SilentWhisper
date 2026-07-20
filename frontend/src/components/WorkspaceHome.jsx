@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Hash, Lock, Plus, UserPlus } from 'lucide-react';
 import { TaskCheckbox } from '../markdown.jsx';
+import { canSelfJoinChannel } from '../channels.js';
 
 // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
 // replaces ChannelView.jsx's plain "Select a channel to get started." text
@@ -211,7 +212,10 @@ export default function WorkspaceHome({
                       Open
                     </button>
                   ) : (
-                    !archived && (
+                    // ch.type check: a system admin's override view lists PRIVATE channels
+                    // they aren't in too (isMember: false) — those 400 on self-join.
+                    !archived &&
+                    ch.type === 'PUBLIC' && (
                       <button type="button" style={styles.joinPill} onClick={() => onJoinChannel(ch.id)}>
                         Join
                       </button>

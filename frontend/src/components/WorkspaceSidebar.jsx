@@ -21,6 +21,7 @@ import SearchBar from './SearchBar.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import { directMessageLabel } from '../directMessages.js';
+import { canSelfJoinChannel } from '../channels.js';
 
 // Menu.jsx renders `item.label` as arbitrary children, not just text — this
 // composes an icon + text pair with the same layout Menu.jsx's own item row
@@ -609,7 +610,7 @@ export default function WorkspaceSidebar({
                       {ch.type === 'PRIVATE' ? <Lock size={14} aria-hidden="true" /> : <Hash size={14} aria-hidden="true" />}
                       {ch.name}
                     </span>
-                    {!ch.isMember && !isSelectedWorkspaceArchived && (
+                    {canSelfJoinChannel(ch) && !isSelectedWorkspaceArchived && (
                       <button
                         type="button"
                         style={styles.joinPill}
