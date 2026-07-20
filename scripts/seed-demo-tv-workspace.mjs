@@ -113,6 +113,7 @@ async function main() {
   const { extractMentionedUserIds } = await import('../backend/src/services/mentionService.js');
   const { createMentionNotifications } = await import('../backend/src/services/mentionNotificationService.js');
   const { parseTasks } = await import('../backend/src/services/taskParser.js');
+  const { enqueueEmbeddingJob } = await import('../backend/src/search/embeddingQueue.js');
   const knexFactory = (await import('knex')).default;
 
   const OWNER_ALIAS = config.tasks.ownerTokenAlias;
@@ -333,7 +334,12 @@ async function main() {
     // routes/messages.js's POST handler calls (via the async job queue in
     // production) synchronously and directly, so entities/mentions land
     // deterministically without needing workers/messageSideEffectsWorker.js
-    // running at all.
+    // running at all. Also enqueues an embedding job per message (real
+    // enqueueEmbeddingJob, not inlined) so seeded content is semantically
+    // searchable once embeddingWorker.js's already-running poll picks the
+    // jobs up — omitting this previously left every seeded message
+    // unembedded, silently zeroing out search results scoped to this
+    // workspace.
     const allMessageIds = [];
     async function insertMessage({ channelId, workspaceId, userId, content, createdAt, parentMessageId = null }) {
       const [message] = await db('messages')
@@ -353,6 +359,7 @@ async function main() {
           mentionedByUserId: userId,
         });
       }
+      await enqueueEmbeddingJob(db, message.id);
       return message.id;
     }
 
