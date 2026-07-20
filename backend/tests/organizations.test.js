@@ -59,13 +59,15 @@ describe('GET /api/organizations', () => {
 
     const res = await request(app).get('/api/organizations').set(authHeader(member.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(
+    expect(res.body.organizations).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: orgRes.body.id, name: 'Org List Test', role: 'ORG_ADMIN' })]),
     );
     // The earliest-created default org (signup auto-enrollment) should also
     // be present, with ORG_MEMBER — confirming the join returns every org
     // this caller belongs to, not just the one just created.
-    expect(res.body).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'ORG_MEMBER' })]));
+    expect(res.body.organizations).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'ORG_MEMBER' })]));
+    expect(res.body.limit).toBe(50);
+    expect(res.body.offset).toBe(0);
   });
 
   test('a system admin sees every org, including ones they do not belong to', async () => {
@@ -74,9 +76,56 @@ describe('GET /api/organizations', () => {
 
     const outsider = await seedSystemAdmin('orglistoutsider1');
 
-    const res = await request(app).get('/api/organizations').set(authHeader(outsider.accessToken));
-    expect(res.status).toBe(200);
-    expect(res.body.map((o) => o.id)).toContain(orgRes.body.id);
+    // organizations is deliberately never cleared between tests
+    // (resetDb.js — the earliest-created row must survive across the whole
+    // run for signup's own auto-enrollment), so the just-created org's
+    // absolute position keeps drifting later as more tests accumulate more
+    // rows. Ordered created_at asc, it's always the very last row, so
+    // fetching by that computed offset (rather than assuming it fits in a
+    // single default-sized page) proves "system admin sees every org"
+    // without being coupled to how many orgs already existed.
+    const totalRes = await request(app)
+      .get('/api/organizations?limit=1&offset=0')
+      .set(authHeader(outsider.accessToken));
+    expect(totalRes.status).toBe(200);
+    const { total } = totalRes.body;
+
+    const lastPage = await request(app)
+      .get(`/api/organizations?limit=1&offset=${total - 1}`)
+      .set(authHeader(outsider.accessToken));
+    expect(lastPage.status).toBe(200);
+    expect(lastPage.body.organizations[0].id).toBe(orgRes.body.id);
+  });
+
+  test('rejects malformed pagination params consistently with the admin routes', async () => {
+    const user = await signup('orglistpaging0');
+
+    const badLimit = await request(app).get('/api/organizations?limit=0').set(authHeader(user.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await request(app).get('/api/organizations?offset=-1').set(authHeader(user.accessToken));
+    expect(badOffset.status).toBe(400);
+  });
+
+  test('returns a correctly bounded page via limit/offset', async () => {
+    const admin = await seedSystemAdmin('orglistpaging1');
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await createOrg(admin, `Org Paging ${i}`);
+    }
+
+    const page1 = await request(app).get('/api/organizations?limit=2&offset=0').set(authHeader(admin.accessToken));
+    expect(page1.status).toBe(200);
+    expect(page1.body.organizations).toHaveLength(2);
+
+    const page2 = await request(app).get('/api/organizations?limit=2&offset=2').set(authHeader(admin.accessToken));
+    expect(page2.status).toBe(200);
+    expect(page2.body.organizations.length).toBeGreaterThanOrEqual(1);
+    expect(page2.body.total).toBe(page1.body.total);
+
+    const page1Ids = page1.body.organizations.map((o) => o.id);
+    const page2Ids = page2.body.organizations.map((o) => o.id);
+    expect(page1Ids.some((id) => page2Ids.includes(id))).toBe(false);
   });
 });
 
@@ -98,11 +147,14 @@ describe('org membership routes', () => {
     expect(rosterRes.status).toBe(200);
     // FEATURE_REQUEST.md's "display names as the primary identity" entry:
     // the org member roster table.
-    expect(rosterRes.body).toEqual(
+    expect(rosterRes.body.members).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ userId: target.userId, displayName: 'Org Member Target', role: 'ORG_MEMBER' }),
       ]),
     );
+    expect(rosterRes.body.limit).toBe(50);
+    expect(rosterRes.body.offset).toBe(0);
+    expect(rosterRes.body.total).toBeGreaterThanOrEqual(2);
 
     const patchRes = await request(app)
       .patch(`/api/organizations/${orgId}/members/${target.userId}`)
@@ -135,6 +187,38 @@ describe('org membership routes', () => {
       .get('/api/organizations/00000000-0000-0000-0000-000000000000/members')
       .set(authHeader(user.accessToken));
     expect(res.status).toBe(404);
+  });
+
+  test('members roster rejects malformed pagination params and returns a bounded page', async () => {
+    const admin = await seedSystemAdmin('orgmemberpaging0');
+    const orgRes = await createOrg(admin, 'Org Member Paging Test');
+    const orgId = orgRes.body.id;
+    for (let i = 0; i < 3; i += 1) {
+      const target = await signup(`orgmemberpagingtarget${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await request(app)
+        .post(`/api/organizations/${orgId}/members`)
+        .set(authHeader(admin.accessToken))
+        .send({ username: target.username });
+    }
+
+    const badLimit = await request(app)
+      .get(`/api/organizations/${orgId}/members?limit=0`)
+      .set(authHeader(admin.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await request(app)
+      .get(`/api/organizations/${orgId}/members?offset=-1`)
+      .set(authHeader(admin.accessToken));
+    expect(badOffset.status).toBe(400);
+
+    const page = await request(app)
+      .get(`/api/organizations/${orgId}/members?limit=2&offset=0`)
+      .set(authHeader(admin.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.members).toHaveLength(2);
+    // admin (auto-enrolled ORG_ADMIN) + 3 added targets = 4 total.
+    expect(page.body.total).toBe(4);
   });
 
   test('a plain ORG_MEMBER gets 403 on membership-management routes', async () => {

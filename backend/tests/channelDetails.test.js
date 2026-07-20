@@ -51,14 +51,42 @@ describe('GET /workspaces/:workspaceId/channels memberCount', () => {
 
     let res = await request(app).get(`/api/workspaces/${workspaceId}/channels`).set(authHeader(owner.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body.find((c) => c.id === channelId)).toMatchObject({ memberCount: 1 });
+    expect(res.body.channels.find((c) => c.id === channelId)).toMatchObject({ memberCount: 1 });
 
     await request(app)
       .post(`/api/workspaces/${workspaceId}/channels/${channelId}/join`)
       .set(authHeader(member.accessToken));
 
     res = await request(app).get(`/api/workspaces/${workspaceId}/channels`).set(authHeader(owner.accessToken));
-    expect(res.body.find((c) => c.id === channelId)).toMatchObject({ memberCount: 2 });
+    expect(res.body.channels.find((c) => c.id === channelId)).toMatchObject({ memberCount: 2 });
+  });
+});
+
+describe('GET /workspaces/:workspaceId/channels pagination', () => {
+  test('rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const owner = await signup('chanlistpaging0');
+    const workspaceId = await createWorkspace(owner);
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await createChannel(owner, workspaceId, 'PUBLIC', `paging-room-${i}`);
+    }
+
+    const badLimit = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels?limit=0`)
+      .set(authHeader(owner.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels?offset=-1`)
+      .set(authHeader(owner.accessToken));
+    expect(badOffset.status).toBe(400);
+
+    const page = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels?limit=2&offset=0`)
+      .set(authHeader(owner.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.channels).toHaveLength(2);
+    expect(page.body.total).toBe(3);
   });
 });
 
@@ -106,10 +134,15 @@ describe('GET /workspaces/:workspaceId/channels/:channelId/members', () => {
       .get(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
       .set(authHeader(owner.accessToken));
     expect(res.status).toBe(200);
-    // The owner (auto-added on channel creation) plus all 10 invited members.
-    expect(res.body).toHaveLength(11);
+    // The owner (auto-added on channel creation) plus all 10 invited members
+    // — all fit within the default page size (50), so this still proves
+    // "the whole roster, not artificially truncated," while the roster's
+    // now-offset-paginated shape (FEATURE_REQUEST.md entry 2) is exercised
+    // directly by the "pagination" describe block below.
+    expect(res.body.total).toBe(11);
+    expect(res.body.members).toHaveLength(11);
     for (const m of members) {
-      expect(res.body).toEqual(
+      expect(res.body.members).toEqual(
         expect.arrayContaining([expect.objectContaining({ userId: m.userId, displayName: m.displayName })]),
       );
     }
@@ -125,6 +158,40 @@ describe('GET /workspaces/:workspaceId/channels/:channelId/members', () => {
       .get(`/api/workspaces/${workspaceId}/channels/${otherChannelId}/members`)
       .set(authHeader(owner.accessToken));
     expect(res.status).toBe(400);
+  });
+
+  test('rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const owner = await signup('chandetailpaging0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    for (let i = 0; i < 3; i += 1) {
+      const m = await signup(`chandetailpagingmember${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await addToWorkspace(owner, workspaceId, m);
+      // eslint-disable-next-line no-await-in-loop
+      await request(app)
+        .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+        .set(authHeader(owner.accessToken))
+        .send({ username: m.username });
+    }
+
+    const badLimit = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels/${channelId}/members?limit=0`)
+      .set(authHeader(owner.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels/${channelId}/members?offset=-1`)
+      .set(authHeader(owner.accessToken));
+    expect(badOffset.status).toBe(400);
+
+    const page = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels/${channelId}/members?limit=2&offset=0`)
+      .set(authHeader(owner.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.members).toHaveLength(2);
+    // owner (auto-added on channel creation) + 3 invited members = 4 total.
+    expect(page.body.total).toBe(4);
   });
 });
 

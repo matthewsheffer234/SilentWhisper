@@ -62,7 +62,7 @@ describe('workspace + channel authorization', () => {
       .get(`/api/workspaces/${workspaceId}/channels`)
       .set(authHeader(member.accessToken));
     expect(listRes.status).toBe(200);
-    expect(listRes.body.find((c) => c.name === 'secret')).toBeUndefined();
+    expect(listRes.body.channels.find((c) => c.name === 'secret')).toBeUndefined();
 
     // And a non-member is denied reading its messages outright.
     const msgRes = await request(app)
@@ -121,7 +121,7 @@ describe('workspace + channel authorization', () => {
     const listRes = await request(app)
       .get(`/api/workspaces/${workspaceId}/channels`)
       .set(authHeader(member.accessToken));
-    expect(listRes.body.find((c) => c.name === 'secret')).toBeTruthy();
+    expect(listRes.body.channels.find((c) => c.name === 'secret')).toBeTruthy();
   });
 
   test('inviting an unknown username to a channel 400s', async () => {

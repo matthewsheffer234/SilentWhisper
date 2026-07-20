@@ -42,20 +42,7 @@ Design:
 - **No schema/authz/audit implications** — this is CI plumbing only, one new file (`.github/workflows/ci.yml`).
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
-### 2. Paginate the remaining unbounded roster/list endpoints
-
-**Status**: Proposed
-**Utility**: Message history and the admin user/workspace rosters are already cursor/offset-bounded; several other list routes called on ordinary page loads (workspace sidebar, channel list, DM list) still return every matching row regardless of how large the caller's history has grown, which the 100-concurrent-user target does nothing to cap.
-**Origin**: `docs/reviews/security-performance-review-2026-07-19.md` Finding 6 (Medium).
-
-Design:
-- Extend the existing `parseOffsetPagination`/`parsePagination` helpers (`backend/src/validation.js`) to: `GET /api/direct-messages`, `GET /api/organizations`, `GET /api/organizations/:orgId/members`, `GET /api/workspaces/:workspaceId/members`, `GET /api/workspaces/:workspaceId/channels` (also replacing its per-row correlated `COUNT(*)` member-count subquery with a single pre-aggregated join, still paginating the outer channel rows), and `GET /api/workspaces/:workspaceId/channels/:channelId/members` — following the exact precedent `GET /admin/users`/`GET /workspaces/admin/all` already set (`{items, total, limit, offset}` response shape).
-- Separately, `markAllMentionNotificationsRead()` (`backend/src/services/mentionNotificationService.js`) changes from select-every-matching-id-then-`UPDATE ... WHERE id IN (...)` to a single set-based `UPDATE ... WHERE ... RETURNING id`, with the channel-membership check expressed as an inline `whereExists` rather than a separately materialized id array.
-- Frontend call sites for each paginated route need matching pager/cursor UI or "load more" affordances wherever the current UI assumes a complete list (sidebar, channel list, member list); scope this per-route during implementation rather than assuming one shared UI pattern fits all six.
-- No authz change — pagination doesn't alter who can see what, only how much comes back per call.
-- Tests: each updated route rejects malformed pagination params consistently with the existing admin routes' behavior and returns the correct bounded page; a regression test confirms `markAllMentionNotificationsRead` still only touches notifications the caller can actually see (channel membership still enforced) under the new single-statement form.
-
-### 3. Channel attention and health views
+### 2. Channel attention and health views
 
 **Status**: Proposed
 **Utility**: Notification counts tell users that something happened; attention views tell them what needs a response. This helps teams manage fast channels without relying on manual scanning.
@@ -70,7 +57,7 @@ Design:
 - Audit: ordinary read/dismiss state does not need high-volume audit logging unless it becomes admin-visible. AI-generated blocker/question extraction should be audited like other AI actions with counts and prompt versions only.
 - Tests: read-state isolation, private-channel filtering, deterministic attention row generation, dismiss/resolve behavior, and e2e for opening an attention row into the right channel/thread.
 
-### 4. Entity pages as a lightweight knowledge base
+### 3. Entity pages as a lightweight knowledge base
 
 **Status**: Proposed
 **Utility**: The existing `[[Entity Name]]` registry can become more than backlinks: it can be Silent Whisper's local knowledge graph for projects, customers, systems, incidents, and decisions.
@@ -86,6 +73,18 @@ Design:
 - Tests: metadata editing, alias normalization/collision behavior, relationship isolation across workspaces, private-reference filtering, and frontend e2e for editing an entity and navigating related context.
 
 ## Done
+
+### Paginate the remaining unbounded roster/list endpoints
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Paginate the remaining unbounded roster/list endpoints" (2026-07-20). `docs/reviews/security-performance-review-2026-07-19.md` Finding 6 (Medium, originally ranked entry 2).
+
+`GET /api/direct-messages`, `GET /api/organizations`, `GET /api/organizations/:orgId/members`, `GET /api/workspaces/:workspaceId/members`, `GET /api/workspaces/:workspaceId/channels`, and `GET /api/workspaces/:workspaceId/channels/:channelId/members` all gained `parseOffsetPagination`, following `GET /admin/users`/`GET /workspaces/admin/all`'s precedent — `{<resource>, total, limit, offset}`, the resource-named field matching each route's own noun rather than a generic `items`. `GET /api/direct-messages`'s "most recent activity first" ordering moved from a post-fetch JS `.sort()` (which would have run after `LIMIT` already cut the page) to a `LEFT JOIN LATERAL` finding each channel's latest main-feed message so Postgres can order and paginate in one query. `GET /api/workspaces/:workspaceId/channels` also replaced its per-row correlated `COUNT(*)` member-count subquery with a single pre-aggregated `channel_members` `GROUP BY` join. `markAllMentionNotificationsRead()` (`backend/src/services/mentionNotificationService.js`) moved from select-every-matching-id-then-`UPDATE ... WHERE id IN (...)` to a single set-based `UPDATE ... WHERE ... RETURNING id`, with channel membership expressed as an inline `whereExists`.
+
+Frontend: `SystemAdminPanel.jsx`'s `Pager` component was lifted into a shared `frontend/src/components/Pager.jsx`, reused by new `Pager` UI in `OrgManagementPanel.jsx`/`UserManagementPanel.jsx`/`ChannelDetailsPanel.jsx`'s member rosters. The three navigational "my complete set of X" lists (sidebar channels, DM list, org switcher) kept their existing flat-array contract instead — a new `fetchAllPages()` helper (`api/client.js`) loops bounded pages behind `listOrganizations`/`listChannels`/`listDirectMessages`'s unchanged signatures, so no sidebar/switcher call site needed to change for a pager UI that would have been a real navigation regression.
+
+**Tests**: each of the six routes gained malformed-pagination-params and correctly-bounded-page cases. `mentionNotifications.test.js` gained a regression test proving read-all still respects channel membership (a mention in a channel the caller has since left stays unread) under the new single-statement form. `organizations.test.js`'s "system admin sees every org" test was reworked to compute the expected offset from the reported `total`, since `organizations` is deliberately never cleared between tests and a freshly created row's position keeps drifting later as the whole run's row count grows.
+
+**Verification**: 540/541 backend tests pass (the one failure the same pre-existing, previously-documented `aiRoutes.test.js` audit-row race — passes in isolation, confirmed unrelated to this change). 92/92 frontend unit tests pass, clean production build. `scripts/verify-audit-log.mjs` run clean (3 rows, chain intact). Not independently verified in a live browser this session — the new `Pager` usage is structurally identical to `SystemAdminPanel.jsx`'s already-verified original, and the three navigational lists are unchanged from the caller's perspective by design.
 
 ### Serialize DM creation to prevent duplicate-channel races
 

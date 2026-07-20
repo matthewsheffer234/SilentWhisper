@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
+import Pager from './Pager.jsx';
 import {
   listWorkspaceMembers,
   changeWorkspaceMemberRole,
@@ -109,6 +110,10 @@ const styles = {
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '8px 0' },
 };
 
+// FEATURE_REQUEST.md entry 2: GET /workspaces/:workspaceId/members is now
+// offset-paginated server-side.
+const MEMBERS_PAGE_SIZE = 50;
+
 // FEATURE_REQUEST.md's "confirmation and recovery for destructive or
 // high-impact actions" entry: entering a new password and submitting the
 // inline form no longer resets it directly — it opens a ConfirmDialog
@@ -181,18 +186,24 @@ export default function UserManagementPanel({ workspaces, onClose }) {
   const adminWorkspaces = workspaces.filter((ws) => hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS));
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(adminWorkspaces[0]?.id ?? null);
   const [members, setMembers] = useState([]);
+  const [membersOffset, setMembersOffset] = useState(0);
+  const [membersTotal, setMembersTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [invitations, setInvitations] = useState([]);
   const [confirmRemove, setConfirmRemove] = useState(null); // member pending removal
   const [confirmRevoke, setConfirmRevoke] = useState(null); // invitation pending revocation
 
-  function loadMembers(workspaceId) {
+  function loadMembers(workspaceId, offset = 0) {
     if (!workspaceId) return;
     setLoading(true);
     setError(null);
-    listWorkspaceMembers(workspaceId)
-      .then(setMembers)
+    listWorkspaceMembers(workspaceId, { limit: MEMBERS_PAGE_SIZE, offset })
+      .then((res) => {
+        setMembers(res.members);
+        setMembersOffset(res.offset);
+        setMembersTotal(res.total);
+      })
       .catch((err) => setError(err.message || 'Failed to load members'))
       .finally(() => setLoading(false));
   }
@@ -218,7 +229,7 @@ export default function UserManagementPanel({ workspaces, onClose }) {
   async function handleRoleChange(userId, role) {
     try {
       await changeWorkspaceMemberRole(selectedWorkspaceId, userId, role);
-      loadMembers(selectedWorkspaceId);
+      loadMembers(selectedWorkspaceId, membersOffset);
     } catch (err) {
       setError(err.message || 'Failed to change role');
     }
@@ -227,7 +238,7 @@ export default function UserManagementPanel({ workspaces, onClose }) {
   async function handleRemove(userId) {
     try {
       await removeWorkspaceMember(selectedWorkspaceId, userId);
-      loadMembers(selectedWorkspaceId);
+      loadMembers(selectedWorkspaceId, membersOffset);
     } catch (err) {
       setError(err.message || 'Failed to remove member');
     }
@@ -310,6 +321,12 @@ export default function UserManagementPanel({ workspaces, onClose }) {
             </tbody>
           </table>
         )}
+        <Pager
+          offset={membersOffset}
+          limit={MEMBERS_PAGE_SIZE}
+          total={membersTotal}
+          onPageChange={(offset) => loadMembers(selectedWorkspaceId, offset)}
+        />
 
         <div style={styles.sectionTitle}>Pending invitations</div>
         {invitations.length === 0 ? (

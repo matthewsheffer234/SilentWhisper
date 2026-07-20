@@ -1,4 +1,4 @@
-import { apiFetch } from './client.js';
+import { apiFetch, fetchAllPages } from './client.js';
 
 // organizationId stays optional everywhere below (FEATURE_REQUEST.md entry 1,
 // slice 3): the backend defaults to the caller's sole org membership when
@@ -40,7 +40,16 @@ export const listDiscoverableWorkspaces = (organizationId) =>
 export const subscribeToWorkspace = (workspaceId) =>
   apiFetch(`/workspaces/${workspaceId}/subscribe`, { method: 'POST' });
 
-export const listWorkspaceMembers = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/members`);
+// FEATURE_REQUEST.md entry 2: now offset-paginated ({members, total, limit,
+// offset}) — UserManagementPanel.jsx renders a Pager against the raw
+// response instead of a flat array.
+export const listWorkspaceMembers = (workspaceId, { limit, offset } = {}) => {
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set('limit', limit);
+  if (offset !== undefined) params.set('offset', offset);
+  const qs = params.toString();
+  return apiFetch(`/workspaces/${workspaceId}/members${qs ? `?${qs}` : ''}`);
+};
 export const changeWorkspaceMemberRole = (workspaceId, userId, role) =>
   apiFetch(`/workspaces/${workspaceId}/members/${userId}`, { method: 'PATCH', body: { role } });
 export const removeWorkspaceMember = (workspaceId, userId) =>
@@ -66,7 +75,11 @@ export const changeWorkspaceVisibility = (workspaceId, visibility) =>
 export const updateWorkspaceSettings = (workspaceId, { managersCanArchive }) =>
   apiFetch(`/workspaces/${workspaceId}/settings`, { method: 'POST', body: { managersCanArchive } });
 
-export const listChannels = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/channels`);
+// FEATURE_REQUEST.md entry 2: GET /workspaces/:workspaceId/channels is now
+// offset-paginated server-side; this loops every page into the flat list
+// the channel sidebar renders, rather than pushing pager UI onto ordinary
+// channel navigation.
+export const listChannels = (workspaceId) => fetchAllPages(`/workspaces/${workspaceId}/channels`, 'channels');
 export const createChannel = (workspaceId, name, type) =>
   apiFetch(`/workspaces/${workspaceId}/channels`, { method: 'POST', body: { name, type } });
 export const joinChannel = (workspaceId, channelId) =>
@@ -75,9 +88,17 @@ export const addChannelMember = (workspaceId, channelId, username) =>
   apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members`, { method: 'POST', body: { username } });
 
 // FEATURE_REQUEST.md's "channel details panel" entry — the full roster, not
-// the mention-autocomplete search endpoint above.
-export const listChannelMembers = (workspaceId, channelId) =>
-  apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members`);
+// the mention-autocomplete search endpoint above. FEATURE_REQUEST.md entry
+// 2: now offset-paginated ({members, total, limit, offset}) —
+// ChannelDetailsPanel.jsx renders a Pager against the raw response instead
+// of a flat array.
+export const listChannelMembers = (workspaceId, channelId, { limit, offset } = {}) => {
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set('limit', limit);
+  if (offset !== undefined) params.set('offset', offset);
+  const qs = params.toString();
+  return apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members${qs ? `?${qs}` : ''}`);
+};
 
 export const listMessages = (channelId, { limit, before, parentMessageId } = {}) => {
   const params = new URLSearchParams();

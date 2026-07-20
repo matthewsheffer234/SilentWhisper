@@ -44,11 +44,60 @@ describe('GET /api/direct-messages', () => {
 
     const aliceList = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
     expect(aliceList.status).toBe(200);
-    expect(aliceList.body.map((c) => c.id).sort()).toEqual([dmRes.body.id, groupRes.body.id].sort());
+    expect(aliceList.body.directMessages.map((c) => c.id).sort()).toEqual([dmRes.body.id, groupRes.body.id].sort());
+    expect(aliceList.body.total).toBe(2);
+    expect(aliceList.body.limit).toBe(50);
+    expect(aliceList.body.offset).toBe(0);
 
     const outsiderList = await request(app).get('/api/direct-messages').set(authHeader(outsider.accessToken));
     expect(outsiderList.status).toBe(200);
-    expect(outsiderList.body).toEqual([]);
+    expect(outsiderList.body).toEqual({ directMessages: [], total: 0, limit: 50, offset: 0 });
+  });
+
+  test('rejects malformed pagination params consistently with the admin routes', async () => {
+    const alice = await signup('dmalicepaging');
+
+    const badLimit = await request(app)
+      .get('/api/direct-messages?limit=0')
+      .set(authHeader(alice.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await request(app)
+      .get('/api/direct-messages?offset=-1')
+      .set(authHeader(alice.accessToken));
+    expect(badOffset.status).toBe(400);
+  });
+
+  test('returns a correctly bounded page via limit/offset', async () => {
+    const alice = await signup('dmalicepage2');
+    const others = await Promise.all(
+      Array.from({ length: 3 }, (_, i) => signup(`dmalicepage2peer${i}`)),
+    );
+    for (const other of others) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(app)
+        .post('/api/direct-messages')
+        .set(authHeader(alice.accessToken))
+        .send({ targetUserId: other.userId });
+    }
+
+    const page1 = await request(app)
+      .get('/api/direct-messages?limit=2&offset=0')
+      .set(authHeader(alice.accessToken));
+    expect(page1.status).toBe(200);
+    expect(page1.body.directMessages).toHaveLength(2);
+    expect(page1.body.total).toBe(3);
+
+    const page2 = await request(app)
+      .get('/api/direct-messages?limit=2&offset=2')
+      .set(authHeader(alice.accessToken));
+    expect(page2.status).toBe(200);
+    expect(page2.body.directMessages).toHaveLength(1);
+    expect(page2.body.total).toBe(3);
+
+    const page1Ids = page1.body.directMessages.map((c) => c.id);
+    const page2Ids = page2.body.directMessages.map((c) => c.id);
+    expect(new Set([...page1Ids, ...page2Ids]).size).toBe(3);
   });
 
   test('members array excludes the caller and includes displayName/username for every other participant', async () => {
@@ -62,7 +111,7 @@ describe('GET /api/direct-messages', () => {
       .send({ memberIds: [bob.userId, carol.userId] });
 
     const list = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
-    const group = list.body.find((c) => c.id === groupRes.body.id);
+    const group = list.body.directMessages.find((c) => c.id === groupRes.body.id);
     expect(group.type).toBe('GROUP_DM');
     expect(group.members.map((m) => m.userId).sort()).toEqual([bob.userId, carol.userId].sort());
     expect(group.members.every((m) => m.userId !== alice.userId)).toBe(true);
@@ -79,7 +128,7 @@ describe('GET /api/direct-messages', () => {
       .send({ targetUserId: bob.userId });
 
     const emptyList = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
-    expect(emptyList.body.find((c) => c.id === dmRes.body.id).lastMessage).toBeNull();
+    expect(emptyList.body.directMessages.find((c) => c.id === dmRes.body.id).lastMessage).toBeNull();
 
     await request(app)
       .post(`/api/channels/${dmRes.body.id}/messages`)
@@ -87,7 +136,7 @@ describe('GET /api/direct-messages', () => {
       .send({ content: 'hello there' });
 
     const list = await request(app).get('/api/direct-messages').set(authHeader(bob.accessToken));
-    const dm = list.body.find((c) => c.id === dmRes.body.id);
+    const dm = list.body.directMessages.find((c) => c.id === dmRes.body.id);
     expect(dm.lastMessage.content).toBe('hello there');
     expect(dm.lastMessage.userId).toBe(alice.userId);
   });
@@ -115,8 +164,8 @@ describe('GET /api/direct-messages', () => {
       .send({ content: 'to bob, sent last' });
 
     const list = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
-    expect(list.body[0].id).toBe(dmBob.body.id);
-    expect(list.body.some((c) => c.id === dmCarol.body.id)).toBe(true);
+    expect(list.body.directMessages[0].id).toBe(dmBob.body.id);
+    expect(list.body.directMessages.some((c) => c.id === dmCarol.body.id)).toBe(true);
   });
 });
 

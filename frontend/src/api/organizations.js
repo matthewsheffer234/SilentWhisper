@@ -1,8 +1,21 @@
-import { apiFetch } from './client.js';
+import { apiFetch, fetchAllPages } from './client.js';
 
-export const listOrganizations = () => apiFetch('/organizations');
+// FEATURE_REQUEST.md entry 2: GET /organizations is now offset-paginated
+// server-side; this loops every page into the flat list the org
+// switcher/System Admin panel render, rather than pushing pager UI onto a
+// list that's ordinarily just "every org the caller belongs to."
+export const listOrganizations = () => fetchAllPages('/organizations', 'organizations');
 export const createOrganization = (name) => apiFetch('/organizations', { method: 'POST', body: { name } });
-export const listOrgMembers = (orgId) => apiFetch(`/organizations/${orgId}/members`);
+// FEATURE_REQUEST.md entry 2: now offset-paginated ({members, total, limit,
+// offset}) — OrgManagementPanel.jsx renders a Pager against the raw
+// response instead of a flat array, unlike listOrganizations above.
+export const listOrgMembers = (orgId, { limit, offset } = {}) => {
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set('limit', limit);
+  if (offset !== undefined) params.set('offset', offset);
+  const qs = params.toString();
+  return apiFetch(`/organizations/${orgId}/members${qs ? `?${qs}` : ''}`);
+};
 export const addOrgMember = (orgId, username, role) =>
   apiFetch(`/organizations/${orgId}/members`, { method: 'POST', body: { username, role } });
 export const changeOrgMemberRole = (orgId, userId, role) =>

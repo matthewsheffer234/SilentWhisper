@@ -81,4 +81,29 @@ export async function apiFetch(path, { method = 'GET', body, headers = {}, _isRe
   return data;
 }
 
+// FEATURE_REQUEST.md entry 2: several list endpoints the sidebar/switcher
+// UI treats as "my complete set of X" (own workspaces/orgs/channels/DMs)
+// became offset-paginated server-side so no single request scans an
+// unbounded table. Rather than push pager UI onto every navigational list
+// (a real UX regression for "which channels am I in"), this loops bounded
+// pages back into the flat array those call sites already expect —
+// `itemsKey` names the response field the paginated route actually returns
+// (e.g. "channels", "organizations" — matching GET /admin/users' and
+// GET /workspaces/admin/all's precedent of naming the field after the
+// resource, not a generic "items").
+export async function fetchAllPages(path, itemsKey, { pageSize = 100 } = {}) {
+  let offset = 0;
+  const all = [];
+  for (;;) {
+    const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset) });
+    const sep = path.includes('?') ? '&' : '?';
+    const page = await apiFetch(`${path}${sep}${params.toString()}`);
+    const rows = page[itemsKey];
+    all.push(...rows);
+    offset += rows.length;
+    if (rows.length === 0 || offset >= page.total) break;
+  }
+  return all;
+}
+
 export { refreshAccessToken, API_BASE };

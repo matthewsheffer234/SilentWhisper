@@ -644,20 +644,31 @@ workspacesRouter.post(
 // mutating actions below, rather than requireWorkspaceMember — this stays a tightly
 // admin-dashboard-scoped roster, not a general "list my workspace's
 // members" endpoint any member could call.
+// FEATURE_REQUEST.md entry 2: offset-paginated ({members, total, limit,
+// offset}), following GET /admin/users' precedent.
 workspacesRouter.get('/:workspaceId/members', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('workspace_members as wm')
-      .join('users', 'users.id', 'wm.user_id')
-      .where('wm.workspace_id', workspaceId)
-      .select('users.id', 'users.username', 'users.display_name', 'wm.system_role')
-      .orderBy('users.username', 'asc');
+    const [{ count }, rows] = await Promise.all([
+      db('workspace_members').where('workspace_id', workspaceId).count('user_id as count').first(),
+      db('workspace_members as wm')
+        .join('users', 'users.id', 'wm.user_id')
+        .where('wm.workspace_id', workspaceId)
+        .select('users.id', 'users.username', 'users.display_name', 'wm.system_role')
+        .orderBy('users.username', 'asc')
+        .limit(limit)
+        .offset(offset),
+    ]);
 
-    res.json(
-      rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name, role: r.system_role })),
-    );
+    res.json({
+      members: rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name, role: r.system_role })),
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }
@@ -1099,32 +1110,41 @@ workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
 // listable even before joining) plus PRIVATE channels the user already
 // belongs to. Never lists a PRIVATE channel the user isn't a member of
 // (Section 3, Authorization Model).
+//
+// FEATURE_REQUEST.md entry 2: offset-paginated ({channels, total, limit,
+// offset}), following GET /admin/users' precedent. Also replaces the
+// per-row correlated `COUNT(*)` member-count subquery (one execution per
+// visible channel row) with a single pre-aggregated `channel_members`
+// GROUP BY joined in once — same member counts, no per-row rescan.
 workspacesRouter.get('/:workspaceId/channels', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspaceMember(db, req.user.id, workspaceId);
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    // FEATURE_REQUEST.md's "channel details panel" entry: the channel
-    // header shows member count without a separate fetch, so it's a
-    // correlated subquery here rather than a second LEFT JOIN — that would
-    // multiply rows (one per member) and require an extra GROUP BY across
-    // every other already-selected column.
-    const rows = await db('channels as c')
-      .leftJoin('channel_members as cm', function joinMembership() {
-        this.on('cm.channel_id', '=', 'c.id').andOn('cm.user_id', '=', db.raw('?', [req.user.id]));
-      })
-      .where('c.workspace_id', workspaceId)
-      .andWhere((builder) => builder.where('c.type', 'PUBLIC').orWhereNotNull('cm.user_id'))
-      .select('c.id', 'c.name', 'c.type', 'c.created_at')
-      .select(db.raw('(cm.user_id IS NOT NULL) as "isMember"'))
-      .select(
-        db.raw(
-          '(SELECT COUNT(*) FROM channel_members WHERE channel_members.channel_id = c.id)::int as "memberCount"',
-        ),
-      )
-      .orderBy('c.created_at', 'asc');
+    const joinMembership = function joinMembership() {
+      this.on('cm.channel_id', '=', 'c.id').andOn('cm.user_id', '=', db.raw('?', [req.user.id]));
+    };
+    const visibleToCallerFilter = (builder) =>
+      builder.where('c.workspace_id', workspaceId).andWhere((b) => b.where('c.type', 'PUBLIC').orWhereNotNull('cm.user_id'));
 
-    res.json(rows);
+    const memberCounts = db('channel_members').select('channel_id').count('user_id as memberCount').groupBy('channel_id').as('mc');
+
+    const [{ count }, rows] = await Promise.all([
+      db('channels as c').leftJoin('channel_members as cm', joinMembership).modify(visibleToCallerFilter).count('c.id as count').first(),
+      db('channels as c')
+        .leftJoin('channel_members as cm', joinMembership)
+        .leftJoin(memberCounts, 'mc.channel_id', 'c.id')
+        .modify(visibleToCallerFilter)
+        .select('c.id', 'c.name', 'c.type', 'c.created_at')
+        .select(db.raw('(cm.user_id IS NOT NULL) as "isMember"'))
+        .select(db.raw('COALESCE(mc."memberCount", 0)::int as "memberCount"'))
+        .orderBy('c.created_at', 'asc')
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    res.json({ channels: rows, total: Number(count), limit, offset });
   } catch (err) {
     next(err);
   }
@@ -1167,9 +1187,11 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/join', async (req, res,
 // roster for the panel's own member list — deliberately not the
 // GET /channels/:channelId/members mention-autocomplete endpoint
 // (messages.js), which is search-driven and capped at 8 results by design.
-// This one is a plain, uncapped listing, gated the same as adding a member
+// This one is a plain listing, gated the same as adding a member
 // (requireChannelMember) since seeing the full roster is no more sensitive
-// than being able to grow it.
+// than being able to grow it. FEATURE_REQUEST.md entry 2: offset-paginated
+// ({members, total, limit, offset}), following GET /admin/users' precedent
+// (was previously the one genuinely uncapped route in this list).
 workspacesRouter.get('/:workspaceId/channels/:channelId/members', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
@@ -1178,14 +1200,25 @@ workspacesRouter.get('/:workspaceId/channels/:channelId/members', async (req, re
     if (channel.workspace_id !== workspaceId) {
       throw new ValidationError('Channel not found in this workspace');
     }
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('channel_members as cm')
-      .join('users', 'users.id', 'cm.user_id')
-      .where('cm.channel_id', channelId)
-      .select('users.id', 'users.username', 'users.display_name')
-      .orderBy('users.username', 'asc');
+    const [{ count }, rows] = await Promise.all([
+      db('channel_members').where('channel_id', channelId).count('user_id as count').first(),
+      db('channel_members as cm')
+        .join('users', 'users.id', 'cm.user_id')
+        .where('cm.channel_id', channelId)
+        .select('users.id', 'users.username', 'users.display_name')
+        .orderBy('users.username', 'asc')
+        .limit(limit)
+        .offset(offset),
+    ]);
 
-    res.json(rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name })));
+    res.json({
+      members: rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name })),
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }

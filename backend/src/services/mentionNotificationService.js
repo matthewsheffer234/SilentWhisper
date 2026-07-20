@@ -155,18 +155,23 @@ export async function markMentionNotificationRead(db, userId, notificationId) {
   return { id: row.id, readAt: row.read_at };
 }
 
+// FEATURE_REQUEST.md entry 2: a single set-based UPDATE instead of
+// select-every-matching-id-then-`UPDATE ... WHERE id IN (...)` — the
+// channel-membership check (a caller can only mark read what they can
+// still see) is expressed as an inline whereExists rather than a
+// separately materialized id array, matching baseVisibleNotificationsQuery's
+// own join-based membership check exactly.
 export async function markAllMentionNotificationsRead(db, userId) {
-  const visibleIds = await baseVisibleNotificationsQuery(db, userId)
-    .whereNull('mention_notifications.read_at')
-    .select('mention_notifications.id');
-  if (visibleIds.length === 0) {
-    return { updated: 0 };
-  }
-
-  const ids = visibleIds.map((r) => r.id);
   const rows = await db('mention_notifications')
-    .whereIn('id', ids)
-    .where({ recipient_user_id: userId })
+    .where('mention_notifications.recipient_user_id', userId)
+    .whereNull('mention_notifications.read_at')
+    .whereNull('mention_notifications.dismissed_at')
+    .whereExists(function channelMembership() {
+      this.select(1)
+        .from('channel_members')
+        .whereRaw('channel_members.channel_id = mention_notifications.channel_id')
+        .andWhere('channel_members.user_id', userId);
+    })
     .update({ read_at: db.fn.now() })
     .returning('id');
   return { updated: rows.length };

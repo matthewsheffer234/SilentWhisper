@@ -226,4 +226,63 @@ describe('mention notifications', () => {
     expect(res.body.summary.unreadCount).toBe(0);
     expect(res.body.notifications).toEqual([]);
   });
+
+  // FEATURE_REQUEST.md entry 2: markAllMentionNotificationsRead moved from
+  // select-ids-then-UPDATE...WHERE id IN (...) to a single set-based UPDATE
+  // with the channel-membership check expressed as an inline whereExists.
+  // This pins that the membership scoping still holds under the new form —
+  // a mention in a channel the caller has since left must not be flipped to
+  // read by "read all," even though the row still belongs to them.
+  test('read-all still only touches notifications in channels the caller can currently see', async () => {
+    const owner = await signup('notifreadall0');
+    const member = await signup('notifreadallmember0');
+    const { workspaceId, channelId: staleChannelId } = await createChannelAsMember(owner);
+    await addMember(workspaceId, staleChannelId, member);
+    const visibleChRes = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'still-here', type: 'PUBLIC' });
+    const visibleChannelId = visibleChRes.body.id;
+    // `member` is already a workspace_members row from the addMember call
+    // above — only the channel join is needed for this second PUBLIC
+    // channel, not another workspace_members insert (addMember's insert
+    // would collide on workspace_members' composite primary key).
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${visibleChannelId}/join`)
+      .set(authHeader(member.accessToken));
+
+    await request(app)
+      .post(`/api/channels/${staleChannelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: '@notifreadallmember0 in a channel you will leave' })
+      .expect(201);
+    await request(app)
+      .post(`/api/channels/${visibleChannelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: '@notifreadallmember0 in a channel you will keep' })
+      .expect(201);
+    await runMessageSideEffectsWorkerTick(db);
+
+    const staleNotification = await db('mention_notifications')
+      .where({ recipient_user_id: member.userId, channel_id: staleChannelId })
+      .first();
+    const visibleNotification = await db('mention_notifications')
+      .where({ recipient_user_id: member.userId, channel_id: visibleChannelId })
+      .first();
+    expect(staleNotification.read_at).toBeNull();
+    expect(visibleNotification.read_at).toBeNull();
+
+    await db('channel_members').where({ channel_id: staleChannelId, user_id: member.userId }).del();
+
+    const result = await request(app)
+      .post('/api/notifications/mentions/read-all')
+      .set(authHeader(member.accessToken))
+      .expect(200);
+    expect(result.body.updated).toBe(1);
+
+    const staleAfter = await db('mention_notifications').where({ id: staleNotification.id }).first();
+    const visibleAfter = await db('mention_notifications').where({ id: visibleNotification.id }).first();
+    expect(staleAfter.read_at).toBeNull();
+    expect(visibleAfter.read_at).not.toBeNull();
+  });
 });

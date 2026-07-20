@@ -3,7 +3,12 @@ import { Hash, Lock } from 'lucide-react';
 import Sheet from './Sheet.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
 import PresenceBadge from './PresenceBadge.jsx';
+import Pager from './Pager.jsx';
 import { listChannelMembers, searchWorkspaceMembers } from '../api/workspaces.js';
+
+// FEATURE_REQUEST.md entry 2: GET .../channels/:channelId/members is now
+// offset-paginated server-side.
+const MEMBERS_PAGE_SIZE = 50;
 
 // FEATURE_REQUEST.md's "channel details panel with private-channel member
 // management" entry: makes channel membership a channel-level detail,
@@ -64,14 +69,25 @@ export default function ChannelDetailsPanel({
   onClose,
 }) {
   const [members, setMembers] = useState(null);
+  const [membersOffset, setMembersOffset] = useState(0);
+  const [membersTotal, setMembersTotal] = useState(0);
   const [error, setError] = useState(null);
   const [person, setPerson] = useState(null);
   const [addStatus, setAddStatus] = useState(null);
 
-  useEffect(() => {
-    listChannelMembers(workspaceId, channel.id)
-      .then(setMembers)
+  function loadMembers(offset = 0) {
+    listChannelMembers(workspaceId, channel.id, { limit: MEMBERS_PAGE_SIZE, offset })
+      .then((res) => {
+        setMembers(res.members);
+        setMembersOffset(res.offset);
+        setMembersTotal(res.total);
+      })
       .catch((err) => setError(err.message || 'Failed to load members'));
+  }
+
+  useEffect(() => {
+    loadMembers(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, channel.id]);
 
   async function handleAddPerson() {
@@ -81,15 +97,14 @@ export default function ChannelDetailsPanel({
       await onAddMember(channel.id, person.username);
       setAddStatus({ type: 'success', message: `Added ${person.displayName || person.username} to the channel` });
       setPerson(null);
-      const refreshed = await listChannelMembers(workspaceId, channel.id);
-      setMembers(refreshed);
+      loadMembers(membersOffset);
     } catch (err) {
       setAddStatus({ type: 'error', message: err.message || 'Failed to add member' });
     }
   }
 
   const isPrivate = channel.type === 'PRIVATE';
-  const memberCount = channel.memberCount ?? members?.length;
+  const memberCount = channel.memberCount ?? membersTotal;
 
   return (
     <Sheet
@@ -120,6 +135,7 @@ export default function ChannelDetailsPanel({
             {m.displayName && m.displayName !== m.username && <span style={styles.memberUsername}>@{m.username}</span>}
           </div>
         ))}
+        <Pager offset={membersOffset} limit={MEMBERS_PAGE_SIZE} total={membersTotal} onPageChange={loadMembers} />
       </div>
 
       {canAddMembers && !archived && (

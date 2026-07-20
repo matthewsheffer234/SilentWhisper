@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
+import Pager from './Pager.jsx';
 import {
   listOrgMembers,
   changeOrgMemberRole,
@@ -103,6 +104,10 @@ const styles = {
   row: { display: 'flex', gap: 12 },
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '8px 0' },
 };
+
+// FEATURE_REQUEST.md entry 2: GET /organizations/:orgId/members is now
+// offset-paginated server-side.
+const MEMBERS_PAGE_SIZE = 50;
 
 // FEATURE_REQUEST.md's "unified people picker" entry replaced the raw
 // exact-username input with PeoplePicker, matching
@@ -237,18 +242,24 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
     manageableOrgs.some((o) => o.id === initialOrgId) ? initialOrgId : (manageableOrgs[0]?.id ?? null),
   );
   const [members, setMembers] = useState([]);
+  const [membersOffset, setMembersOffset] = useState(0);
+  const [membersTotal, setMembersTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [invitations, setInvitations] = useState([]);
   const [confirmRemove, setConfirmRemove] = useState(null); // member pending removal
   const [confirmRevoke, setConfirmRevoke] = useState(null); // invitation pending revocation
 
-  function loadMembers(orgId) {
+  function loadMembers(orgId, offset = 0) {
     if (!orgId) return;
     setLoading(true);
     setError(null);
-    listOrgMembers(orgId)
-      .then(setMembers)
+    listOrgMembers(orgId, { limit: MEMBERS_PAGE_SIZE, offset })
+      .then((res) => {
+        setMembers(res.members);
+        setMembersOffset(res.offset);
+        setMembersTotal(res.total);
+      })
       .catch((err) => setError(err.message || 'Failed to load members'))
       .finally(() => setLoading(false));
   }
@@ -269,7 +280,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
   async function handleRoleChange(userId, role) {
     try {
       await changeOrgMemberRole(selectedOrgId, userId, role);
-      loadMembers(selectedOrgId);
+      loadMembers(selectedOrgId, membersOffset);
     } catch (err) {
       setError(err.message || 'Failed to change role');
     }
@@ -278,7 +289,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
   async function handleRemove(userId) {
     try {
       await removeOrgMember(selectedOrgId, userId);
-      loadMembers(selectedOrgId);
+      loadMembers(selectedOrgId, membersOffset);
     } catch (err) {
       setError(err.message || 'Failed to remove member');
     }
@@ -286,7 +297,7 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
 
   async function handleAddMember(username, role) {
     await addOrgMember(selectedOrgId, username, role);
-    loadMembers(selectedOrgId);
+    loadMembers(selectedOrgId, membersOffset);
   }
 
   async function handleInviteMembership(userId, role) {
@@ -373,6 +384,12 @@ export default function OrgManagementPanel({ organizations, initialOrgId, isSyst
             </tbody>
           </table>
         )}
+        <Pager
+          offset={membersOffset}
+          limit={MEMBERS_PAGE_SIZE}
+          total={membersTotal}
+          onPageChange={(offset) => loadMembers(selectedOrgId, offset)}
+        />
 
         <div style={styles.sectionTitle}>Add an existing member</div>
         <AddMemberForm orgId={selectedOrgId} onSubmit={handleAddMember} onInvite={handleInviteMembership} />

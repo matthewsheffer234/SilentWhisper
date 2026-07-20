@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { assertUuid, MAX_GROUP_DM_MEMBERS } from '../validation.js';
+import { assertUuid, MAX_GROUP_DM_MEMBERS, parseOffsetPagination } from '../validation.js';
 import { ValidationError, NotFoundError } from '../errors.js';
 
 export const directMessagesRouter = Router();
@@ -20,30 +20,71 @@ directMessagesRouter.use(requireAuth);
 // itself is the only authorization check: DIRECT/GROUP_DM channels have no
 // workspace_id to defer to (Section 4), so "is a member of this channel" is
 // the complete story, same as every other channel-membership-gated route.
+//
+// FEATURE_REQUEST.md entry 2: offset-paginated ({directMessages, total,
+// limit, offset}), following GET /admin/users' precedent. The "most recent
+// activity first" ordering has to happen in SQL now, not a post-fetch JS
+// .sort() over every one of the caller's DM channels, or LIMIT/OFFSET would
+// cut the page before the sort had a chance to run. A LATERAL join (like the
+// existing DISTINCT ON query it replaces, this is Postgres-specific and
+// goes through db.raw) finds each channel's own latest main-feed message
+// (thread replies excluded, same scope as before) so ORDER BY can reference
+// it directly, falling back to the channel's own created_at for a DM that's
+// never had a message sent in it yet.
 directMessagesRouter.get('/', async (req, res, next) => {
   try {
-    const channelRows = await db('channels as c')
+    const { limit, offset } = parseOffsetPagination(req.query);
+
+    const countRow = await db('channels as c')
       .join('channel_members as cm', 'cm.channel_id', 'c.id')
       .where('cm.user_id', req.user.id)
       .whereIn('c.type', ['DIRECT', 'GROUP_DM'])
-      .select('c.id', 'c.type', 'c.created_at');
+      .count('c.id as count')
+      .first();
+    const total = Number(countRow.count);
 
-    if (channelRows.length === 0) {
-      res.json([]);
+    if (total === 0) {
+      res.json({ directMessages: [], total, limit, offset });
       return;
     }
+
+    const pageResult = await db.raw(
+      `SELECT c.id, c.type, c.created_at,
+              lm.content AS last_content, lm.created_at AS last_created_at, lm.user_id AS last_user_id
+       FROM channels c
+       JOIN channel_members cm ON cm.channel_id = c.id AND cm.user_id = ?
+       LEFT JOIN LATERAL (
+         SELECT content, created_at, user_id
+         FROM messages
+         WHERE messages.channel_id = c.id AND messages.parent_message_id IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) lm ON true
+       WHERE c.type IN ('DIRECT', 'GROUP_DM')
+       ORDER BY COALESCE(lm.created_at, c.created_at) DESC
+       LIMIT ? OFFSET ?`,
+      [req.user.id, limit, offset],
+    );
+    const channelRows = pageResult.rows;
     const channelIds = channelRows.map((c) => c.id);
 
     // Every other member (never the caller themselves) — a one-to-one DIRECT
     // channel's `members` array is always exactly one person; GROUP_DM's has
     // every other participant, matching the design's "member names, not
     // 'Group Direct Message'" requirement.
-    const memberRows = await db('channel_members as cm')
-      .join('users', 'users.id', 'cm.user_id')
-      .whereIn('cm.channel_id', channelIds)
-      .whereNot('users.id', req.user.id)
-      .orderBy('users.username', 'asc')
-      .select('cm.channel_id as channelId', 'users.id as userId', 'users.username', 'users.display_name as displayName');
+    const memberRows = channelIds.length
+      ? await db('channel_members as cm')
+          .join('users', 'users.id', 'cm.user_id')
+          .whereIn('cm.channel_id', channelIds)
+          .whereNot('users.id', req.user.id)
+          .orderBy('users.username', 'asc')
+          .select(
+            'cm.channel_id as channelId',
+            'users.id as userId',
+            'users.username',
+            'users.display_name as displayName',
+          )
+      : [];
 
     const membersByChannel = new Map();
     for (const row of memberRows) {
@@ -52,44 +93,17 @@ directMessagesRouter.get('/', async (req, res, next) => {
       membersByChannel.set(row.channelId, list);
     }
 
-    // Last main-feed message per channel (thread replies excluded — a
-    // digest of "what's the most recent thing in this conversation" cares
-    // about the top-level feed, same scope messages.js's own channel-history
-    // endpoint defaults to). DISTINCT ON is Postgres-specific and not a
-    // first-class knex builder concept, so this goes through db.raw the same
-    // way embeddingWorker.js's claimBatch already does for its own
-    // Postgres-specific query.
-    const lastMessageResult = await db.raw(
-      `SELECT DISTINCT ON (channel_id) channel_id, content, created_at, user_id
-       FROM messages
-       WHERE channel_id = ANY(?) AND parent_message_id IS NULL
-       ORDER BY channel_id, created_at DESC`,
-      [channelIds],
-    );
-    const lastMessageByChannel = new Map(
-      lastMessageResult.rows.map((r) => [
-        r.channel_id,
-        { content: r.content, createdAt: r.created_at, userId: r.user_id },
-      ]),
-    );
+    const directMessages = channelRows.map((c) => ({
+      id: c.id,
+      type: c.type,
+      members: membersByChannel.get(c.id) ?? [],
+      lastMessage: c.last_created_at
+        ? { content: c.last_content, createdAt: c.last_created_at, userId: c.last_user_id }
+        : null,
+      createdAt: c.created_at,
+    }));
 
-    const result = channelRows
-      .map((c) => ({
-        id: c.id,
-        type: c.type,
-        members: membersByChannel.get(c.id) ?? [],
-        lastMessage: lastMessageByChannel.get(c.id) ?? null,
-        createdAt: c.created_at,
-      }))
-      // Most recent activity first — falls back to the channel's own
-      // created_at for a DM that's never had a message sent in it yet.
-      .sort((a, b) => {
-        const aTime = new Date(a.lastMessage?.createdAt ?? a.createdAt).getTime();
-        const bTime = new Date(b.lastMessage?.createdAt ?? b.createdAt).getTime();
-        return bTime - aTime;
-      });
-
-    res.json(result);
+    res.json({ directMessages, total, limit, offset });
   } catch (err) {
     next(err);
   }

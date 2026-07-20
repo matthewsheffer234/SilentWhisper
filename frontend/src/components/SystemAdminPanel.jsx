@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import CreateOrganizationModal from './CreateOrganizationModal.jsx';
+import Pager from './Pager.jsx';
 import {
   createAdminUser,
   listAdminUsers,
@@ -93,19 +94,6 @@ const styles = {
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
-  pager: { display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0 4px' },
-  pagerButton: {
-    minWidth: 44,
-    minHeight: 44,
-    padding: '0 12px',
-    borderRadius: 6,
-    border: '1px solid var(--border)',
-    background: 'none',
-    color: 'var(--text-2)',
-    fontSize: 'var(--text-xs)',
-    cursor: 'pointer',
-  },
-  pagerLabel: { fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
   rowSelect: {
     minHeight: 36,
     borderRadius: 6,
@@ -136,40 +124,6 @@ const styles = {
 };
 
 const PAGE_SIZE = 50;
-
-// FEATURE_REQUEST.md entry 4: prev/next controls for the offset-paginated
-// admin list endpoints — "Showing 1-50 of 340" rather than the caller having
-// to guess whether it received a full page or the last partial one.
-function Pager({ offset, limit, total, onPageChange }) {
-  if (total === 0) return null;
-  const start = total === 0 ? 0 : offset + 1;
-  const end = Math.min(offset + limit, total);
-  const canPrev = offset > 0;
-  const canNext = offset + limit < total;
-  return (
-    <div style={styles.pager}>
-      <button
-        type="button"
-        style={{ ...styles.pagerButton, opacity: canPrev ? 1 : 0.4 }}
-        disabled={!canPrev}
-        onClick={() => onPageChange(Math.max(0, offset - limit))}
-      >
-        Prev
-      </button>
-      <span style={styles.pagerLabel}>
-        Showing {start}-{end} of {total}
-      </span>
-      <button
-        type="button"
-        style={{ ...styles.pagerButton, opacity: canNext ? 1 : 0.4 }}
-        disabled={!canNext}
-        onClick={() => onPageChange(offset + limit)}
-      >
-        Next
-      </button>
-    </div>
-  );
-}
 
 function CreateAccountForm({ organizations, onSubmit }) {
   const [username, setUsername] = useState('');

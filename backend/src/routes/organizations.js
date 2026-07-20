@@ -10,6 +10,7 @@ import {
   assertBoundedInt,
   MAX_USERNAME_LENGTH,
   ASSIGNABLE_ORG_ROLES,
+  parseOffsetPagination,
 } from '../validation.js';
 import { invitationCreateLimiter, memberSearchLimiter, membershipInvitationCreateLimiter } from '../auth/rateLimit.js';
 import { generateInvitationToken, hashInvitationToken, INVITATION_TOKEN_TTL_MS } from '../auth/invitationTokens.js';
@@ -63,27 +64,48 @@ organizationsRouter.post('/', async (req, res, next) => {
 // a deliberate response-shape asymmetry (no per-row membership guaranteed),
 // same as GET /workspaces/discoverable's existing precedent of omitting
 // `role` when the caller has none yet.
+//
+// FEATURE_REQUEST.md entry 2: offset-paginated ({organizations, total,
+// limit, offset}), following GET /admin/users' precedent.
 organizationsRouter.get('/', async (req, res, next) => {
   try {
+    const { limit, offset } = parseOffsetPagination(req.query);
     const isAdmin = await isSystemAdminUser(db, req.user.id);
-    const rows = isAdmin
-      ? await db('organizations').select('id', 'name', 'created_at', 'archived_at').orderBy('created_at', 'asc')
-      : await db('organizations as o')
-          .join('organization_members as om', function joinMembers() {
-            this.on('om.organization_id', '=', 'o.id').andOn('om.user_id', '=', db.raw('?', [req.user.id]));
-          })
-          .select('o.id', 'o.name', 'o.created_at', 'o.archived_at', 'om.org_role')
-          .orderBy('o.created_at', 'asc');
 
-    res.json(
-      rows.map((r) => ({
+    const joinMembers = function joinMembers() {
+      this.on('om.organization_id', '=', 'o.id').andOn('om.user_id', '=', db.raw('?', [req.user.id]));
+    };
+
+    const [{ count }, rows] = await Promise.all([
+      isAdmin
+        ? db('organizations').count('id as count').first()
+        : db('organizations as o').join('organization_members as om', joinMembers).count('o.id as count').first(),
+      isAdmin
+        ? db('organizations')
+            .select('id', 'name', 'created_at', 'archived_at')
+            .orderBy('created_at', 'asc')
+            .limit(limit)
+            .offset(offset)
+        : db('organizations as o')
+            .join('organization_members as om', joinMembers)
+            .select('o.id', 'o.name', 'o.created_at', 'o.archived_at', 'om.org_role')
+            .orderBy('o.created_at', 'asc')
+            .limit(limit)
+            .offset(offset),
+    ]);
+
+    res.json({
+      organizations: rows.map((r) => ({
         id: r.id,
         name: r.name,
         createdAt: r.created_at,
         archivedAt: r.archived_at,
         role: r.org_role ?? null,
       })),
-    );
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }
@@ -181,20 +203,31 @@ organizationsRouter.post('/:orgId/unarchive', async (req, res, next) => {
   }
 });
 
+// FEATURE_REQUEST.md entry 2: offset-paginated ({members, total, limit,
+// offset}), following GET /admin/users' precedent.
 organizationsRouter.get('/:orgId/members', async (req, res, next) => {
   try {
     const orgId = assertUuid(req.params.orgId, 'orgId');
     await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_MANAGE_MEMBERS);
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('organization_members as om')
-      .join('users', 'users.id', 'om.user_id')
-      .where('om.organization_id', orgId)
-      .select('users.id', 'users.username', 'users.display_name', 'om.org_role')
-      .orderBy('users.username', 'asc');
+    const [{ count }, rows] = await Promise.all([
+      db('organization_members').where('organization_id', orgId).count('user_id as count').first(),
+      db('organization_members as om')
+        .join('users', 'users.id', 'om.user_id')
+        .where('om.organization_id', orgId)
+        .select('users.id', 'users.username', 'users.display_name', 'om.org_role')
+        .orderBy('users.username', 'asc')
+        .limit(limit)
+        .offset(offset),
+    ]);
 
-    res.json(
-      rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name, role: r.org_role })),
-    );
+    res.json({
+      members: rows.map((r) => ({ userId: r.id, username: r.username, displayName: r.display_name, role: r.org_role })),
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }

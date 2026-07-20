@@ -44,12 +44,15 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
     // displayName rides alongside username (FEATURE_REQUEST.md's "display
     // names as the primary identity" entry) — backfilled to match username
     // for both of these test-seeded accounts.
-    expect(res.body).toEqual(
+    expect(res.body.members).toEqual(
       expect.arrayContaining([
         { userId: admin.userId, username: 'wsadmin0', displayName: 'wsadmin0', role: 'OWNER' },
         { userId: member.userId, username: 'wsmember0', displayName: 'wsmember0', role: 'MEMBER' },
       ]),
     );
+    expect(res.body.total).toBe(2);
+    expect(res.body.limit).toBe(50);
+    expect(res.body.offset).toBe(0);
   });
 
   test('a plain member gets 403', async () => {
@@ -69,6 +72,34 @@ describe('GET /api/workspaces/:workspaceId/members', () => {
 
     const res = await request(app).get(`/api/workspaces/${workspaceId}/members`).set(authHeader(outsider.accessToken));
     expect(res.status).toBe(404);
+  });
+
+  test('rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const admin = await signup('wsadminpaging0');
+    const workspaceId = await createWorkspace(admin);
+    for (let i = 0; i < 3; i += 1) {
+      const member = await signup(`wsadminpagingmember${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await addMember(admin, workspaceId, member.username);
+    }
+
+    const badLimit = await request(app)
+      .get(`/api/workspaces/${workspaceId}/members?limit=0`)
+      .set(authHeader(admin.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await request(app)
+      .get(`/api/workspaces/${workspaceId}/members?offset=-1`)
+      .set(authHeader(admin.accessToken));
+    expect(badOffset.status).toBe(400);
+
+    const page = await request(app)
+      .get(`/api/workspaces/${workspaceId}/members?limit=2&offset=0`)
+      .set(authHeader(admin.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.members).toHaveLength(2);
+    // owner + 3 added members = 4 total.
+    expect(page.body.total).toBe(4);
   });
 });
 
