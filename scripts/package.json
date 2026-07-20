@@ -10,12 +10,14 @@
     "grant-system-admin": "node grant-system-admin.mjs",
     "create-first-admin": "node create-first-admin.mjs",
     "clear-test-artifacts": "node clear-test-artifacts.mjs",
-    "seed-springfield-investigation": "node seed-springfield-investigation.mjs"
+    "seed-springfield-investigation": "node seed-springfield-investigation.mjs",
+    "seed-demo-tv-workspace": "node seed-demo-tv-workspace.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "jsonwebtoken": "^9.0.2",
+    "knex": "^3.1.0",
     "pg": "^8.13.1",
     "ws": "^8.18.0"
   }
