@@ -8,6 +8,7 @@ import {
   removeWorkspaceMember,
   resetWorkspaceMemberPassword,
   listWorkspaceInvitations,
+  listAllWorkspacesAdmin,
 } from '../api/workspaces.js';
 import { revokeInvitation } from '../api/invitations.js';
 import { PERMISSIONS, hasPermission } from '../authz/permissions.js';
@@ -182,9 +183,54 @@ function ResetPasswordRow({ member, onReset }) {
   );
 }
 
-export default function UserManagementPanel({ workspaces, onClose }) {
-  const adminWorkspaces = workspaces.filter((ws) => hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS));
+export default function UserManagementPanel({ workspaces, isSystemAdmin = false, onClose }) {
+  // FEATURE_REQUEST.md: "any system admin should be able to fully manage
+  // all workspaces" — `workspaces` (from ChatShell) is the caller's own
+  // memberships only, which would leave a system admin with an empty
+  // picker for every workspace they don't happen to belong to, even though
+  // every mutating action this panel calls already accepts them server-side
+  // (requireWorkspacePermission's system-admin bypass). Fetches the full
+  // GET /workspaces/admin/all list instead, merging in the caller's own
+  // real role where they happen to also be a member.
+  const [allWorkspacesForAdmin, setAllWorkspacesForAdmin] = useState(null);
+
+  useEffect(() => {
+    if (!isSystemAdmin) return undefined;
+    let cancelled = false;
+    async function fetchAll() {
+      let offset = 0;
+      const all = [];
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await listAllWorkspacesAdmin({ limit: 100, offset });
+        all.push(...res.workspaces);
+        offset += res.workspaces.length;
+        if (res.workspaces.length === 0 || offset >= res.total) break;
+      }
+      if (!cancelled) setAllWorkspacesForAdmin(all);
+    }
+    fetchAll().catch(() => setAllWorkspacesForAdmin([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [isSystemAdmin]);
+
+  const adminWorkspaces = isSystemAdmin
+    ? (allWorkspacesForAdmin ?? []).map((ws) => workspaces.find((mine) => mine.id === ws.id) ?? { ...ws, role: null })
+    : workspaces.filter((ws) => hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS));
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(adminWorkspaces[0]?.id ?? null);
+
+  // The admin workspace list above arrives asynchronously (after the
+  // component's initial mount) — once it does, select the first one if
+  // nothing's selected yet, same "default to the first available option"
+  // behavior the initial useState above already gives non-admin callers
+  // immediately.
+  useEffect(() => {
+    if (!selectedWorkspaceId && adminWorkspaces.length > 0) {
+      setSelectedWorkspaceId(adminWorkspaces[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminWorkspaces.length]);
   const [members, setMembers] = useState([]);
   const [membersOffset, setMembersOffset] = useState(0);
   const [membersTotal, setMembersTotal] = useState(0);

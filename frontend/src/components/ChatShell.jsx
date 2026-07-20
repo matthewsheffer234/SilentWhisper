@@ -940,7 +940,13 @@ export default function ChatShell() {
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
       {displayNameOpen && <DisplayNamePanel onClose={() => setDisplayNameOpen(false)} />}
-      {userManagementOpen && <UserManagementPanel workspaces={workspaces} onClose={() => setUserManagementOpen(false)} />}
+      {userManagementOpen && (
+        <UserManagementPanel
+          workspaces={workspaces}
+          isSystemAdmin={Boolean(user?.isSystemAdmin)}
+          onClose={() => setUserManagementOpen(false)}
+        />
+      )}
       {browseWorkspacesOpen && (
         <BrowseWorkspacesPanel
           onClose={() => setBrowseWorkspacesOpen(false)}

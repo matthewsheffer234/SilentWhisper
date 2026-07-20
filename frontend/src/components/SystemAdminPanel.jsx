@@ -3,6 +3,7 @@ import Sheet from './Sheet.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import Pager from './Pager.jsx';
+import WorkspaceSettingsSheet from './WorkspaceSettingsSheet.jsx';
 import {
   createAdminUser,
   listAdminUsers,
@@ -13,7 +14,16 @@ import {
   globalResetPassword,
   listUserOrganizations,
 } from '../api/admin.js';
-import { listAllWorkspacesAdmin } from '../api/workspaces.js';
+import {
+  listAllWorkspacesAdmin,
+  inviteWorkspaceMember,
+  createWorkspaceMembershipInvitation,
+  createWorkspaceInvitation,
+  transferWorkspaceOwnership,
+  changeWorkspaceVisibility,
+  updateWorkspaceSettings,
+  archiveWorkspace,
+} from '../api/workspaces.js';
 import {
   listOrganizations,
   createOrganization,
@@ -478,6 +488,11 @@ export default function SystemAdminPanel({ onClose }) {
   const [allWorkspaces, setAllWorkspaces] = useState([]);
   const [workspacesTotal, setWorkspacesTotal] = useState(0);
   const [workspacesOffset, setWorkspacesOffset] = useState(0);
+  // FEATURE_REQUEST.md: "any system admin should be able to fully manage
+  // all workspaces" — the workspace this admin is currently managing via
+  // WorkspaceSettingsSheet in admin-override mode, opened from a row's
+  // "Manage" button below regardless of whether this admin is a member.
+  const [managingWorkspace, setManagingWorkspace] = useState(null);
   const [managingUserId, setManagingUserId] = useState(null);
   const [orgsError, setOrgsError] = useState(null);
   const [confirmDisable, setConfirmDisable] = useState(null); // account pending disable
@@ -511,6 +526,39 @@ export default function SystemAdminPanel({ onClose }) {
 
   function loadOrganizations() {
     listOrganizations().then(setOrganizations).catch(() => setOrganizations([]));
+  }
+
+  // Same shape as ChatShell.jsx's own workspace-management handlers — this
+  // panel manages its own separate allWorkspaces list (member-independent,
+  // from GET /workspaces/admin/all) rather than reusing ChatShell's
+  // member-only `workspaces` state, since a system admin managing a
+  // workspace they don't belong to would never appear in that list at all.
+  function handleAdminInviteMember(workspaceId, username, role) {
+    return inviteWorkspaceMember(workspaceId, username, role);
+  }
+  function handleAdminInviteMembership(workspaceId, userId, role) {
+    return createWorkspaceMembershipInvitation(workspaceId, userId, role);
+  }
+  function handleAdminCreateInviteLink(workspaceId, role) {
+    return createWorkspaceInvitation(workspaceId, role);
+  }
+  async function handleAdminArchiveWorkspace(workspaceId) {
+    const { archivedAt } = await archiveWorkspace(workspaceId);
+    setAllWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, archivedAt } : ws)));
+  }
+  async function handleAdminTransferOwnership(workspaceId, username) {
+    await transferWorkspaceOwnership(workspaceId, username);
+    loadWorkspaces(workspacesOffset);
+  }
+  async function handleAdminChangeVisibility(workspaceId, visibility) {
+    await changeWorkspaceVisibility(workspaceId, visibility);
+    setAllWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, visibility } : ws)));
+    setManagingWorkspace((prev) => (prev && prev.id === workspaceId ? { ...prev, visibility } : prev));
+  }
+  async function handleAdminToggleManagersCanArchive(workspaceId, managersCanArchive) {
+    await updateWorkspaceSettings(workspaceId, { managersCanArchive });
+    setAllWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, managersCanArchive } : ws)));
+    setManagingWorkspace((prev) => (prev && prev.id === workspaceId ? { ...prev, managersCanArchive } : prev));
   }
 
   useEffect(() => {
@@ -754,6 +802,7 @@ export default function SystemAdminPanel({ onClose }) {
                 <th style={styles.th}>Organization</th>
                 <th style={styles.th}>Visibility</th>
                 <th style={styles.th}>Archived</th>
+                <th style={styles.th}></th>
               </tr>
             </thead>
             <tbody>
@@ -764,12 +813,31 @@ export default function SystemAdminPanel({ onClose }) {
                   <td style={styles.td}>{ws.organizationName}</td>
                   <td style={styles.td}>{ws.visibility}</td>
                   <td style={styles.td}>{ws.archivedAt ? 'Yes' : ''}</td>
+                  <td style={styles.td}>
+                    <button type="button" style={styles.rowButton} onClick={() => setManagingWorkspace(ws)}>
+                      Manage
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
         <Pager offset={workspacesOffset} limit={PAGE_SIZE} total={workspacesTotal} onPageChange={loadWorkspaces} />
+        {managingWorkspace && (
+          <WorkspaceSettingsSheet
+            workspace={managingWorkspace}
+            isSystemAdminOverride
+            onClose={() => setManagingWorkspace(null)}
+            onInviteMember={(username, role) => handleAdminInviteMember(managingWorkspace.id, username, role)}
+            onInviteMembership={(userId, role) => handleAdminInviteMembership(managingWorkspace.id, userId, role)}
+            onCreateInviteLink={(role) => handleAdminCreateInviteLink(managingWorkspace.id, role)}
+            onTransferOwnership={(username) => handleAdminTransferOwnership(managingWorkspace.id, username)}
+            onChangeVisibility={(visibility) => handleAdminChangeVisibility(managingWorkspace.id, visibility)}
+            onToggleManagersCanArchive={(value) => handleAdminToggleManagersCanArchive(managingWorkspace.id, value)}
+            onArchiveWorkspace={() => handleAdminArchiveWorkspace(managingWorkspace.id)}
+          />
+        )}
         {confirmDisable && (
           <ConfirmDialog
             title="Disable Account"

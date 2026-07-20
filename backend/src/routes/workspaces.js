@@ -27,10 +27,10 @@ import {
   membershipInvitationCreateLimiter,
 } from '../auth/rateLimit.js';
 import {
-  requireWorkspaceMember,
+  requireWorkspaceMemberOrSystemAdmin,
   requireWorkspacePermission,
   requireWorkspaceNotArchived,
-  requireChannelMember,
+  requireChannelMemberOrSystemAdmin,
   requireOrgMember,
   requireOrgNotArchived,
   getWorkspaceRole,
@@ -216,6 +216,7 @@ workspacesRouter.get('/admin/all', async (req, res, next) => {
           'o.name as organization_name',
           'w.visibility',
           'w.archived_at',
+          'w.managers_can_archive',
         )
         .orderBy('w.created_at', 'asc')
         .limit(limit)
@@ -233,6 +234,7 @@ workspacesRouter.get('/admin/all', async (req, res, next) => {
         organizationName: r.organization_name,
         visibility: r.visibility,
         archivedAt: r.archived_at,
+        managersCanArchive: r.managers_can_archive,
       })),
       total: Number(count),
       limit,
@@ -733,28 +735,31 @@ workspacesRouter.get('/:workspaceId/people-search', memberSearchLimiter, async (
 // backs both the private-channel "add people" flow (POST
 // /:workspaceId/channels/:channelId/members already requires the target be
 // an existing workspace member) and ownership transfer (POST
-// /:workspaceId/transfer-ownership, same requirement). Gated on plain
-// requireWorkspaceMember, deliberately looser than the people-search
-// endpoint above — every field returned here (id/username/displayName) is
-// already visible to any workspace-mate through message authorship and
-// mentions, so this isn't a new disclosure, and both call sites it backs
-// are reachable by a plain member (private-channel invite) or the owner
-// (transfer), not just a workspace admin. Passing `channelId` additionally
-// requires the caller be a member of that specific channel (matching the
-// add-to-channel endpoint's own gate) and flags `alreadyInChannel` per row.
-// Deliberately omits email (FEATURE_REQUEST.md entry 1) — unlike
-// people-search, this endpoint's loose requireWorkspaceMember gate was never
+// /:workspaceId/transfer-ownership, same requirement). Gated on
+// requireWorkspaceMemberOrSystemAdmin, deliberately looser than the
+// people-search endpoint above — every field returned here (id/username/
+// displayName) is already visible to any workspace-mate through message
+// authorship and mentions, so this isn't a new disclosure, and both call
+// sites it backs are reachable by a plain member (private-channel invite) or
+// the owner (transfer), not just a workspace admin — the system-admin
+// bypass just lets a non-member admin use the same two flows structurally
+// (see membershipService.js's own doc comment on why that's "manage
+// structure," not "read content"). Passing `channelId` additionally requires
+// the caller be a member of that specific channel, or a system admin
+// (matching the add-to-channel endpoint's own gate), and flags
+// `alreadyInChannel` per row. Deliberately omits email (FEATURE_REQUEST.md
+// entry 1) — unlike people-search, this endpoint's looser gate was never
 // meant to hand every plain member a way to harvest email addresses;
 // matches GET /organizations/:orgId/members-search's already-correct shape.
 workspacesRouter.get('/:workspaceId/members-search', memberSearchLimiter, async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
 
     let channelId = null;
     if (req.query.channelId !== undefined) {
       channelId = assertUuid(req.query.channelId, 'channelId');
-      const channel = await requireChannelMember(db, req.user.id, channelId);
+      const channel = await requireChannelMemberOrSystemAdmin(db, req.user.id, channelId);
       if (channel.workspace_id !== workspaceId) {
         throw new ValidationError('Channel does not belong to this workspace');
       }
@@ -1078,7 +1083,7 @@ workspacesRouter.post('/:workspaceId/members/:userId/reset-password', adminPassw
 workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
     await requireWorkspaceNotArchived(db, workspaceId);
 
     const name = assertName(req.body?.name, 'channel name');
@@ -1109,7 +1114,13 @@ workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
 // Visible channels: every PUBLIC channel in the workspace (joinable, so
 // listable even before joining) plus PRIVATE channels the user already
 // belongs to. Never lists a PRIVATE channel the user isn't a member of
-// (Section 3, Authorization Model).
+// (Section 3, Authorization Model) — unless the caller is a system admin
+// structurally managing the workspace, in which case every channel
+// (including PRIVATE ones they don't belong to) is listed, matching the
+// same "manage the structure, not the content" boundary
+// requireWorkspaceMemberOrSystemAdmin documents: this exposes that a
+// private channel exists, its name, type, and member count, never its
+// messages.
 //
 // FEATURE_REQUEST.md entry 2: offset-paginated ({channels, total, limit,
 // offset}), following GET /admin/users' precedent. Also replaces the
@@ -1119,14 +1130,20 @@ workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
 workspacesRouter.get('/:workspaceId/channels', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    const { viaSystemAdminOverride } = await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
     const { limit, offset } = parseOffsetPagination(req.query);
 
     const joinMembership = function joinMembership() {
       this.on('cm.channel_id', '=', 'c.id').andOn('cm.user_id', '=', db.raw('?', [req.user.id]));
     };
-    const visibleToCallerFilter = (builder) =>
-      builder.where('c.workspace_id', workspaceId).andWhere((b) => b.where('c.type', 'PUBLIC').orWhereNotNull('cm.user_id'));
+    const visibleToCallerFilter = (builder) => {
+      builder.where('c.workspace_id', workspaceId);
+      if (!viaSystemAdminOverride) {
+        builder.andWhere((b) => b.where('c.type', 'PUBLIC').orWhereNotNull('cm.user_id'));
+      }
+      // viaSystemAdminOverride: every channel in the workspace, PUBLIC or
+      // PRIVATE — structural visibility only, see the doc comment above.
+    };
 
     const memberCounts = db('channel_members').select('channel_id').count('user_id as memberCount').groupBy('channel_id').as('mc');
 
@@ -1154,7 +1171,7 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/join', async (req, res,
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     const channelId = assertUuid(req.params.channelId, 'channelId');
-    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
     await requireWorkspaceNotArchived(db, workspaceId);
 
     const channel = await getChannel(db, channelId);
@@ -1188,15 +1205,15 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/join', async (req, res,
 // GET /channels/:channelId/members mention-autocomplete endpoint
 // (messages.js), which is search-driven and capped at 8 results by design.
 // This one is a plain listing, gated the same as adding a member
-// (requireChannelMember) since seeing the full roster is no more sensitive
-// than being able to grow it. FEATURE_REQUEST.md entry 2: offset-paginated
+// (requireChannelMemberOrSystemAdmin) since seeing the full roster is no
+// more sensitive than being able to grow it. FEATURE_REQUEST.md entry 2: offset-paginated
 // ({members, total, limit, offset}), following GET /admin/users' precedent
 // (was previously the one genuinely uncapped route in this list).
 workspacesRouter.get('/:workspaceId/channels/:channelId/members', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     const channelId = assertUuid(req.params.channelId, 'channelId');
-    const channel = await requireChannelMember(db, req.user.id, channelId);
+    const channel = await requireChannelMemberOrSystemAdmin(db, req.user.id, channelId);
     if (channel.workspace_id !== workspaceId) {
       throw new ValidationError('Channel not found in this workspace');
     }
@@ -1234,8 +1251,9 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/members', async (req, r
     // username, not a UUID.
     const username = assertUsername(req.body?.username);
 
-    // Caller must already belong to the channel to add someone else to it.
-    const channel = await requireChannelMember(db, req.user.id, channelId);
+    // Caller must already belong to the channel to add someone else to it —
+    // or be a system admin structurally managing the workspace.
+    const channel = await requireChannelMemberOrSystemAdmin(db, req.user.id, channelId);
     // Bind the path parameters together before any target-membership check
     // (Security.md, 2026-07-15, HIGH: "Cross-Workspace Channel Membership
     // Injection") — without this, a caller could pass an unrelated

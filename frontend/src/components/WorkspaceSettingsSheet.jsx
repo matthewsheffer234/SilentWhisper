@@ -1,9 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Sheet from './Sheet.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
 import { PERMISSIONS, hasPermission } from '../authz/permissions.js';
-import { searchWorkspaceMembers, searchWorkspacePeople } from '../api/workspaces.js';
+import {
+  searchWorkspaceMembers,
+  searchWorkspacePeople,
+  listChannels,
+  createChannel,
+  listChannelMembers,
+  addChannelMember,
+} from '../api/workspaces.js';
 
 // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: consolidates
 // what used to be five separate items in the workspace row's own overflow
@@ -242,6 +249,170 @@ function TransferOwnershipSection({ workspaceId, workspaceName, onTransferOwners
   );
 }
 
+function AdminChannelMembersSection({ workspaceId, channelId }) {
+  const [members, setMembers] = useState([]);
+  const [person, setPerson] = useState(null);
+  const [status, setStatus] = useState(null);
+
+  function loadMembers() {
+    listChannelMembers(workspaceId, channelId)
+      .then((res) => setMembers(res.members))
+      .catch(() => {});
+  }
+
+  useEffect(() => {
+    loadMembers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId]);
+
+  async function handleAdd() {
+    if (!person) return;
+    setStatus(null);
+    try {
+      await addChannelMember(workspaceId, channelId, person.username);
+      setStatus({ type: 'success', message: `Added ${person.displayName || person.username}` });
+      setPerson(null);
+      loadMembers();
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to add member' });
+    }
+  }
+
+  return (
+    <div style={{ marginLeft: 16, marginBottom: 12 }}>
+      {members.map((m) => (
+        <div key={m.userId} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-3)', padding: '2px 0' }}>
+          {m.displayName || m.username}
+        </div>
+      ))}
+      <div style={{ ...styles.inlineForm, marginTop: 6 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PeoplePicker
+            searchFn={(q) => searchWorkspaceMembers(workspaceId, q, { channelId })}
+            value={person}
+            onChange={setPerson}
+            placeholder="Add an existing workspace member"
+            ariaLabel="Search workspace members to add to channel"
+            isIneligible={(p) => (p.alreadyInChannel ? 'Already in this channel' : null)}
+          />
+        </div>
+        <button type="button" style={styles.actionButton} disabled={!person} onClick={handleAdd}>
+          Add
+        </button>
+      </div>
+      {status && (
+        <div style={{ ...styles.feedback, ...(status.type === 'error' ? styles.error : styles.success) }}>{status.message}</div>
+      )}
+    </div>
+  );
+}
+
+function CreateChannelForm({ onCreate }) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState('PUBLIC');
+  const [status, setStatus] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setStatus(null);
+    try {
+      await onCreate(name.trim(), type);
+      setName('');
+      setStatus({ type: 'success', message: 'Channel created' });
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to create channel' });
+    }
+  }
+
+  return (
+    <form style={styles.inlineForm} onSubmit={handleSubmit}>
+      <input
+        style={styles.inlineInput}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="New channel name"
+        aria-label="New channel name"
+      />
+      <select style={styles.roleSelect} value={type} onChange={(e) => setType(e.target.value)} aria-label="Channel type">
+        <option value="PUBLIC">Public</option>
+        <option value="PRIVATE">Private</option>
+      </select>
+      <button type="submit" style={styles.actionButton} disabled={!name.trim()}>
+        Create
+      </button>
+      {status && (
+        <div style={{ ...styles.feedback, ...(status.type === 'error' ? styles.error : styles.success) }}>{status.message}</div>
+      )}
+    </form>
+  );
+}
+
+// System-admin-only surface (FEATURE_REQUEST.md: "any system admin should be
+// able to fully manage all workspaces"): channel creation and channel-
+// membership management for a workspace the admin isn't a member of. A
+// plain member never sees this section — they already manage channels
+// through the main sidebar/ChatShell flow (New channel, ChannelDetailsPanel),
+// which this deliberately doesn't duplicate. Structural only, matching
+// requireWorkspaceMemberOrSystemAdmin's own documented boundary
+// (backend/src/authz/membershipService.js): this lists/creates channels and
+// manages who's in them, but never shows a single message — there is no
+// message-content surface anywhere in this admin path.
+function AdminChannelManagementSection({ workspaceId }) {
+  const [channels, setChannels] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [expandedChannelId, setExpandedChannelId] = useState(null);
+
+  function loadChannels() {
+    setLoading(true);
+    setError(null);
+    listChannels(workspaceId)
+      .then(setChannels)
+      .catch((err) => setError(err.message || 'Failed to load channels'))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadChannels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  async function handleCreateChannel(name, type) {
+    await createChannel(workspaceId, name, type);
+    loadChannels();
+  }
+
+  return (
+    <div>
+      {loading && <div style={styles.hint}>Loading channels…</div>}
+      {error && <div style={{ ...styles.feedback, ...styles.error }}>{error}</div>}
+      {!loading && !error && channels.length === 0 && <div style={styles.hint}>No channels yet.</div>}
+      {!loading &&
+        channels.map((ch) => (
+          <div key={ch.id}>
+            <div style={styles.row}>
+              <span style={styles.valueText}>
+                {ch.type === 'PRIVATE' ? '🔒' : '#'} {ch.name} — {ch.memberCount} member{ch.memberCount === 1 ? '' : 's'}
+              </span>
+              <button
+                type="button"
+                style={styles.secondaryButton}
+                onClick={() => setExpandedChannelId(expandedChannelId === ch.id ? null : ch.id)}
+              >
+                {expandedChannelId === ch.id ? 'Hide' : 'Manage members'}
+              </button>
+            </div>
+            {expandedChannelId === ch.id && <AdminChannelMembersSection workspaceId={workspaceId} channelId={ch.id} />}
+          </div>
+        ))}
+      <div style={{ marginTop: 10 }}>
+        <CreateChannelForm onCreate={handleCreateChannel} />
+      </div>
+    </div>
+  );
+}
+
 export default function WorkspaceSettingsSheet({
   workspace,
   onClose,
@@ -252,14 +423,23 @@ export default function WorkspaceSettingsSheet({
   onChangeVisibility,
   onToggleManagersCanArchive,
   onArchiveWorkspace,
+  // FEATURE_REQUEST.md: "any system admin should be able to fully manage
+  // all workspaces." Set when this sheet is opened from SystemAdminPanel.jsx
+  // for a workspace the caller isn't a member of (workspace.role is null in
+  // that case, so hasPermission(...) alone would hide every section) —
+  // every server-side route these sections call already grants a system
+  // admin the same access via requireWorkspacePermission's own bypass
+  // (backend/src/authz/membershipService.js), so this only unlocks UI that
+  // the backend was already going to accept.
+  isSystemAdminOverride = false,
 }) {
   const [confirmingArchive, setConfirmingArchive] = useState(false);
 
-  const canInvite = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
-  const canArchive = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_ARCHIVE);
-  const canTransferOwnership = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP);
-  const canChangeVisibility = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY);
-  const canManageSettings = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_MANAGE_SETTINGS);
+  const canInvite = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS) || isSystemAdminOverride;
+  const canArchive = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_ARCHIVE) || isSystemAdminOverride;
+  const canTransferOwnership = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP) || isSystemAdminOverride;
+  const canChangeVisibility = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY) || isSystemAdminOverride;
+  const canManageSettings = hasPermission(workspace.role, PERMISSIONS.WORKSPACE_MANAGE_SETTINGS) || isSystemAdminOverride;
 
   let firstSection = true;
   function sectionTitleStyle() {
@@ -294,6 +474,16 @@ export default function WorkspaceSettingsSheet({
               {workspace.visibility === 'DISCOVERABLE' ? 'Make invite-only' : 'Make listed'}
             </button>
           </div>
+        </>
+      )}
+
+      {isSystemAdminOverride && (
+        <>
+          <div style={sectionTitleStyle()}>Channels</div>
+          <div style={styles.hint}>
+            Structural management only — creating channels and adding people to them, never reading their messages.
+          </div>
+          <AdminChannelManagementSection workspaceId={workspace.id} />
         </>
       )}
 

@@ -79,6 +79,34 @@ export async function requireWorkspacePermission(db, userId, workspaceId, permis
   return { role, viaSystemAdminOverride: false };
 }
 
+// A system admin can administer any workspace's structure — channels,
+// channel membership, and (per requireWorkspacePermission above) settings/
+// members/archive/ownership — without being a workspace_members row
+// themselves, the same "bypass the resource's own role map, still 404 on a
+// resource that doesn't exist" shape requireWorkspacePermission already
+// established. Deliberately does NOT extend to message content: nothing in
+// messages.js gets this bypass, so an admin who administers a private
+// workspace this way still cannot read a single message in it unless they
+// take some further, explicit, auditable action that makes them a genuine
+// channel_members row (e.g. creating a channel, or adding themselves via
+// POST .../channels/:channelId/members) — the same way it would for anyone
+// else. This is a deliberate, narrower scope than requireWorkspacePermission's
+// existing bypass, not an oversight: "manage the workspace" and "read every
+// private conversation in it" are different privileges, and only the first
+// is being granted here.
+export async function requireWorkspaceMemberOrSystemAdmin(db, userId, workspaceId) {
+  if (await isSystemAdminUser(db, userId)) {
+    const workspace = await db('workspaces').where({ id: workspaceId }).first();
+    if (!workspace) {
+      throw new NotFoundError('Workspace not found');
+    }
+    return { role: null, viaSystemAdminOverride: true };
+  }
+
+  const role = await requireWorkspaceMember(db, userId, workspaceId);
+  return { role, viaSystemAdminOverride: false };
+}
+
 // System-wide surfaces (AI settings, audit dashboard) have no per-workspace
 // scoping of their own. This used to also grant access to anyone who held
 // OWNER/MANAGER in at least one workspace (a deliberate, temporary widening
@@ -182,4 +210,22 @@ export async function requireChannelMember(db, userId, channelId) {
     throw new NotFoundError('Channel not found');
   }
   return channel;
+}
+
+// Structural-management counterpart to requireChannelMember, mirroring
+// requireWorkspaceMemberOrSystemAdmin above: a system admin can view or grow
+// a channel's membership roster without being a member themselves, still
+// 404ing for a channel that doesn't exist. Returns the same bare channel row
+// requireChannelMember does (not an object), so call sites can swap the
+// function name in place with no other changes. Deliberately not used by
+// messages.js — this never grants message-content read access on its own.
+export async function requireChannelMemberOrSystemAdmin(db, userId, channelId) {
+  if (await isSystemAdminUser(db, userId)) {
+    const channel = await getChannel(db, channelId);
+    if (!channel) {
+      throw new NotFoundError('Channel not found');
+    }
+    return channel;
+  }
+  return requireChannelMember(db, userId, channelId);
 }
