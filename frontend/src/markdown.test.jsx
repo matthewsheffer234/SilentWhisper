@@ -297,3 +297,41 @@ describe('task checkboxes', () => {
     expect(row.props.onToggle).toBeUndefined();
   });
 });
+
+// Finding 8, docs/reviews/security-performance-review-2026-07-20.md: the
+// optimistic-toggle override map applyTaskPass consults so a checkbox shows
+// its new state and disables itself for the duration of its own in-flight
+// request, without waiting on the round trip or the message's real content.
+describe('task checkboxes — taskOverrides (Finding 8 optimistic toggle)', () => {
+  test('an override for this exact (messageId, taskIndex) overrides the content-derived checked value', () => {
+    const nodes = renderMessageContent('- [ ] first\n- [ ] second', {
+      messageId: 'msg-1',
+      onToggleTask: () => {},
+      taskOverrides: { 'msg-1:0': true },
+    });
+    const rows = elementsOfComponent(nodes, 'TaskLineRow');
+    expect(rows[0].props.checked).toBe(true);
+    expect(rows[0].props.disabled).toBe(true);
+    // The second row has no override — unaffected, still reads from content.
+    expect(rows[1].props.checked).toBe(false);
+    expect(rows[1].props.disabled).toBe(false);
+  });
+
+  test('an override keyed to a different messageId does not affect this message\'s rows', () => {
+    const nodes = renderMessageContent('- [ ] first', {
+      messageId: 'msg-1',
+      onToggleTask: () => {},
+      taskOverrides: { 'msg-2:0': true },
+    });
+    const [row] = elementsOfComponent(nodes, 'TaskLineRow');
+    expect(row.props.checked).toBe(false);
+    expect(row.props.disabled).toBe(false);
+  });
+
+  test('with no taskOverrides at all, every row is enabled and reads from content, same as before this entry', () => {
+    const nodes = renderMessageContent('- [x] done', { messageId: 'msg-1', onToggleTask: () => {} });
+    const [row] = elementsOfComponent(nodes, 'TaskLineRow');
+    expect(row.props.checked).toBe(true);
+    expect(row.props.disabled).toBe(false);
+  });
+});

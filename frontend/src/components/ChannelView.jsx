@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { X, Hash, Lock, Sparkles, Info, User, Users, MessageSquare, ChevronDown } from 'lucide-react';
-import PresenceBadge from './PresenceBadge.jsx';
+import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
@@ -252,10 +252,106 @@ const styles = {
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '20px 0' },
 };
 
-export default function ChannelView({
+// Finding 7, docs/reviews/security-performance-review-2026-07-20.md: one
+// virtualized row's rendering, including the markdown-tokenizing
+// renderMessageContent() call, extracted into its own React.memo'd
+// component. Presence ticks (now a separate context — see
+// UserPresenceBadge below) and composer keystrokes (draft state lives in
+// ChannelView, not here) no longer touch any of this component's props, so
+// React.memo's shallow comparison bails before re-running
+// renderMessageContent for a row whose message hasn't actually changed.
+// `message` in particular is the load-bearing prop for that bail: ChatShell's
+// reconcileUpdatedMessage/reconcileMessage only replace the one array slot
+// that actually changed (an immutable-update pattern, not a full-array
+// rebuild), so every *other* row's `message` object keeps its old
+// reference across a ChannelView re-render, and only the row whose message
+// actually changed gets a new one.
+const MessageRow = memo(function MessageRow({
+  message: m,
+  isDirectConversation,
+  useMineStyle,
+  showAuthor,
+  showAvatar,
+  isGroupedWithNext,
+  virtualStart,
+  dataIndex,
+  measureRef,
+  onOpenThread,
+  onOpenEntity,
+  onToggleTask,
+  taskOverrides,
+}) {
+  return (
+    <div
+      data-index={dataIndex}
+      ref={measureRef}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        transform: `translateY(${virtualStart}px)`,
+        ...styles.messageRowOuter,
+        justifyContent: useMineStyle ? 'flex-end' : 'flex-start',
+        paddingBottom: isGroupedWithNext ? 2 : 10,
+        ...(m.pending ? styles.pending : {}),
+      }}
+    >
+      {!isDirectConversation && (
+        <div style={styles.avatarSlot}>
+          {showAvatar && (
+            <div className="sl-avatar" style={styles.avatarCircle}>
+              {initials(m.displayName || m.username)}
+            </div>
+          )}
+        </div>
+      )}
+      <div
+        className={`sl-row sl-bubble-${useMineStyle ? 'mine' : 'theirs'}`}
+        style={{
+          ...styles.messageBubble,
+          ...(isDirectConversation ? {} : styles.messageBubbleChannel),
+          ...(useMineStyle ? styles.messageBubbleMine : styles.messageBubbleTheirs),
+        }}
+      >
+        <div style={{ ...styles.messageMeta, ...(useMineStyle ? styles.messageMetaMine : {}) }}>
+          {showAuthor && <span style={styles.messageAuthor}>{m.displayName || m.username}</span>}
+          <UserPresenceBadge userId={m.userId} variant={useMineStyle ? 'onMine' : undefined} />
+          <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        </div>
+        <div style={styles.messageContent}>
+          {renderMessageContent(m.content, {
+            variant: useMineStyle ? 'mine' : undefined,
+            onEntityClick: onOpenEntity,
+            onToggleTask: m.pending ? undefined : onToggleTask,
+            messageId: m.id,
+            taskOverrides,
+          })}
+        </div>
+        {!m.parentMessageId && !m.pending && (
+          <button
+            type="button"
+            style={{ ...styles.replyButton, ...(useMineStyle ? styles.replyButtonMine : {}) }}
+            onClick={() => onOpenThread(m)}
+            aria-label={m.replyCount ? `Reply in thread, ${formatReplyCount(m.replyCount)}` : undefined}
+          >
+            <MessageSquare size={12} aria-hidden="true" />
+            {formatReplyCount(m.replyCount ?? 0)}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// Finding 7: React.memo — combined with MessageRow above and the removal
+// of the `presence` prop, this now only re-renders when something it
+// actually cares about changes (a new/updated message, channel/workspace
+// selection, its own composer draft state, etc.), not on every presence
+// tick incidentally passed down from ChatShell.
+function ChannelView({
   channel,
   messages,
-  presence,
   currentUser,
   joined,
   archived,
@@ -264,6 +360,7 @@ export default function ChannelView({
   onOpenDetails,
   onOpenEntity,
   onToggleTask,
+  taskOverrides,
   workspaceId,
   mainContentId,
 }) {
@@ -670,61 +767,22 @@ export default function ChannelView({
             const showAuthor = isDirectConversation ? !isMine : isFirstInRun(messages, virtualRow.index);
             const showAvatar = !isDirectConversation && showAuthor;
             return (
-              <div
+              <MessageRow
                 key={m.id}
-                data-index={virtualRow.index}
-                ref={rowVirtualizer.measureElement}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${virtualRow.start}px)`,
-                  ...styles.messageRowOuter,
-                  justifyContent: useMineStyle ? 'flex-end' : 'flex-start',
-                  paddingBottom: isGroupedWithNext ? 2 : 10,
-                  ...(m.pending ? styles.pending : {}),
-                }}
-              >
-                {!isDirectConversation && (
-                  <div style={styles.avatarSlot}>
-                    {showAvatar && <div className="sl-avatar" style={styles.avatarCircle}>{initials(m.displayName || m.username)}</div>}
-                  </div>
-                )}
-                <div
-                  className={`sl-row sl-bubble-${useMineStyle ? 'mine' : 'theirs'}`}
-                  style={{
-                    ...styles.messageBubble,
-                    ...(isDirectConversation ? {} : styles.messageBubbleChannel),
-                    ...(useMineStyle ? styles.messageBubbleMine : styles.messageBubbleTheirs),
-                  }}
-                >
-                  <div style={{ ...styles.messageMeta, ...(useMineStyle ? styles.messageMetaMine : {}) }}>
-                    {showAuthor && <span style={styles.messageAuthor}>{m.displayName || m.username}</span>}
-                    <PresenceBadge status={presence[m.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
-                    <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                  </div>
-                  <div style={styles.messageContent}>
-                    {renderMessageContent(m.content, {
-                      variant: useMineStyle ? 'mine' : undefined,
-                      onEntityClick: onOpenEntity,
-                      onToggleTask: m.pending ? undefined : onToggleTask,
-                      messageId: m.id,
-                    })}
-                  </div>
-                  {!m.parentMessageId && !m.pending && (
-                    <button
-                      type="button"
-                      style={{ ...styles.replyButton, ...(useMineStyle ? styles.replyButtonMine : {}) }}
-                      onClick={() => onOpenThread(m)}
-                      aria-label={m.replyCount ? `Reply in thread, ${formatReplyCount(m.replyCount)}` : undefined}
-                    >
-                      <MessageSquare size={12} aria-hidden="true" />
-                      {formatReplyCount(m.replyCount ?? 0)}
-                    </button>
-                  )}
-                </div>
-              </div>
+                message={m}
+                isDirectConversation={isDirectConversation}
+                useMineStyle={useMineStyle}
+                showAuthor={showAuthor}
+                showAvatar={showAvatar}
+                isGroupedWithNext={isGroupedWithNext}
+                virtualStart={virtualRow.start}
+                dataIndex={virtualRow.index}
+                measureRef={rowVirtualizer.measureElement}
+                onOpenThread={onOpenThread}
+                onOpenEntity={onOpenEntity}
+                onToggleTask={onToggleTask}
+                taskOverrides={taskOverrides}
+              />
             );
           })}
         </div>
@@ -814,3 +872,5 @@ export default function ChannelView({
     </div>
   );
 }
+
+export default memo(ChannelView);

@@ -161,6 +161,7 @@ export default function WorkspaceHome({
   tasksLoading,
   tasksError,
   onToggleDashboardTask,
+  taskOverrides,
 }) {
   const hasChannels = channels.length > 0;
   // FEATURE_REQUEST.md entry 3: "Tasks for Me" / "Tasks for Everyone Else",
@@ -286,25 +287,37 @@ export default function WorkspaceHome({
             )}
             {!tasksError && !tasksLoading && visibleTasks.length > 0 && (
               <ul style={styles.taskList}>
-                {visibleTasks.map((t) => (
-                  // Composite key, not just messageId — a single message can
-                  // carry several task lines.
-                  <li key={`${t.messageId}-${t.taskIndex}`} style={styles.taskCard}>
-                    <TaskCheckbox
-                      checked={t.checked}
-                      onToggle={(nextChecked) => onToggleDashboardTask(t.channelId, t.messageId, t.taskIndex, nextChecked)}
-                    />
-                    <div style={styles.taskCardBody}>
-                      <div style={{ ...styles.taskCardText, ...(t.checked ? styles.taskCardTextChecked : {}) }}>{t.text}</div>
-                      <div style={styles.taskCardMeta}>
-                        <button type="button" style={styles.openPill} onClick={() => onSelectChannel(t.channelId)}>
-                          #{t.channelName}
-                        </button>
-                        {t.owner && <span>@{t.owner}</span>}
+                {visibleTasks.map((t) => {
+                  // Finding 8: the dashboard's rows carry their own `checked`
+                  // field directly (they're already-parsed API rows, not raw
+                  // message content routed through renderMessageContent's own
+                  // taskOverrides threading) — same override key shape, same
+                  // "presence of a key means in flight" contract as the
+                  // channel/thread checkboxes.
+                  const overrideKey = `${t.messageId}:${t.taskIndex}`;
+                  const hasOverride = Boolean(taskOverrides) && Object.prototype.hasOwnProperty.call(taskOverrides, overrideKey);
+                  const checked = hasOverride ? taskOverrides[overrideKey] : t.checked;
+                  return (
+                    // Composite key, not just messageId — a single message can
+                    // carry several task lines.
+                    <li key={`${t.messageId}-${t.taskIndex}`} style={styles.taskCard}>
+                      <TaskCheckbox
+                        checked={checked}
+                        disabled={hasOverride}
+                        onToggle={(nextChecked) => onToggleDashboardTask(t.channelId, t.messageId, t.taskIndex, nextChecked)}
+                      />
+                      <div style={styles.taskCardBody}>
+                        <div style={{ ...styles.taskCardText, ...(checked ? styles.taskCardTextChecked : {}) }}>{t.text}</div>
+                        <div style={styles.taskCardMeta}>
+                          <button type="button" style={styles.openPill} onClick={() => onSelectChannel(t.channelId)}>
+                            #{t.channelName}
+                          </button>
+                          {t.owner && <span>@{t.owner}</span>}
+                        </div>
                       </div>
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </>

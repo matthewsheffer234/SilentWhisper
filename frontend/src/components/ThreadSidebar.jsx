@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { X, Sparkles, ChevronDown } from 'lucide-react';
-import PresenceBadge from './PresenceBadge.jsx';
+import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
 import { extractTasks } from '../api/ai.js';
 import { renderMessageContent } from '../markdown.jsx';
@@ -143,16 +143,18 @@ const styles = {
   },
 };
 
-export default function ThreadSidebar({
+// Finding 7, docs/reviews/security-performance-review-2026-07-20.md:
+// React.memo, no `presence` prop (see UserPresenceBadge above).
+function ThreadSidebar({
   rootMessage,
   replies,
-  presence,
   currentUser,
   onSendReply,
   onClose,
   isDirectConversation,
   onOpenEntity,
   onToggleTask,
+  taskOverrides,
 }) {
   const [draft, setDraft] = useState('');
   const [tasks, setTasks] = useState(null); // { loading, text, error, scope }
@@ -267,7 +269,7 @@ export default function ThreadSidebar({
               >
                 <div style={{ ...styles.bubbleMeta, ...(useMineStyle ? styles.bubbleMetaMine : {}) }}>
                   {showAuthor && <span style={styles.bubbleAuthor}>{rootMessage.displayName || rootMessage.username}</span>}
-                  <PresenceBadge status={presence[rootMessage.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
+                  <UserPresenceBadge userId={rootMessage.userId} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>
                   {renderMessageContent(rootMessage.content, {
@@ -275,6 +277,7 @@ export default function ThreadSidebar({
                     onEntityClick: onOpenEntity,
                     onToggleTask,
                     messageId: rootMessage.id,
+                    taskOverrides,
                   })}
                 </div>
               </div>
@@ -310,7 +313,7 @@ export default function ThreadSidebar({
               >
                 <div style={{ ...styles.bubbleMeta, ...(useMineStyle ? styles.bubbleMetaMine : {}) }}>
                   {showAuthor && <span style={styles.bubbleAuthor}>{r.displayName || r.username}</span>}
-                  <PresenceBadge status={presence[r.userId] ?? 'offline'} variant={useMineStyle ? 'onMine' : undefined} />
+                  <UserPresenceBadge userId={r.userId} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
                 <div style={styles.bubbleContent}>
                   {renderMessageContent(r.content, {
@@ -318,6 +321,7 @@ export default function ThreadSidebar({
                     onEntityClick: onOpenEntity,
                     onToggleTask: r.pending ? undefined : onToggleTask,
                     messageId: r.id,
+                    taskOverrides,
                   })}
                 </div>
               </div>
@@ -338,3 +342,5 @@ export default function ThreadSidebar({
     </aside>
   );
 }
+
+export default memo(ThreadSidebar);

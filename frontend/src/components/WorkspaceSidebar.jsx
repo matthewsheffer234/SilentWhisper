@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import {
   ChevronDown,
   Settings,
@@ -15,7 +15,7 @@ import {
   Users,
   Sparkles,
 } from 'lucide-react';
-import PresenceBadge from './PresenceBadge.jsx';
+import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
 import SearchBar from './SearchBar.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
@@ -279,9 +279,12 @@ function activateOnKey(handler) {
   };
 }
 
-export default function WorkspaceSidebar({
+// Finding 7, docs/reviews/security-performance-review-2026-07-20.md:
+// React.memo — no `presence` prop anymore (see UserPresenceBadge above), so
+// this only re-renders when something it actually cares about changes, not
+// on every presence tick incidentally passed down from ChatShell.
+function WorkspaceSidebar({
   user,
-  presence,
   workspaces,
   selectedWorkspaceId,
   onSelectWorkspace,
@@ -445,7 +448,7 @@ export default function WorkspaceSidebar({
     <aside style={styles.sidebar}>
       <div style={styles.userRow}>
         <span style={styles.username}>{user?.displayName || user?.username}</span>
-        <PresenceBadge status={presence[user?.id] ?? 'online'} />
+        <UserPresenceBadge userId={user?.id} fallback="online" />
         <div style={styles.userMenuWrap}>
           <Menu
             ariaLabel="User menu"
@@ -665,3 +668,5 @@ export default function WorkspaceSidebar({
     </aside>
   );
 }
+
+export default memo(WorkspaceSidebar);

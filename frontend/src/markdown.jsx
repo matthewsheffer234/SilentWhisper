@@ -358,15 +358,21 @@ function applyInlinePasses(nodes, nextKey, { linkStyle, highlightOptions, entity
 // (they're a flat list of already-parsed task rows from the API, not raw
 // message content), but the checkbox affordance should look and behave
 // identically wherever a task appears.
-export function TaskCheckbox({ checked, onToggle }) {
+// Finding 8, docs/reviews/security-performance-review-2026-07-20.md:
+// `disabled` used to be inferred only from `!onToggle` — whether a handler
+// exists at all, not whether a toggle for *this specific* checkbox is
+// currently in flight. The caller (ChatShell.jsx) now passes `disabled`
+// explicitly while its own optimistic request for this exact checkbox is
+// outstanding, so a second click can't race the first one.
+export function TaskCheckbox({ checked, onToggle, disabled }) {
   return (
     <button
       type="button"
       role="checkbox"
       aria-checked={checked}
-      disabled={!onToggle}
+      disabled={!onToggle || disabled}
       onClick={onToggle ? () => onToggle(!checked) : undefined}
-      style={{ ...styles.taskCheckboxButton, cursor: onToggle ? 'pointer' : 'default' }}
+      style={{ ...styles.taskCheckboxButton, cursor: onToggle && !disabled ? 'pointer' : 'default' }}
       aria-label={checked ? 'Mark task as not done' : 'Mark task as done'}
     >
       <span style={{ ...styles.taskCheckboxGlyph, ...(checked ? styles.taskCheckboxGlyphChecked : {}) }}>
@@ -380,10 +386,10 @@ export function TaskCheckbox({ checked, onToggle }) {
   );
 }
 
-function TaskLineRow({ checked, owner, onToggle, mentionStyle, children }) {
+function TaskLineRow({ checked, owner, onToggle, disabled, mentionStyle, children }) {
   return (
     <div style={styles.taskRow}>
-      <TaskCheckbox checked={checked} onToggle={onToggle} />
+      <TaskCheckbox checked={checked} onToggle={onToggle} disabled={disabled} />
       <span style={{ ...styles.taskText, ...(checked ? styles.taskTextChecked : {}) }}>
         {children}
         {owner && <span style={{ ...mentionStyle, ...styles.taskOwner }}>@{owner}</span>}
@@ -403,7 +409,15 @@ function TaskLineRow({ checked, owner, onToggle, mentionStyle, children }) {
 // checkbox row renders as its own block-level element, which already forces
 // a line break, so keeping the newline character too would double it into a
 // blank line above/below every task row.
-function applyTaskPass(content, nextKey, { onToggleTask, messageId, inlineOptions }) {
+// Finding 8: `taskOverrides` is a plain `{ "<messageId>:<taskIndex>": checked
+// }` map — the presence of a key means that specific checkbox has an
+// optimistic toggle in flight (ChatShell.jsx adds the key right before
+// awaiting the request and removes it in a `finally`, whether the request
+// succeeds or fails). While a key is present, its `checked` value overrides
+// whatever the raw content currently parses to, and the row renders
+// disabled — the same "trust the optimistic value, block a second click"
+// shape `handleSend`'s own `pending: true` messages already establish.
+function applyTaskPass(content, nextKey, { onToggleTask, messageId, taskOverrides, inlineOptions }) {
   const regex = buildTaskLineRegex();
   const matches = [...content.matchAll(regex)];
   if (matches.length === 0) return [content];
@@ -416,14 +430,17 @@ function applyTaskPass(content, nextKey, { onToggleTask, messageId, inlineOption
     if (before.endsWith('\n')) before = before.slice(0, -1);
     if (before) result.push(before);
 
-    const checked = match[1] !== ' ';
+    const currentTaskIndex = taskOrdinal;
+    const overrideKey = `${messageId}:${currentTaskIndex}`;
+    const hasOverride = Boolean(taskOverrides) && Object.prototype.hasOwnProperty.call(taskOverrides, overrideKey);
+    const checked = hasOverride ? taskOverrides[overrideKey] : match[1] !== ' ';
     const owner = match[3] ?? null;
     const descriptionNodes = applyInlinePasses([match[2]], nextKey, inlineOptions);
-    const currentTaskIndex = taskOrdinal;
     result.push(
       <TaskLineRow
         key={nextKey()}
         checked={checked}
+        disabled={hasOverride}
         owner={owner}
         mentionStyle={inlineOptions.mentionStyle}
         onToggle={onToggleTask ? (nextChecked) => onToggleTask(messageId, currentTaskIndex, nextChecked) : undefined}
@@ -450,7 +467,7 @@ function applyTaskPass(content, nextKey, { onToggleTask, messageId, inlineOption
 // (FEATURE_REQUEST.md entry 3) are optional — omitted entirely, a task line
 // still renders as a checked/unchecked row, just not an interactive one
 // (e.g. inside a context with no toggle affordance).
-export function renderMessageContent(content, { variant, onEntityClick, onToggleTask, messageId } = {}) {
+export function renderMessageContent(content, { variant, onEntityClick, onToggleTask, messageId, taskOverrides } = {}) {
   let keyCounter = 0;
   const nextKey = () => keyCounter++;
   const mentionStyle = variant === 'mine' ? styles.mentionOnMine : styles.mention;
@@ -459,7 +476,7 @@ export function renderMessageContent(content, { variant, onEntityClick, onToggle
   const highlightOptions = { mentionStyle, entityStyle, onEntityClick };
   const inlineOptions = { linkStyle, highlightOptions, entityStyle, mentionStyle, onEntityClick };
 
-  let nodes = applyTaskPass(content, nextKey, { onToggleTask, messageId, inlineOptions });
+  let nodes = applyTaskPass(content, nextKey, { onToggleTask, messageId, taskOverrides, inlineOptions });
   nodes = applyInlinePasses(nodes, nextKey, inlineOptions);
   return nodes;
 }

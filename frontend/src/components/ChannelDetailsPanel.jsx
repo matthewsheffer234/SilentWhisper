@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Hash, Lock } from 'lucide-react';
 import Sheet from './Sheet.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
-import PresenceBadge from './PresenceBadge.jsx';
+import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Pager from './Pager.jsx';
 import { listChannelMembers, searchWorkspaceMembers } from '../api/workspaces.js';
 
@@ -62,7 +62,6 @@ export default function ChannelDetailsPanel({
   channel,
   workspaceId,
   workspaceName,
-  presence,
   canAddMembers,
   archived,
   onAddMember,
@@ -130,7 +129,7 @@ export default function ChannelDetailsPanel({
         {members?.length === 0 && <div style={styles.empty}>No members yet.</div>}
         {members?.map((m) => (
           <div key={m.userId} style={styles.memberRow}>
-            <PresenceBadge status={presence[m.userId] ?? 'offline'} />
+            <UserPresenceBadge userId={m.userId} />
             <span style={styles.memberName}>{m.displayName || m.username}</span>
             {m.displayName && m.displayName !== m.username && <span style={styles.memberUsername}>@{m.username}</span>}
           </div>

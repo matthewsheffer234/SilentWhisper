@@ -102,6 +102,18 @@ Design:
 
 ## Done
 
+### Fixes for the last two findings (7-8) of the 2026-07-20 security/performance review
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Fixes for the last two findings (7-8) of the 2026-07-20 security/performance review" (2026-07-21). `docs/reviews/security-performance-review-2026-07-20.md` Findings 7-8 (both Low/Medium UI rendering performance and UX), the last two findings in that review — every finding from it is now addressed.
+
+Finding 7 (presence/composer forcing unmemoized re-renders and markdown re-tokenization): presence moved into a new `PresenceContext` so a presence tick no longer re-renders `ChatShell` or, by extension, `WorkspaceSidebar`/`ChannelView`/`ThreadSidebar` — all three now `React.memo`-wrapped, with the handlers they receive stabilized via `useCallback` so the memoization is actually effective rather than cosmetic. `ChannelView`'s per-row rendering (the specific "re-tokenizes every visible message" cost the finding names) is now its own `React.memo`-wrapped `MessageRow` component. The finding's third suggested remediation — extracting the composer into a fully separate component — was deliberately not done: the `MessageRow` extraction alone already stops unrelated re-renders from re-running markdown tokenization, which is the finding's actual stated goal, and a full composer extraction (a ~350-line tightly-coupled autocomplete subsystem) would be substantially larger and riskier for marginal further benefit. Flagged explicitly rather than done silently.
+
+Finding 8 (task checkbox had no optimistic UI or in-flight state): checkbox toggles now follow the same optimistic-first convention `handleSend` already established — the checked state flips immediately via a `taskOverrides` override map, the checkbox disables itself for the duration of its own request, and a failure implicitly rolls back (clearing the override reverts to whatever the real content still says).
+
+**Tests**: `markdown.test.jsx` gained three `taskOverrides` cases. Finding 7 verified with a two-browser-context Playwright script (real dev server/backend) rather than a unit test, since none of the new context/memoization code is a pure function.
+
+**Verification**: 104/104 frontend unit tests (3 new), clean production build, 561/561 backend tests (unaffected, re-run as a sanity check). Live two-session browser verification passed with zero unexpected console errors; test artifacts swept via `scripts/clear-test-artifacts.mjs`.
+
 ### Fixes for the next three findings (4-6) of the 2026-07-20 security/performance review
 
 **Status**: Done — see `PROJECT_PLAN.md` Section 11, "Fixes for the next three findings (4-6) of the 2026-07-20 security/performance review" (2026-07-21). `docs/reviews/security-performance-review-2026-07-20.md` Findings 4-6 (all three remaining Mediums), a direct follow-on to the Findings 1-3 pass earlier the same day.

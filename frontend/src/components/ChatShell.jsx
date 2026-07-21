@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UserPlus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
+import { PresenceProvider, usePresenceUpdater } from '../context/PresenceContext.jsx';
 import { createSocket } from '../ws/socket.js';
 import * as workspacesApi from '../api/workspaces.js';
 import * as organizationsApi from '../api/organizations.js';
@@ -83,8 +84,22 @@ function toChannelViewShape(dm) {
   };
 }
 
+// Finding 7, docs/reviews/security-performance-review-2026-07-20.md: a thin
+// wrapper providing PresenceContext around the real component below —
+// ChatShellInner calls usePresenceUpdater() to feed WS-derived presence
+// frames into the context, so it has to render *inside* the provider, not
+// wrap it itself.
 export default function ChatShell() {
+  return (
+    <PresenceProvider>
+      <ChatShellInner />
+    </PresenceProvider>
+  );
+}
+
+function ChatShellInner() {
   const { user, logout } = useAuth();
+  const { mergePresence, setUserPresence } = usePresenceUpdater();
 
   const [workspaces, setWorkspaces] = useState([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(null);
@@ -92,7 +107,12 @@ export default function ChatShell() {
   const [selectedChannelId, setSelectedChannelId] = useState(null);
   const [joinedChannels, setJoinedChannels] = useState(() => new Set());
   const [messagesByChannel, setMessagesByChannel] = useState({});
-  const [presence, setPresence] = useState({});
+  // Finding 8, docs/reviews/security-performance-review-2026-07-20.md: a
+  // `{ "<messageId>:<taskIndex>": checked }` map — presence of a key means
+  // that specific checkbox has an optimistic toggle in flight. See
+  // markdown.jsx's applyTaskPass for how this overrides the content-derived
+  // checked state and disables the row while in flight.
+  const [taskOverrides, setTaskOverrides] = useState({});
   const [threadRoot, setThreadRoot] = useState(null);
   const [threadReplies, setThreadReplies] = useState([]);
   // Resolved at the moment a thread is opened (see openThread below), not
@@ -250,7 +270,7 @@ export default function ChatShell() {
     socketRef.current = socket;
 
     socket.on('authenticated', (frame) => {
-      setPresence((prev) => ({ ...prev, ...frame.presence }));
+      mergePresence(frame.presence);
       // Re-join whatever channel is currently selected — covers both first
       // connect and any reconnect, which always re-validates membership
       // server-side rather than trusting a prior session (Section 3).
@@ -264,7 +284,7 @@ export default function ChatShell() {
     });
 
     socket.on('presence_update', (frame) => {
-      setPresence((prev) => ({ ...prev, [frame.userId]: frame.status }));
+      setUserPresence(frame.userId, frame.status);
     });
 
     socket.on('message_created', (frame) => {
@@ -368,7 +388,15 @@ export default function ChatShell() {
 
     socket.connect();
     return () => socket.disconnect();
-  }, [reconcileMessage, reconcileThreadReply, bumpReplyCount, reconcileUpdatedMessage, reconcileWorkspaceTaskMessage]);
+  }, [
+    reconcileMessage,
+    reconcileThreadReply,
+    bumpReplyCount,
+    reconcileUpdatedMessage,
+    reconcileWorkspaceTaskMessage,
+    mergePresence,
+    setUserPresence,
+  ]);
 
   // Finding 4, docs/reviews/security-performance-review-2026-07-20.md:
   // listWorkspaces/listOrganizations still return every page the caller has
@@ -648,81 +676,142 @@ export default function ChatShell() {
   // immediately from this call's own response rather than waiting on the
   // WS echo, the same "don't wait for your own broadcast" shape
   // reconcileMessage's create-path already gets via the POST response.
-  async function handleToggleTask(messageId, taskIndex, checked) {
-    try {
-      const updated = await tasksApi.toggleTask(selectedChannelId, messageId, taskIndex, checked);
-      reconcileUpdatedMessage(updated);
-      reconcileWorkspaceTaskMessage(updated);
-    } catch {
-      // A stale taskIndex (e.g. raced against another toggle) fails
-      // silently client-side — there's no dedicated error UI for this
-      // lightweight action; the next fetch/broadcast shows the real state.
-    }
-  }
+  //
+  // Finding 8, docs/reviews/security-performance-review-2026-07-20.md: the
+  // checked state used to only update once the round trip resolved, with no
+  // feedback in between and nothing stopping a second click from racing the
+  // first. Now applies the same optimistic-first convention handleSend's
+  // `pending: true` messages already establish: flip taskOverrides for this
+  // exact (messageId, taskIndex) immediately, so the checkbox both shows the
+  // new state and disables itself for the duration of its own request; the
+  // `finally` clears the override whether the request succeeds (the
+  // reconcile above already applied the authoritative content by then) or
+  // fails (clearing the override reverts the row to whatever the last-known
+  // real content says, i.e. a rollback, matching the toggle endpoint's own
+  // explicit-target-state semantics — nothing to reconcile away from).
+  // Finding 7, docs/reviews/security-performance-review-2026-07-20.md: this
+  // and the handful of handlers below it are wrapped in useCallback (rather
+  // than the plain function declarations most of this file still uses) so
+  // their reference stays stable across a ChatShellInner re-render caused
+  // by something unrelated (e.g. a sheet opening elsewhere) — required for
+  // React.memo(ChannelView)/React.memo(ThreadSidebar)/the per-row
+  // React.memo(MessageRow) in ChannelView.jsx to actually skip re-rendering
+  // instead of just wrapping components that still get fresh prop
+  // references every render regardless.
+  const handleToggleTask = useCallback(
+    async (messageId, taskIndex, checked) => {
+      const overrideKey = `${messageId}:${taskIndex}`;
+      setTaskOverrides((prev) => ({ ...prev, [overrideKey]: checked }));
+      try {
+        const updated = await tasksApi.toggleTask(selectedChannelId, messageId, taskIndex, checked);
+        reconcileUpdatedMessage(updated);
+        reconcileWorkspaceTaskMessage(updated);
+      } catch {
+        // A stale taskIndex (e.g. raced against another toggle) fails
+        // silently client-side — there's no dedicated error UI for this
+        // lightweight action; clearing the override below rolls the
+        // checkbox back to whatever the real content still says.
+      } finally {
+        setTaskOverrides((prev) => {
+          const next = { ...prev };
+          delete next[overrideKey];
+          return next;
+        });
+      }
+    },
+    [selectedChannelId, reconcileUpdatedMessage, reconcileWorkspaceTaskMessage],
+  );
 
   // The dashboard-originated equivalent: a task row already carries its own
   // channelId (routes/tasks.js's response shape), unlike ChannelView/
   // ThreadSidebar, which always operate on whatever's currently selected.
-  async function handleToggleDashboardTask(channelId, messageId, taskIndex, checked) {
-    try {
-      const updated = await tasksApi.toggleTask(channelId, messageId, taskIndex, checked);
-      reconcileUpdatedMessage(updated);
-      reconcileWorkspaceTaskMessage(updated);
-    } catch {
-      // Same silent-failure reasoning as handleToggleTask above.
-    }
-  }
+  // Same optimistic-override shape as handleToggleTask above — one shared
+  // taskOverrides map, since the two surfaces can show the same task
+  // simultaneously (dashboard + open channel) and both must reflect the
+  // same in-flight state.
+  const handleToggleDashboardTask = useCallback(
+    async (channelId, messageId, taskIndex, checked) => {
+      const overrideKey = `${messageId}:${taskIndex}`;
+      setTaskOverrides((prev) => ({ ...prev, [overrideKey]: checked }));
+      try {
+        const updated = await tasksApi.toggleTask(channelId, messageId, taskIndex, checked);
+        reconcileUpdatedMessage(updated);
+        reconcileWorkspaceTaskMessage(updated);
+      } catch {
+        // Same silent-failure/rollback reasoning as handleToggleTask above.
+      } finally {
+        setTaskOverrides((prev) => {
+          const next = { ...prev };
+          delete next[overrideKey];
+          return next;
+        });
+      }
+    },
+    [reconcileUpdatedMessage, reconcileWorkspaceTaskMessage],
+  );
 
-  function handleSend(content) {
-    const clientNonce = crypto.randomUUID();
-    const optimistic = {
-      id: clientNonce,
-      channelId: selectedChannelId,
-      userId: user.id,
-      username: user.username,
-      content,
-      parentMessageId: null,
-      createdAt: new Date().toISOString(),
-      pending: true,
-    };
-    setMessagesByChannel((prev) => ({
-      ...prev,
-      [selectedChannelId]: [...(prev[selectedChannelId] ?? []), optimistic],
-    }));
-    socketRef.current?.send({ type: 'message', channelId: selectedChannelId, content, clientNonce });
-  }
+  const handleSend = useCallback(
+    (content) => {
+      const clientNonce = crypto.randomUUID();
+      const optimistic = {
+        id: clientNonce,
+        channelId: selectedChannelId,
+        userId: user.id,
+        username: user.username,
+        content,
+        parentMessageId: null,
+        createdAt: new Date().toISOString(),
+        pending: true,
+      };
+      setMessagesByChannel((prev) => ({
+        ...prev,
+        [selectedChannelId]: [...(prev[selectedChannelId] ?? []), optimistic],
+      }));
+      socketRef.current?.send({ type: 'message', channelId: selectedChannelId, content, clientNonce });
+    },
+    [selectedChannelId, user.id, user.username],
+  );
 
-  function openThread(rootMessage, channelIdOverride = selectedChannelId) {
-    setThreadRoot(rootMessage);
-    const originChannel =
-      channels.find((c) => c.id === channelIdOverride) ?? directMessages.find((dm) => dm.id === channelIdOverride);
-    setThreadChannelType(originChannel?.type ?? null);
-    workspacesApi.listMessages(channelIdOverride, { parentMessageId: rootMessage.id }).then((history) => {
-      setThreadReplies([...history].reverse().map(toDisplayMessage));
-    });
-  }
+  const openThread = useCallback(
+    (rootMessage, channelIdOverride = selectedChannelId) => {
+      setThreadRoot(rootMessage);
+      const originChannel =
+        channels.find((c) => c.id === channelIdOverride) ?? directMessages.find((dm) => dm.id === channelIdOverride);
+      setThreadChannelType(originChannel?.type ?? null);
+      workspacesApi.listMessages(channelIdOverride, { parentMessageId: rootMessage.id }).then((history) => {
+        setThreadReplies([...history].reverse().map(toDisplayMessage));
+      });
+    },
+    [selectedChannelId, channels, directMessages],
+  );
 
-  function handleSendReply(content) {
-    const clientNonce = crypto.randomUUID();
-    const optimistic = {
-      id: clientNonce,
-      channelId: selectedChannelId,
-      userId: user.id,
-      username: user.username,
-      content,
-      parentMessageId: threadRoot.id,
-      createdAt: new Date().toISOString(),
-      pending: true,
-    };
-    setThreadReplies((prev) => [...prev, optimistic]);
-    socketRef.current?.send({
-      type: 'message',
-      channelId: selectedChannelId,
-      content,
-      parentMessageId: threadRoot.id,
-      clientNonce,
-    });
-  }
+  const handleSendReply = useCallback(
+    (content) => {
+      const clientNonce = crypto.randomUUID();
+      const optimistic = {
+        id: clientNonce,
+        channelId: selectedChannelId,
+        userId: user.id,
+        username: user.username,
+        content,
+        parentMessageId: threadRoot.id,
+        createdAt: new Date().toISOString(),
+        pending: true,
+      };
+      setThreadReplies((prev) => [...prev, optimistic]);
+      socketRef.current?.send({
+        type: 'message',
+        channelId: selectedChannelId,
+        content,
+        parentMessageId: threadRoot.id,
+        clientNonce,
+      });
+    },
+    [selectedChannelId, user.id, user.username, threadRoot],
+  );
+
+  const handleCloseThread = useCallback(() => setThreadRoot(null), []);
+  const handleOpenChannelDetails = useCallback(() => setChannelDetailsOpen(true), []);
 
   // FEATURE_REQUEST.md entry 1 (semantic search): the search route already
   // includes the thread root (parentMessage) on a reply hit, so opening the
@@ -760,17 +849,20 @@ export default function ChatShell() {
     }
   }
 
-  async function handleOpenEntity(label) {
-    if (!selectedWorkspaceId) return;
-    try {
-      const entity = await entitiesApi.resolveEntity(selectedWorkspaceId, label);
-      setEntityDetails({ workspaceId: selectedWorkspaceId, entity });
-    } catch {
-      // Entity text can be stale or unresolved if a message was typed before
-      // the registry feature existed. A failed resolve should not disturb
-      // the reader or break message rendering.
-    }
-  }
+  const handleOpenEntity = useCallback(
+    async (label) => {
+      if (!selectedWorkspaceId) return;
+      try {
+        const entity = await entitiesApi.resolveEntity(selectedWorkspaceId, label);
+        setEntityDetails({ workspaceId: selectedWorkspaceId, entity });
+      } catch {
+        // Entity text can be stale or unresolved if a message was typed
+        // before the registry feature existed. A failed resolve should not
+        // disturb the reader or break message rendering.
+      }
+    },
+    [selectedWorkspaceId],
+  );
 
   // FEATURE_REQUEST.md entry 3 (Direct Messages navigation): a DM/group-DM
   // isn't in channels[] (that list is fetched per-workspace) — falls back to
@@ -820,7 +912,6 @@ export default function ChatShell() {
     <div style={styles.shell}>
       <WorkspaceSidebar
         user={user}
-        presence={presence}
         workspaces={workspaces}
         selectedWorkspaceId={selectedWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
@@ -885,20 +976,21 @@ export default function ChatShell() {
           tasksLoading={workspaceTasksState.loading}
           tasksError={workspaceTasksState.error}
           onToggleDashboardTask={handleToggleDashboardTask}
+          taskOverrides={taskOverrides}
         />
       ) : (
         <ChannelView
           mainContentId="main"
           channel={selectedChannel}
           messages={messagesByChannel[selectedChannelId] ?? []}
-          presence={presence}
           currentUser={user}
           joined={joinedChannels.has(selectedChannelId)}
           archived={isSelectedChannelArchived}
           onSend={handleSend}
           onOpenThread={openThread}
           onToggleTask={handleToggleTask}
-          onOpenDetails={() => setChannelDetailsOpen(true)}
+          taskOverrides={taskOverrides}
+          onOpenDetails={handleOpenChannelDetails}
           workspaceId={selectedDirectMessage ? null : selectedWorkspaceId}
           onOpenEntity={selectedDirectMessage ? undefined : handleOpenEntity}
         />
@@ -906,13 +998,13 @@ export default function ChatShell() {
       <ThreadSidebar
         rootMessage={threadRoot}
         replies={threadReplies}
-        presence={presence}
         currentUser={user}
         onSendReply={handleSendReply}
-        onClose={() => setThreadRoot(null)}
+        onClose={handleCloseThread}
         isDirectConversation={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM'}
         onOpenEntity={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM' ? undefined : handleOpenEntity}
         onToggleTask={handleToggleTask}
+        taskOverrides={taskOverrides}
       />
       {createWorkspaceOpen && (
         <CreateWorkspaceSheet
@@ -941,7 +1033,6 @@ export default function ChatShell() {
           channel={selectedChannel}
           workspaceId={selectedWorkspaceId}
           workspaceName={selectedWorkspaceName}
-          presence={presence}
           canAddMembers={canAddChannelMembers}
           archived={isSelectedWorkspaceArchived}
           onAddMember={handleInviteToChannel}
