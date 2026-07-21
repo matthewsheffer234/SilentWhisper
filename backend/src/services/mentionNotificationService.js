@@ -116,28 +116,22 @@ export async function listMentionNotifications(db, userId, { limit, before, unre
   return rows.map(mapNotification);
 }
 
+// Finding 5, docs/reviews/security-performance-review-2026-07-20.md: this
+// runs on the same cadence as the message traffic that produces mentions in
+// the first place (app startup, and again after every live mention/
+// invitation WS event) — it used to run three full joined aggregate queries
+// (total, grouped by workspace, grouped by channel) on every call. Grepping
+// the frontend confirmed byWorkspace/byChannel were never actually rendered
+// anywhere (only unreadCount is), so rather than keep computing an unused
+// breakdown lazily behind a new endpoint nothing would call, this just does
+// the one query the hot badge-refresh path actually needs — see migration
+// 0022 for the covering index this query now hits.
 export async function getMentionSummary(db, userId) {
   const totalRow = await baseVisibleNotificationsQuery(db, userId)
     .whereNull('mention_notifications.read_at')
     .first(db.raw('COUNT(*)::int AS count'));
 
-  const byWorkspaceRows = await baseVisibleNotificationsQuery(db, userId)
-    .whereNull('mention_notifications.read_at')
-    .groupBy('mention_notifications.workspace_id')
-    .select('mention_notifications.workspace_id')
-    .select(db.raw('COUNT(*)::int AS count'));
-
-  const byChannelRows = await baseVisibleNotificationsQuery(db, userId)
-    .whereNull('mention_notifications.read_at')
-    .groupBy('mention_notifications.channel_id')
-    .select('mention_notifications.channel_id')
-    .select(db.raw('COUNT(*)::int AS count'));
-
-  return {
-    unreadCount: totalRow?.count ?? 0,
-    byWorkspace: byWorkspaceRows.map((r) => ({ workspaceId: r.workspace_id, unreadCount: r.count })),
-    byChannel: byChannelRows.map((r) => ({ channelId: r.channel_id, unreadCount: r.count })),
-  };
+  return { unreadCount: totalRow?.count ?? 0 };
 }
 
 export async function markMentionNotificationRead(db, userId, notificationId) {

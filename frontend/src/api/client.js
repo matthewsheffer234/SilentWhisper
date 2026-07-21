@@ -91,7 +91,18 @@ export async function apiFetch(path, { method = 'GET', body, headers = {}, _isRe
 // (e.g. "channels", "organizations" — matching GET /admin/users' and
 // GET /workspaces/admin/all's precedent of naming the field after the
 // resource, not a generic "items").
-export async function fetchAllPages(path, itemsKey, { pageSize = 100 } = {}) {
+//
+// Finding 4, docs/reviews/security-performance-review-2026-07-20.md: this
+// used to await every page before the caller ever saw a result, so a user
+// with hundreds of DMs/channels paid for N sequential round trips before
+// the sidebar could render anything. The `onPage` callback fires after each
+// page with the cumulative array so far, so a caller can render/select
+// against the first page immediately while the rest keep streaming in
+// behind the scenes — the returned promise still resolves to the complete
+// list at the end, so an existing `.then(setX)`-only call site (nothing
+// beyond the four core navigational lists needs the incremental callback)
+// keeps working unmodified.
+export async function fetchAllPages(path, itemsKey, { pageSize = 100, onPage } = {}) {
   let offset = 0;
   const all = [];
   for (;;) {
@@ -101,6 +112,7 @@ export async function fetchAllPages(path, itemsKey, { pageSize = 100 } = {}) {
     const rows = page[itemsKey];
     all.push(...rows);
     offset += rows.length;
+    onPage?.(all.slice());
     if (rows.length === 0 || offset >= page.total) break;
   }
   return all;

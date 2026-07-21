@@ -163,8 +163,6 @@ export default function NotificationPanel({ onClose, onNavigate, onSummaryChange
       ...summary,
       mentionUnreadCount: 0,
       unreadCount: summary.membershipInvitationUnreadCount ?? 0,
-      byWorkspace: [],
-      byChannel: [],
     };
     setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt ?? new Date().toISOString() })));
     setSummary(nextSummary);

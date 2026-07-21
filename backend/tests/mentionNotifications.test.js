@@ -98,8 +98,6 @@ describe('mention notifications', () => {
       .expect(200);
 
     expect(res.body.summary.unreadCount).toBe(1);
-    expect(res.body.summary.byWorkspace).toEqual([{ workspaceId, unreadCount: 1 }]);
-    expect(res.body.summary.byChannel).toEqual([{ channelId, unreadCount: 1 }]);
     expect(res.body.notifications).toHaveLength(1);
     expect(res.body.notifications[0]).toMatchObject({
       channelId,

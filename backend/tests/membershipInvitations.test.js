@@ -233,6 +233,58 @@ describe('POST /api/membership-invitations/:id/accept and /decline', () => {
     const row = await db('membership_invitations').where({ id: createRes.body.id }).first();
     expect(row.status).toBe('DECLINED');
   });
+
+  // Finding 6, docs/reviews/security-performance-review-2026-07-20.md:
+  // mirrors invitations.js's token-redemption archived-state re-check —
+  // creation-time archived checks only prove the scope was active when the
+  // invite was sent, not that it still is by the time it's accepted.
+  test('accepting a workspace invitation 409s once the workspace is archived, and creates no membership', async () => {
+    const owner = await signup('wsmiarchive0');
+    const ws = await createWorkspace(owner);
+    const target = await signup('wsmiarchive0target');
+
+    const createRes = await request(app)
+      .post(`/api/workspaces/${ws.id}/membership-invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({ userId: target.userId, role: 'MEMBER' });
+    expect(createRes.status).toBe(201);
+
+    const archiveRes = await request(app).post(`/api/workspaces/${ws.id}/archive`).set(authHeader(owner.accessToken));
+    expect(archiveRes.status).toBe(200);
+
+    const acceptRes = await request(app)
+      .post(`/api/membership-invitations/${createRes.body.id}/accept`)
+      .set(authHeader(target.accessToken));
+    expect(acceptRes.status).toBe(409);
+
+    expect(await db('workspace_members').where({ workspace_id: ws.id, user_id: target.userId })).toHaveLength(0);
+    const row = await db('membership_invitations').where({ id: createRes.body.id }).first();
+    expect(row.status).toBe('PENDING');
+  });
+
+  test('accepting an organization invitation 409s once the organization is archived, and creates no membership', async () => {
+    const admin = await seedSystemAdmin('orgmiarchive0');
+    const org = await createOrg(admin.accessToken);
+    const target = await signup('orgmiarchive0target');
+
+    const createRes = await request(app)
+      .post(`/api/organizations/${org.id}/membership-invitations`)
+      .set(authHeader(admin.accessToken))
+      .send({ userId: target.userId });
+    expect(createRes.status).toBe(201);
+
+    const archiveRes = await request(app).post(`/api/organizations/${org.id}/archive`).set(authHeader(admin.accessToken));
+    expect(archiveRes.status).toBe(200);
+
+    const acceptRes = await request(app)
+      .post(`/api/membership-invitations/${createRes.body.id}/accept`)
+      .set(authHeader(target.accessToken));
+    expect(acceptRes.status).toBe(409);
+
+    expect(await db('organization_members').where({ organization_id: org.id, user_id: target.userId })).toHaveLength(0);
+    const row = await db('membership_invitations').where({ id: createRes.body.id }).first();
+    expect(row.status).toBe('PENDING');
+  });
 });
 
 describe('GET /api/membership-invitations', () => {

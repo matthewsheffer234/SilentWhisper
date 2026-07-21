@@ -115,7 +115,7 @@ export default function ChatShell() {
   const [browseWorkspacesOpen, setBrowseWorkspacesOpen] = useState(false);
   const [mentionToasts, setMentionToasts] = useState([]);
   const [membershipInvitationToasts, setMembershipInvitationToasts] = useState([]);
-  const [notificationSummary, setNotificationSummary] = useState({ unreadCount: 0, byWorkspace: [], byChannel: [] });
+  const [notificationSummary, setNotificationSummary] = useState({ unreadCount: 0 });
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [organizations, setOrganizations] = useState([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(null);
@@ -370,15 +370,24 @@ export default function ChatShell() {
     return () => socket.disconnect();
   }, [reconcileMessage, reconcileThreadReply, bumpReplyCount, reconcileUpdatedMessage, reconcileWorkspaceTaskMessage]);
 
+  // Finding 4, docs/reviews/security-performance-review-2026-07-20.md:
+  // listWorkspaces/listOrganizations still return every page the caller has
+  // (fetchAllPages' existing contract, unchanged), but now call back after
+  // each page instead of only once at the very end — so the first workspace/
+  // org can be selected, and everything that selection cascades into
+  // (channel load, etc.), as soon as the first page lands rather than after
+  // every page has. `ws[0]`/`orgs[0]` are stable across pages (new rows are
+  // only ever appended), so calling this on every page is a harmless no-op
+  // once the first one has already selected something.
   useEffect(() => {
-    workspacesApi.listWorkspaces().then((ws) => {
+    workspacesApi.listWorkspaces((ws) => {
       setWorkspaces(ws);
       if (ws.length > 0) setSelectedWorkspaceId(ws[0].id);
     });
   }, []);
 
   useEffect(() => {
-    organizationsApi.listOrganizations().then((orgs) => {
+    organizationsApi.listOrganizations((orgs) => {
       setOrganizations(orgs);
       if (orgs.length > 0) setSelectedOrganizationId((prev) => prev ?? orgs[0].id);
     });
@@ -394,7 +403,7 @@ export default function ChatShell() {
   // GROUP_DM, PROJECT_PLAN.md Section 4), so there's no per-workspace
   // refetch trigger the way channels[] has.
   const refreshDirectMessages = useCallback(() => {
-    directMessagesApi.listDirectMessages().then(setDirectMessages).catch(() => {});
+    directMessagesApi.listDirectMessages(setDirectMessages).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -403,7 +412,18 @@ export default function ChatShell() {
 
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    workspacesApi.listChannels(selectedWorkspaceId).then(setChannels);
+    // Guards against a pre-existing race this effect's dependency on
+    // selectedWorkspaceId always had, now with more opportunities to hit it:
+    // onPage fires once per page rather than once at the very end, so a
+    // workspace switched away from mid-load must not let its later-arriving
+    // pages clobber the newly selected workspace's channels.
+    let cancelled = false;
+    workspacesApi.listChannels(selectedWorkspaceId, (page) => {
+      if (!cancelled) setChannels(page);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedWorkspaceId]);
 
   // FEATURE_REQUEST.md entry 3. WorkspaceHome only ever renders once no

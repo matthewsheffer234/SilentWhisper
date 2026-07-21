@@ -3,8 +3,11 @@ import { apiFetch, fetchAllPages } from './client.js';
 // FEATURE_REQUEST.md entry 2: GET /organizations is now offset-paginated
 // server-side; this loops every page into the flat list the org
 // switcher/System Admin panel render, rather than pushing pager UI onto a
-// list that's ordinarily just "every org the caller belongs to."
-export const listOrganizations = () => fetchAllPages('/organizations', 'organizations');
+// list that's ordinarily just "every org the caller belongs to." Finding 4,
+// docs/reviews/security-performance-review-2026-07-20.md: optional `onPage`
+// callback (see api/workspaces.js's listWorkspaces) so the org switcher can
+// render the first page immediately instead of waiting on every page.
+export const listOrganizations = (onPage) => fetchAllPages('/organizations', 'organizations', { onPage });
 export const createOrganization = (name) => apiFetch('/organizations', { method: 'POST', body: { name } });
 // FEATURE_REQUEST.md entry 2: now offset-paginated ({members, total, limit,
 // offset}) — OrgManagementPanel.jsx renders a Pager against the raw

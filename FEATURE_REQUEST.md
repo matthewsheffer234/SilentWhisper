@@ -102,6 +102,20 @@ Design:
 
 ## Done
 
+### Fixes for the next three findings (4-6) of the 2026-07-20 security/performance review
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Fixes for the next three findings (4-6) of the 2026-07-20 security/performance review" (2026-07-21). `docs/reviews/security-performance-review-2026-07-20.md` Findings 4-6 (all three remaining Mediums), a direct follow-on to the Findings 1-3 pass earlier the same day.
+
+Finding 4 (`fetchAllPages()` reconstructing full unbounded lists client-side) reopened a deliberate design decision from the 2026-07-20 pagination pass, which explicitly chose not to add "Load more" UI to primary navigation lists. Confirmed the tradeoff with the user before implementing: rather than a full infinite-scroll rework (real risk of regressions across every place `channels[]`/`directMessages[]`/`organizations[]`/`workspaces[]` are looked up, for a Medium/perceived-snappiness finding), `fetchAllPages()` gained an optional `onPage` callback fired after every page instead of only once at the end — the four primary navigation loads (`listWorkspaces`, `listOrganizations`, `listChannels`, `listDirectMessages`) now render/select against the first page immediately while later pages stream in behind the scenes, with the same complete-list-in-memory contract every consumer already relies on. A race the change itself introduced (a fast workspace switch racing its own previous workspace's still-in-flight later pages) was found and fixed with a standard effect-cleanup cancellation guard.
+
+Finding 5 (notification summary hot-path aggregation): `getMentionSummary()` used to run three full aggregate queries (total, by-workspace, by-channel) on every badge refresh; grepping the frontend confirmed the by-workspace/by-channel breakdown was never actually rendered anywhere, so it was dropped entirely rather than kept behind an unused lazy endpoint. New covering index (`idx_mention_notifications_recipient_unread_visible`, migration `0022`) matches the query's actual predicate.
+
+Finding 6 (membership invitations acceptable after archive): `POST /api/membership-invitations/:id/accept` now re-checks the target organization's/workspace's `archived_at` inside the same row-locked transaction, mirroring the public token-redemption path's existing identical check — a `ConflictError`, not a 404, since the caller is authenticated and looking at their own invitation.
+
+**Tests**: `backend/tests/membershipInvitations.test.js` gained two archived-scope accept cases (workspace and organization). `backend/tests/mentionNotifications.test.js`'s summary-shape assertion updated for the dropped fields. Finding 4 verified with a throwaway Playwright script against a real local dev server/backend (two workspaces with distinct channels plus a DM, login, workspace-switch race check, message rendering) rather than a unit test, since none of the four load-effect changes are pure functions.
+
+**Verification**: 559/559 backend tests across 44 suites (2 new), 101/101 frontend unit tests, clean production build. Migration `0022` applied to both databases. Live-browser check for Finding 4 passed with zero console errors; test artifacts swept via `scripts/clear-test-artifacts.mjs`.
+
 ### Fixes for the first three findings of the 2026-07-20 security/performance review
 
 **Status**: Done — see `PROJECT_PLAN.md` Section 11, "Fixes for the first three findings of the 2026-07-20 security/performance review" (2026-07-21). `docs/reviews/security-performance-review-2026-07-20.md` Findings 1-3 (the High and the first two Mediums), user-requested directly rather than entering the ranked backlog first — Findings 4-8 are unaddressed.

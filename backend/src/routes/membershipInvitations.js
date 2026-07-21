@@ -4,7 +4,7 @@ import { requireAuth } from '../auth/requireAuth.js';
 import { assertUuid, parseOffsetPagination } from '../validation.js';
 import { appendAuditEvent } from '../audit/auditService.js';
 import { markMembershipInvitationNotificationRead } from '../services/userNotificationService.js';
-import { NotFoundError } from '../errors.js';
+import { NotFoundError, ConflictError } from '../errors.js';
 
 // FEATURE_REQUEST.md "Live notification system + in-app invitation
 // notification & acceptance workflow": deliberately distinct from
@@ -98,6 +98,16 @@ async function loadOwnPendingInvitationForUpdate(trx, userId, id) {
 // user already holds the membership some other way): skips the duplicate
 // insert rather than erroring, since the caller's own intent ("I want this
 // membership") is already satisfied either way.
+//
+// Finding 6, docs/reviews/security-performance-review-2026-07-20.md: mirrors
+// invitations.js's token-redemption path, which already re-checks
+// archived_at inside the same row-locked transaction at *redemption* time,
+// not just at invite-creation time (a scope can be archived any time after
+// a membership invitation was sent, while it sits PENDING). This path used
+// to have no such re-check at all. Unlike the public token-redemption
+// route, the caller here is already authenticated and this is their own
+// invitation row — nothing to existence-hide — so a real ConflictError,
+// not a generic 404, correctly tells them why acceptance failed.
 membershipInvitationsRouter.post('/:id/accept', async (req, res, next) => {
   try {
     const id = assertUuid(req.params.id, 'id');
@@ -106,6 +116,11 @@ membershipInvitationsRouter.post('/:id/accept', async (req, res, next) => {
       const invitation = await loadOwnPendingInvitationForUpdate(trx, req.user.id, id);
 
       if (invitation.scope_type === 'ORGANIZATION') {
+        const org = await trx('organizations').where({ id: invitation.organization_id }).first('archived_at');
+        if (!org || org.archived_at) {
+          throw new ConflictError('This organization is archived');
+        }
+
         const existing = await trx('organization_members')
           .where({ organization_id: invitation.organization_id, user_id: req.user.id })
           .first();
@@ -117,6 +132,11 @@ membershipInvitationsRouter.post('/:id/accept', async (req, res, next) => {
           });
         }
       } else {
+        const workspace = await trx('workspaces').where({ id: invitation.workspace_id }).first('archived_at');
+        if (!workspace || workspace.archived_at) {
+          throw new ConflictError('This workspace is archived');
+        }
+
         const existing = await trx('workspace_members')
           .where({ workspace_id: invitation.workspace_id, user_id: req.user.id })
           .first();

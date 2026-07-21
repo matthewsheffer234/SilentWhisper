@@ -9,8 +9,10 @@ import { apiFetch, fetchAllPages } from './client.js';
 // /workspaces is now offset-paginated server-side; this loops every page
 // into the flat list the sidebar/org-switcher render, the same
 // fetchAllPages() tradeoff already used for listOrganizations/listChannels/
-// listDirectMessages.
-export const listWorkspaces = () => fetchAllPages('/workspaces', 'workspaces');
+// listDirectMessages. Finding 4: takes an optional `onPage` callback
+// (forwarded to fetchAllPages) so ChatShell.jsx can render/select against
+// the first page immediately instead of waiting on every page.
+export const listWorkspaces = (onPage) => fetchAllPages('/workspaces', 'workspaces', { onPage });
 export const createWorkspace = (name, visibility, organizationId) =>
   apiFetch('/workspaces', {
     method: 'POST',
@@ -93,8 +95,10 @@ export const updateWorkspaceSettings = (workspaceId, { managersCanArchive }) =>
 // FEATURE_REQUEST.md entry 2: GET /workspaces/:workspaceId/channels is now
 // offset-paginated server-side; this loops every page into the flat list
 // the channel sidebar renders, rather than pushing pager UI onto ordinary
-// channel navigation.
-export const listChannels = (workspaceId) => fetchAllPages(`/workspaces/${workspaceId}/channels`, 'channels');
+// channel navigation. Finding 4: optional `onPage` callback, see
+// listWorkspaces above.
+export const listChannels = (workspaceId, onPage) =>
+  fetchAllPages(`/workspaces/${workspaceId}/channels`, 'channels', { onPage });
 export const createChannel = (workspaceId, name, type) =>
   apiFetch(`/workspaces/${workspaceId}/channels`, { method: 'POST', body: { name, type } });
 export const joinChannel = (workspaceId, channelId) =>
