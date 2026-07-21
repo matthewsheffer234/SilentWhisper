@@ -213,7 +213,7 @@ describe('POST /workspaces/:workspaceId/members (workspace invite)', () => {
 
     // The invited user can now see the workspace themselves.
     const listRes = await request(app).get('/api/workspaces').set(authHeader(invitee.accessToken));
-    expect(listRes.body.find((w) => w.id === workspaceId)?.role).toBe('MEMBER');
+    expect(listRes.body.workspaces.find((w) => w.id === workspaceId)?.role).toBe('MEMBER');
   });
 
   test('an OWNER can invite someone directly as MANAGER too', async () => {

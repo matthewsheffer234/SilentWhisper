@@ -75,7 +75,7 @@ describe('GET /api/workspaces organizationId field and filter (slice 3)', () => 
 
     const res = await request(app).get('/api/workspaces').set(authHeader(user.accessToken));
     expect(res.status).toBe(200);
-    const row = res.body.find((w) => w.id === createRes.body.id);
+    const row = res.body.workspaces.find((w) => w.id === createRes.body.id);
     const wsRow = await db('workspaces').where({ id: createRes.body.id }).first('organization_id');
     expect(row.organizationId).toBe(wsRow.organization_id);
   });
@@ -101,15 +101,15 @@ describe('GET /api/workspaces organizationId field and filter (slice 3)', () => 
       .get('/api/workspaces')
       .query({ organizationId: earliestOrg.id })
       .set(authHeader(admin.accessToken));
-    expect(filteredA.body.map((w) => w.id)).toContain(wsA.body.id);
-    expect(filteredA.body.map((w) => w.id)).not.toContain(wsB.body.id);
+    expect(filteredA.body.workspaces.map((w) => w.id)).toContain(wsA.body.id);
+    expect(filteredA.body.workspaces.map((w) => w.id)).not.toContain(wsB.body.id);
 
     const filteredB = await request(app)
       .get('/api/workspaces')
       .query({ organizationId: orgB.id })
       .set(authHeader(admin.accessToken));
-    expect(filteredB.body.map((w) => w.id)).toContain(wsB.body.id);
-    expect(filteredB.body.map((w) => w.id)).not.toContain(wsA.body.id);
+    expect(filteredB.body.workspaces.map((w) => w.id)).toContain(wsB.body.id);
+    expect(filteredB.body.workspaces.map((w) => w.id)).not.toContain(wsA.body.id);
   });
 
   test('?organizationId= for an org the caller has no relationship to returns an empty array, not an error', async () => {
@@ -128,7 +128,7 @@ describe('GET /api/workspaces organizationId field and filter (slice 3)', () => 
     // Outsider does have a workspace (in their own default org) — proves the
     // empty result comes from the orgB filter narrowing an already-scoped
     // result set to nothing, not from having no workspaces at all.
-    expect(res.body).toEqual([]);
+    expect(res.body.workspaces).toEqual([]);
   });
 });
 
@@ -148,7 +148,7 @@ describe('GET /api/workspaces/discoverable organization scoping', () => {
     const seeker = await signup('wsdiscseeker0');
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body.map((w) => w.id)).not.toContain(wsB.body.id);
+    expect(res.body.workspaces.map((w) => w.id)).not.toContain(wsB.body.id);
   });
 
   test('explicit organizationId scopes the discoverable list to that org', async () => {
@@ -170,7 +170,7 @@ describe('GET /api/workspaces/discoverable organization scoping', () => {
       .query({ organizationId: orgB.id })
       .set(authHeader(orgBMember.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body.map((w) => w.id)).toContain(wsB.body.id);
+    expect(res.body.workspaces.map((w) => w.id)).toContain(wsB.body.id);
   });
 
   test('explicit organizationId the caller is not a member of 404s', async () => {
@@ -183,5 +183,57 @@ describe('GET /api/workspaces/discoverable organization scoping', () => {
       .query({ organizationId: org.id })
       .set(authHeader(outsider.accessToken));
     expect(res.status).toBe(404);
+  });
+});
+
+// Finding 3, docs/reviews/security-performance-review-2026-07-20.md:
+// GET /workspaces and GET /workspaces/discoverable were both genuinely
+// unbounded — no `.limit()` at all. Same {<resource>, total, limit, offset}
+// shape and same malformed-params/bounded-page coverage as the six routes
+// the 2026-07-20 pagination pass already fixed.
+describe('GET /api/workspaces and GET /api/workspaces/discoverable pagination', () => {
+  test('GET /api/workspaces rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const user = await signup('wspaging0');
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(app).post('/api/workspaces').set(authHeader(user.accessToken)).send({ name: `Paging WS ${i}` });
+    }
+
+    const badLimit = await request(app).get('/api/workspaces?limit=0').set(authHeader(user.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await request(app).get('/api/workspaces?offset=-1').set(authHeader(user.accessToken));
+    expect(badOffset.status).toBe(400);
+
+    const page = await request(app).get('/api/workspaces?limit=2&offset=0').set(authHeader(user.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.workspaces).toHaveLength(2);
+    expect(page.body.total).toBeGreaterThanOrEqual(3);
+    expect(page.body.limit).toBe(2);
+    expect(page.body.offset).toBe(0);
+  });
+
+  test('GET /api/workspaces/discoverable rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const admin = await seedSystemAdmin('wsdiscpaging0');
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(app)
+        .post('/api/workspaces')
+        .set(authHeader(admin.accessToken))
+        .send({ name: `Discoverable Paging ${i}`, visibility: 'DISCOVERABLE' });
+    }
+    const seeker = await signup('wsdiscpagingseeker0');
+
+    const badLimit = await request(app)
+      .get('/api/workspaces/discoverable?limit=0')
+      .set(authHeader(seeker.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const page = await request(app)
+      .get('/api/workspaces/discoverable?limit=2&offset=0')
+      .set(authHeader(seeker.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.workspaces).toHaveLength(2);
+    expect(page.body.total).toBeGreaterThanOrEqual(3);
   });
 });

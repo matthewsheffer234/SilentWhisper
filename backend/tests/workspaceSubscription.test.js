@@ -62,8 +62,8 @@ describe('GET /api/workspaces/discoverable', () => {
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body.map((w) => w.id)).toContain(ws.id);
-    expect(res.body.find((w) => w.id === ws.id).role).toBeUndefined();
+    expect(res.body.workspaces.map((w) => w.id)).toContain(ws.id);
+    expect(res.body.workspaces.find((w) => w.id === ws.id).role).toBeUndefined();
   });
 
   test('excludes a PRIVATE workspace', async () => {
@@ -72,7 +72,7 @@ describe('GET /api/workspaces/discoverable', () => {
     const ws = await createWorkspace(owner, { visibility: 'PRIVATE' });
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
-    expect(res.body.map((w) => w.id)).not.toContain(ws.id);
+    expect(res.body.workspaces.map((w) => w.id)).not.toContain(ws.id);
   });
 
   test('excludes a workspace the caller already belongs to', async () => {
@@ -80,7 +80,7 @@ describe('GET /api/workspaces/discoverable', () => {
     const ws = await createWorkspace(owner, { visibility: 'DISCOVERABLE' });
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(owner.accessToken));
-    expect(res.body.map((w) => w.id)).not.toContain(ws.id);
+    expect(res.body.workspaces.map((w) => w.id)).not.toContain(ws.id);
   });
 
   test('excludes an archived DISCOVERABLE workspace', async () => {
@@ -90,7 +90,7 @@ describe('GET /api/workspaces/discoverable', () => {
     await request(app).post(`/api/workspaces/${ws.id}/archive`).set(authHeader(owner.accessToken));
 
     const res = await request(app).get('/api/workspaces/discoverable').set(authHeader(seeker.accessToken));
-    expect(res.body.map((w) => w.id)).not.toContain(ws.id);
+    expect(res.body.workspaces.map((w) => w.id)).not.toContain(ws.id);
   });
 });
 

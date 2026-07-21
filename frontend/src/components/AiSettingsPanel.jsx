@@ -237,36 +237,50 @@ export default function AiSettingsPanel({ onClose }) {
               />
             </div>
 
+            {/* Finding 2, docs/reviews/security-performance-review-2026-07-20.md:
+                'v2' is the only value backend/src/llm/settingsService.js's
+                PROMPT_VERSIONS now accepts — a free-text field let a typo
+                (or a deliberate 'v1') silently reactivate the weaker
+                fixed-delimiter prompt format the backend now rejects.
+                A single-option <select>, matching the Provider field's own
+                enum-backed pattern above, makes that unrepresentable in the
+                UI rather than just rejected after a failed save. */}
             <div style={styles.row}>
               <div style={{ ...styles.field, flex: 1 }}>
                 <label style={styles.label} htmlFor="ai-summary-version">Summary prompt version</label>
-                <input
+                <select
                   id="ai-summary-version"
-                  style={styles.input}
+                  style={styles.select}
                   value={form.summaryPromptVersion}
                   onChange={(e) => updateField('summaryPromptVersion', e.target.value)}
-                />
+                >
+                  <option value="v2">v2</option>
+                </select>
               </div>
               <div style={{ ...styles.field, flex: 1 }}>
                 <label style={styles.label} htmlFor="ai-task-version">Task prompt version</label>
-                <input
+                <select
                   id="ai-task-version"
-                  style={styles.input}
+                  style={styles.select}
                   value={form.taskPromptVersion}
                   onChange={(e) => updateField('taskPromptVersion', e.target.value)}
-                />
+                >
+                  <option value="v2">v2</option>
+                </select>
               </div>
             </div>
 
             <div style={styles.row}>
               <div style={{ ...styles.field, flex: 1 }}>
                 <label style={styles.label} htmlFor="ai-digest-version">Digest prompt version</label>
-                <input
+                <select
                   id="ai-digest-version"
-                  style={styles.input}
+                  style={styles.select}
                   value={form.digestPromptVersion}
                   onChange={(e) => updateField('digestPromptVersion', e.target.value)}
-                />
+                >
+                  <option value="v2">v2</option>
+                </select>
               </div>
             </div>
 

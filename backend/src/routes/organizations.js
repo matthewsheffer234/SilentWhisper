@@ -501,33 +501,48 @@ organizationsRouter.post('/:orgId/invitations', invitationCreateLimiter, async (
 // equivalent in workspaces.js exactly — same reasoning (the only invitation
 // data the frontend would otherwise see is the just-created token, gone on
 // reload), same permission gate as the POST above.
+//
+// Finding 3, docs/reviews/security-performance-review-2026-07-20.md:
+// offset-paginated, same shape/reasoning as the workspace-scoped route.
 organizationsRouter.get('/:orgId/invitations', async (req, res, next) => {
   try {
     const orgId = assertUuid(req.params.orgId, 'orgId');
     await requireOrgPermission(db, req.user.id, orgId, PERMISSIONS.ORG_INVITE);
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('invitations as i')
-      .join('users as u', 'u.id', 'i.invited_by')
-      .where({ 'i.scope_type': 'ORGANIZATION', 'i.organization_id': orgId, 'i.status': 'PENDING' })
-      .andWhere('i.expires_at', '>', new Date())
-      .select(
-        'i.id',
-        'i.invited_role',
-        'i.expires_at',
-        'u.username as invited_by_username',
-        'u.display_name as invited_by_display_name',
-      )
-      .orderBy('i.created_at', 'desc');
+    const baseQuery = () =>
+      db('invitations as i')
+        .join('users as u', 'u.id', 'i.invited_by')
+        .where({ 'i.scope_type': 'ORGANIZATION', 'i.organization_id': orgId, 'i.status': 'PENDING' })
+        .andWhere('i.expires_at', '>', new Date());
 
-    res.json(
-      rows.map((r) => ({
+    const [{ count }, rows] = await Promise.all([
+      baseQuery().count('i.id as count').first(),
+      baseQuery()
+        .select(
+          'i.id',
+          'i.invited_role',
+          'i.expires_at',
+          'u.username as invited_by_username',
+          'u.display_name as invited_by_display_name',
+        )
+        .orderBy('i.created_at', 'desc')
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    res.json({
+      invitations: rows.map((r) => ({
         id: r.id,
         invitedRole: r.invited_role,
         expiresAt: r.expires_at,
         invitedByUsername: r.invited_by_username,
         invitedByDisplayName: r.invited_by_display_name,
       })),
-    );
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }

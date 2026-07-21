@@ -4,7 +4,13 @@ import { apiFetch, fetchAllPages } from './client.js';
 // slice 3): the backend defaults to the caller's sole org membership when
 // omitted, a no-op for every account with exactly one org — the org switcher
 // only needs to pass it once a second org actually exists.
-export const listWorkspaces = () => apiFetch('/workspaces');
+//
+// Finding 3, docs/reviews/security-performance-review-2026-07-20.md: GET
+// /workspaces is now offset-paginated server-side; this loops every page
+// into the flat list the sidebar/org-switcher render, the same
+// fetchAllPages() tradeoff already used for listOrganizations/listChannels/
+// listDirectMessages.
+export const listWorkspaces = () => fetchAllPages('/workspaces', 'workspaces');
 export const createWorkspace = (name, visibility, organizationId) =>
   apiFetch('/workspaces', {
     method: 'POST',
@@ -20,7 +26,11 @@ export const inviteWorkspaceMember = (workspaceId, username, role) =>
 // at redemption time.
 export const createWorkspaceInvitation = (workspaceId, role) =>
   apiFetch(`/workspaces/${workspaceId}/invitations`, { method: 'POST', body: { role } });
-export const listWorkspaceInvitations = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/invitations`);
+// Finding 3: now offset-paginated server-side; looped into a flat list for
+// UserManagementPanel.jsx's existing invitation-revoke UI rather than adding
+// a second Pager next to the one it already has for members.
+export const listWorkspaceInvitations = (workspaceId) =>
+  fetchAllPages(`/workspaces/${workspaceId}/invitations`, 'invitations');
 
 // Membership invitations (FEATURE_REQUEST.md "Live notification system..."):
 // for an *existing* account — proposes membership, notified live, the
@@ -35,8 +45,13 @@ export const createWorkspaceMembershipInvitation = (workspaceId, userId, role) =
 // is required here in practice once an account belongs to 2+ orgs — the
 // backend 400s without it (resolveCallerOrganization) — so callers must pass
 // the currently-selected org once the org switcher exists.
+//
+// Finding 3: now offset-paginated server-side; BrowseWorkspacesPanel.jsx
+// keeps its existing flat-list "browse and join" rendering via
+// fetchAllPages() rather than growing pager UI for what's meant to be a
+// simple browse sheet.
 export const listDiscoverableWorkspaces = (organizationId) =>
-  apiFetch(`/workspaces/discoverable${organizationId ? `?organizationId=${organizationId}` : ''}`);
+  fetchAllPages(`/workspaces/discoverable${organizationId ? `?organizationId=${organizationId}` : ''}`, 'workspaces');
 export const subscribeToWorkspace = (workspaceId) =>
   apiFetch(`/workspaces/${workspaceId}/subscribe`, { method: 'POST' });
 

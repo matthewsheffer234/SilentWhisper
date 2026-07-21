@@ -1,4 +1,4 @@
-import { apiFetch } from './client.js';
+import { apiFetch, fetchAllPages } from './client.js';
 
 export const listMentionNotifications = ({ unreadOnly, limit, before } = {}) => {
   const params = new URLSearchParams();
@@ -20,7 +20,12 @@ export const markAllMentionNotificationsRead = () =>
 // Membership invitations (FEATURE_REQUEST.md "Live notification system..."):
 // an existing account's own pending invitations, distinct from
 // api/invitations.js's token-based ones.
-export const listMembershipInvitations = () => apiFetch('/membership-invitations');
+//
+// Finding 3, docs/reviews/security-performance-review-2026-07-20.md: now
+// offset-paginated server-side; looped into a flat list for
+// NotificationPanel.jsx's existing rendering rather than adding pager UI to
+// a notification dropdown.
+export const listMembershipInvitations = () => fetchAllPages('/membership-invitations', 'invitations');
 export const acceptMembershipInvitation = (id) => apiFetch(`/membership-invitations/${id}/accept`, { method: 'POST' });
 export const declineMembershipInvitation = (id) =>
   apiFetch(`/membership-invitations/${id}/decline`, { method: 'POST' });

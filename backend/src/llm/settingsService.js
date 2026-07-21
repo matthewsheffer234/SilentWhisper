@@ -17,6 +17,15 @@ import { ValidationError } from '../errors.js';
 // database-backed override.
 export const LLM_PROVIDERS = ['ollama', 'vllm', 'disabled'];
 
+// Finding 2, docs/reviews/security-performance-review-2026-07-20.md: 'v1'
+// uses fixed MESSAGES_START/MESSAGES_END markers with raw interpolated
+// message text — exactly what 'v2' (a per-request random nonce, JSON-
+// serialized content) was built to replace as a prompt-injection defense.
+// 'v1' stays supported in promptTemplates.js as build()'s fallback for
+// historical/test use, but is never an admin-settable value, so a typo or
+// stale client can't silently downgrade prompt security.
+export const PROMPT_VERSIONS = ['v2'];
+
 // db key -> camelCase field name used everywhere in application code.
 const KEY_TO_FIELD = {
   'llm.provider': 'provider',
@@ -108,13 +117,13 @@ export function validateSettingsPatch(body) {
   if ('temperature' in body) patch.temperature = assertBoundedNumber(body.temperature, { min: 0, max: 2 }, 'temperature');
   if ('streamingEnabled' in body) patch.streamingEnabled = assertBoolean(body.streamingEnabled, 'streamingEnabled');
   if ('summaryPromptVersion' in body) {
-    patch.summaryPromptVersion = assertShortString(body.summaryPromptVersion, { maxLength: 20 }, 'summaryPromptVersion');
+    patch.summaryPromptVersion = assertEnum(body.summaryPromptVersion, PROMPT_VERSIONS, 'summaryPromptVersion');
   }
   if ('taskPromptVersion' in body) {
-    patch.taskPromptVersion = assertShortString(body.taskPromptVersion, { maxLength: 20 }, 'taskPromptVersion');
+    patch.taskPromptVersion = assertEnum(body.taskPromptVersion, PROMPT_VERSIONS, 'taskPromptVersion');
   }
   if ('digestPromptVersion' in body) {
-    patch.digestPromptVersion = assertShortString(body.digestPromptVersion, { maxLength: 20 }, 'digestPromptVersion');
+    patch.digestPromptVersion = assertEnum(body.digestPromptVersion, PROMPT_VERSIONS, 'digestPromptVersion');
   }
   return patch;
 }

@@ -73,6 +73,27 @@ describe('validateSettingsPatch', () => {
       /not an approved LLM provider origin/,
     );
   });
+
+  // Finding 2, docs/reviews/security-performance-review-2026-07-20.md: these
+  // three fields used to accept any short string, so a typo'd value (e.g.
+  // 'v1', or anything else promptTemplates.js's build() doesn't recognize)
+  // silently fell back to the weaker fixed-delimiter 'v1' prompt format
+  // rather than failing the request. Only 'v2' is admin-settable now.
+  test('accepts v2 for the prompt-version fields', () => {
+    const patch = validateSettingsPatch({
+      summaryPromptVersion: 'v2',
+      taskPromptVersion: 'v2',
+      digestPromptVersion: 'v2',
+    });
+    expect(patch).toEqual({ summaryPromptVersion: 'v2', taskPromptVersion: 'v2', digestPromptVersion: 'v2' });
+  });
+
+  test('rejects v1 and any other value for the prompt-version fields, rather than silently downgrading', () => {
+    expect(() => validateSettingsPatch({ summaryPromptVersion: 'v1' })).toThrow();
+    expect(() => validateSettingsPatch({ taskPromptVersion: 'v1' })).toThrow();
+    expect(() => validateSettingsPatch({ digestPromptVersion: 'v1' })).toThrow();
+    expect(() => validateSettingsPatch({ summaryPromptVersion: 'typo' })).toThrow();
+  });
 });
 
 describe('updateSettings', () => {

@@ -35,7 +35,11 @@ export const unarchiveOrganization = (orgId) => apiFetch(`/organizations/${orgId
 // invitations" entry) — the invitee supplies their own at redemption time.
 export const createOrgInvitation = (orgId, role) =>
   apiFetch(`/organizations/${orgId}/invitations`, { method: 'POST', body: { role } });
-export const listOrgInvitations = (orgId) => apiFetch(`/organizations/${orgId}/invitations`);
+// Finding 3, docs/reviews/security-performance-review-2026-07-20.md: now
+// offset-paginated server-side; looped into a flat list for
+// OrgManagementPanel.jsx's existing invitation-revoke UI, the same tradeoff
+// listWorkspaceInvitations makes.
+export const listOrgInvitations = (orgId) => fetchAllPages(`/organizations/${orgId}/invitations`, 'invitations');
 
 // Membership invitations (FEATURE_REQUEST.md "Live notification system..."):
 // for an *existing* account — proposes membership, notified live, the

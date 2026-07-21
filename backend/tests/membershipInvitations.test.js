@@ -249,12 +249,14 @@ describe('GET /api/membership-invitations', () => {
 
     const otherList = await request(app).get('/api/membership-invitations').set(authHeader(other.accessToken));
     expect(otherList.status).toBe(200);
-    expect(otherList.body).toEqual([]);
+    expect(otherList.body.invitations).toEqual([]);
+    expect(otherList.body.total).toBe(0);
 
     const targetList = await request(app).get('/api/membership-invitations').set(authHeader(target.accessToken));
     expect(targetList.status).toBe(200);
-    expect(targetList.body).toHaveLength(1);
-    expect(targetList.body[0]).toMatchObject({
+    expect(targetList.body.invitations).toHaveLength(1);
+    expect(targetList.body.total).toBe(1);
+    expect(targetList.body.invitations[0]).toMatchObject({
       id: createRes.body.id,
       scopeType: 'WORKSPACE',
       scopeName: 'List Workspace',
@@ -265,7 +267,35 @@ describe('GET /api/membership-invitations', () => {
     // Resolving it removes it from the pending list.
     await request(app).post(`/api/membership-invitations/${createRes.body.id}/decline`).set(authHeader(target.accessToken));
     const afterDecline = await request(app).get('/api/membership-invitations').set(authHeader(target.accessToken));
-    expect(afterDecline.body).toEqual([]);
+    expect(afterDecline.body.invitations).toEqual([]);
+  });
+
+  test('rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const owner = await signup('wsmipage0');
+    const ws = await createWorkspace(owner, 'Page Workspace');
+    const target = await signup('wsmipagetarget0');
+    await signup('wsmipagetarget0b');
+
+    const bad = await request(app)
+      .get('/api/membership-invitations')
+      .query({ limit: 0 })
+      .set(authHeader(target.accessToken));
+    expect(bad.status).toBe(400);
+
+    await request(app)
+      .post(`/api/workspaces/${ws.id}/membership-invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({ userId: target.userId, role: 'MEMBER' });
+
+    const page = await request(app)
+      .get('/api/membership-invitations')
+      .query({ limit: 1, offset: 0 })
+      .set(authHeader(target.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.invitations).toHaveLength(1);
+    expect(page.body.limit).toBe(1);
+    expect(page.body.offset).toBe(0);
+    expect(page.body.total).toBe(1);
   });
 });
 

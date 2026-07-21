@@ -42,7 +42,7 @@ async function createWorkspaceWithPrivateChannel(owner) {
 }
 
 describe('system admin structural workspace management (not a member)', () => {
-  test('can create a channel in a workspace they do not belong to', async () => {
+  test('can create a channel in a workspace they do not belong to, without being silently auto-joined to it', async () => {
     const owner = await signup('sawmowner0');
     const admin = await seedSystemAdmin('sawmadmin0');
     const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'Owner Workspace' });
@@ -52,9 +52,38 @@ describe('system admin structural workspace management (not a member)', () => {
       .set(authHeader(admin.accessToken))
       .send({ name: 'admin-made', type: 'PUBLIC' });
     expect(res.status).toBe(201);
+    expect(res.body.isMember).toBe(false);
 
     const row = await db('audit_logs').where({ action_type: 'CHANNEL_CREATED', target_resource: res.body.id }).first();
     expect(row).toBeDefined();
+
+    const memberRow = await db('channel_members').where({ channel_id: res.body.id, user_id: admin.userId }).first();
+    expect(memberRow).toBeUndefined();
+  });
+
+  // Finding 1, docs/reviews/security-performance-review-2026-07-20.md: the
+  // gap wasn't merely "can the admin read a pre-existing private channel
+  // they never joined" (proven below by the sibling test using a channel
+  // the *owner* created) — it was that creating a channel used to insert a
+  // real channel_members row for the admin, converting a structural action
+  // into standing content-read access. Prove the exact just-created case.
+  test('creating a PRIVATE channel does not grant read access to its messages', async () => {
+    const owner = await signup('sawmowner0b');
+    const admin = await seedSystemAdmin('sawmadmin0b');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'Owner Workspace' });
+
+    const createRes = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/channels`)
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'admin-made-private', type: 'PRIVATE' });
+    expect(createRes.status).toBe(201);
+    const channelId = createRes.body.id;
+
+    const memberRow = await db('channel_members').where({ channel_id: channelId, user_id: admin.userId }).first();
+    expect(memberRow).toBeUndefined();
+
+    const messagesRes = await request(app).get(`/api/channels/${channelId}/messages`).set(authHeader(admin.accessToken));
+    expect(messagesRes.status).toBe(404);
   });
 
   test('can list every channel, including PRIVATE ones, unlike a plain non-member', async () => {

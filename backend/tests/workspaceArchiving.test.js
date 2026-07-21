@@ -292,7 +292,7 @@ describe('read paths remain available for an archived workspace', () => {
     await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
 
     const listRes = await request(app).get('/api/workspaces').set(authHeader(owner.accessToken));
-    const ws = listRes.body.find((w) => w.id === workspaceId);
+    const ws = listRes.body.workspaces.find((w) => w.id === workspaceId);
     expect(ws.archivedAt).toBeTruthy();
 
     const channelsRes = await request(app).get(`/api/workspaces/${workspaceId}/channels`).set(authHeader(owner.accessToken));

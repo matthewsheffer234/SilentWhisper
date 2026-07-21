@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { assertUuid } from '../validation.js';
+import { assertUuid, parseOffsetPagination } from '../validation.js';
 import { appendAuditEvent } from '../audit/auditService.js';
 import { markMembershipInvitationNotificationRead } from '../services/userNotificationService.js';
 import { NotFoundError } from '../errors.js';
@@ -22,29 +22,46 @@ membershipInvitationsRouter.use(requireAuth);
 // requireAuth: this can only ever return rows addressed to the caller
 // (invited_user_id is never client-supplied), so there's nothing to
 // existence-hide here the way a workspace/channel lookup would need to.
+//
+// Finding 3, docs/reviews/security-performance-review-2026-07-20.md: no cap
+// existed on how many pending invitations a single account can accumulate —
+// offset-paginated like every other roster/list endpoint this pass fixed.
+// The frontend's fetchAllPages() helper is the frontend half of this fix
+// (api/notifications.js), the same "core list, keep the flat-array
+// contract" tradeoff already established for listOrganizations/listChannels.
 membershipInvitationsRouter.get('/', async (req, res, next) => {
   try {
-    const rows = await db('membership_invitations as mi')
-      .join('users as u', 'u.id', 'mi.invited_by')
-      .leftJoin('organizations as o', 'o.id', 'mi.organization_id')
-      .leftJoin('workspaces as w', 'w.id', 'mi.workspace_id')
-      .where({ 'mi.invited_user_id': req.user.id, 'mi.status': 'PENDING' })
-      .select(
-        'mi.id',
-        'mi.scope_type',
-        'mi.organization_id',
-        'mi.workspace_id',
-        'mi.invited_role',
-        'mi.created_at',
-        'u.username as invited_by_username',
-        'u.display_name as invited_by_display_name',
-        'o.name as organization_name',
-        'w.name as workspace_name',
-      )
-      .orderBy('mi.created_at', 'desc');
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    res.json(
-      rows.map((r) => ({
+    const baseQuery = () =>
+      db('membership_invitations as mi')
+        .join('users as u', 'u.id', 'mi.invited_by')
+        .leftJoin('organizations as o', 'o.id', 'mi.organization_id')
+        .leftJoin('workspaces as w', 'w.id', 'mi.workspace_id')
+        .where({ 'mi.invited_user_id': req.user.id, 'mi.status': 'PENDING' });
+
+    const [{ count }, rows] = await Promise.all([
+      baseQuery().count('mi.id as count').first(),
+      baseQuery()
+        .select(
+          'mi.id',
+          'mi.scope_type',
+          'mi.organization_id',
+          'mi.workspace_id',
+          'mi.invited_role',
+          'mi.created_at',
+          'u.username as invited_by_username',
+          'u.display_name as invited_by_display_name',
+          'o.name as organization_name',
+          'w.name as workspace_name',
+        )
+        .orderBy('mi.created_at', 'desc')
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    res.json({
+      invitations: rows.map((r) => ({
         id: r.id,
         scopeType: r.scope_type,
         organizationId: r.organization_id,
@@ -55,7 +72,10 @@ membershipInvitationsRouter.get('/', async (req, res, next) => {
         invitedByUsername: r.invited_by_username,
         invitedByDisplayName: r.invited_by_display_name,
       })),
-    );
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }

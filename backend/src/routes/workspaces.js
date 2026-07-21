@@ -141,32 +141,49 @@ workspacesRouter.post('/', async (req, res, next) => {
 // so filtering by an org the caller has no relationship to just narrows an
 // already-authorized result set to nothing — unlike GET /discoverable, no
 // membership check is needed on the param since it cannot leak anything.
+// Finding 3, docs/reviews/security-performance-review-2026-07-20.md: this
+// runs on every login/page-load for every user, with no bound on how many
+// workspaces a single account can belong to — offset-paginated like
+// GET /workspaces/admin/all below, following the same {<resource>, total,
+// limit, offset} shape. The frontend's fetchAllPages() helper (already
+// backing listOrganizations/listChannels/listDirectMessages for the
+// identical "core navigational list, keep the flat-array contract"
+// tradeoff) is the frontend half of this fix — see api/workspaces.js.
 workspacesRouter.get('/', async (req, res, next) => {
   try {
     const organizationId =
       req.query.organizationId !== undefined ? assertUuid(req.query.organizationId, 'organizationId') : null;
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('workspaces as w')
-      .join('workspace_members as wm', function joinMembers() {
-        this.on('wm.workspace_id', '=', 'w.id').andOn('wm.user_id', '=', db.raw('?', [req.user.id]));
-      })
-      .modify((qb) => {
-        if (organizationId) qb.where('w.organization_id', organizationId);
-      })
-      .select(
-        'w.id',
-        'w.name',
-        'w.owner_id',
-        'w.organization_id',
-        'w.archived_at',
-        'w.visibility',
-        'w.managers_can_archive',
-        'wm.system_role',
-      )
-      .orderBy('w.created_at', 'asc');
+    const baseQuery = () =>
+      db('workspaces as w')
+        .join('workspace_members as wm', function joinMembers() {
+          this.on('wm.workspace_id', '=', 'w.id').andOn('wm.user_id', '=', db.raw('?', [req.user.id]));
+        })
+        .modify((qb) => {
+          if (organizationId) qb.where('w.organization_id', organizationId);
+        });
 
-    res.json(
-      rows.map((r) => ({
+    const [{ count }, rows] = await Promise.all([
+      baseQuery().count('w.id as count').first(),
+      baseQuery()
+        .select(
+          'w.id',
+          'w.name',
+          'w.owner_id',
+          'w.organization_id',
+          'w.archived_at',
+          'w.visibility',
+          'w.managers_can_archive',
+          'wm.system_role',
+        )
+        .orderBy('w.created_at', 'asc')
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    res.json({
+      workspaces: rows.map((r) => ({
         id: r.id,
         name: r.name,
         ownerId: r.owner_id,
@@ -176,7 +193,10 @@ workspacesRouter.get('/', async (req, res, next) => {
         visibility: r.visibility,
         managersCanArchive: r.managers_can_archive,
       })),
-    );
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }
@@ -256,26 +276,38 @@ workspacesRouter.get('/admin/all', async (req, res, next) => {
 // 409s immediately, a dead-end result "discoverable" shouldn't produce. No
 // `role` in the response shape (unlike GET / above) since the caller has
 // none yet.
+// Finding 3: offset-paginated like GET / above — every DISCOVERABLE
+// workspace in the org, with no prior bound.
 workspacesRouter.get('/discoverable', async (req, res, next) => {
   try {
     const requestedOrgId =
       req.query.organizationId !== undefined ? assertUuid(req.query.organizationId, 'organizationId') : null;
     const organizationId = await resolveCallerOrganization(db, req.user.id, requestedOrgId);
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('workspaces as w')
-      .where('w.visibility', 'DISCOVERABLE')
-      .whereNull('w.archived_at')
-      .where('w.organization_id', organizationId)
-      .whereNotExists(function excludeExistingMembers() {
-        this.select(1)
-          .from('workspace_members as wm')
-          .whereRaw('wm.workspace_id = w.id')
-          .andWhere('wm.user_id', req.user.id);
-      })
-      .select('w.id', 'w.name', 'w.owner_id')
-      .orderBy('w.created_at', 'asc');
+    const baseQuery = () =>
+      db('workspaces as w')
+        .where('w.visibility', 'DISCOVERABLE')
+        .whereNull('w.archived_at')
+        .where('w.organization_id', organizationId)
+        .whereNotExists(function excludeExistingMembers() {
+          this.select(1)
+            .from('workspace_members as wm')
+            .whereRaw('wm.workspace_id = w.id')
+            .andWhere('wm.user_id', req.user.id);
+        });
 
-    res.json(rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id })));
+    const [{ count }, rows] = await Promise.all([
+      baseQuery().count('w.id as count').first(),
+      baseQuery().select('w.id', 'w.name', 'w.owner_id').orderBy('w.created_at', 'asc').limit(limit).offset(offset),
+    ]);
+
+    res.json({
+      workspaces: rows.map((r) => ({ id: r.id, name: r.name, ownerId: r.owner_id })),
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }
@@ -507,33 +539,49 @@ workspacesRouter.post('/:workspaceId/invitations', invitationCreateLimiter, asyn
 // transient component state — gone on reload. Same permission gate as the
 // POST above; PENDING + not-yet-expired only (ACCEPTED/REVOKED/expired
 // invitations aren't actionable from here).
+//
+// Finding 3: no cap existed on how many pending invitations a workspace can
+// accumulate — offset-paginated like the six routes the 2026-07-20 pass
+// already fixed.
 workspacesRouter.get('/:workspaceId/invitations', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
+    const { limit, offset } = parseOffsetPagination(req.query);
 
-    const rows = await db('invitations as i')
-      .join('users as u', 'u.id', 'i.invited_by')
-      .where({ 'i.scope_type': 'WORKSPACE', 'i.workspace_id': workspaceId, 'i.status': 'PENDING' })
-      .andWhere('i.expires_at', '>', new Date())
-      .select(
-        'i.id',
-        'i.invited_role',
-        'i.expires_at',
-        'u.username as invited_by_username',
-        'u.display_name as invited_by_display_name',
-      )
-      .orderBy('i.created_at', 'desc');
+    const baseQuery = () =>
+      db('invitations as i')
+        .join('users as u', 'u.id', 'i.invited_by')
+        .where({ 'i.scope_type': 'WORKSPACE', 'i.workspace_id': workspaceId, 'i.status': 'PENDING' })
+        .andWhere('i.expires_at', '>', new Date());
 
-    res.json(
-      rows.map((r) => ({
+    const [{ count }, rows] = await Promise.all([
+      baseQuery().count('i.id as count').first(),
+      baseQuery()
+        .select(
+          'i.id',
+          'i.invited_role',
+          'i.expires_at',
+          'u.username as invited_by_username',
+          'u.display_name as invited_by_display_name',
+        )
+        .orderBy('i.created_at', 'desc')
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    res.json({
+      invitations: rows.map((r) => ({
         id: r.id,
         invitedRole: r.invited_role,
         expiresAt: r.expires_at,
         invitedByUsername: r.invited_by_username,
         invitedByDisplayName: r.invited_by_display_name,
       })),
-    );
+      total: Number(count),
+      limit,
+      offset,
+    });
   } catch (err) {
     next(err);
   }
@@ -1080,10 +1128,21 @@ workspacesRouter.post('/:workspaceId/members/:userId/reset-password', adminPassw
   }
 });
 
+// A system admin creating a channel via the structural-management override
+// is deliberately NOT auto-joined to it (Finding 1, docs/reviews/security-
+// performance-review-2026-07-20.md): requireWorkspaceMemberOrSystemAdmin's
+// bypass grants structural management only, but the unconditional
+// channel_members insert this route used to do turned "create a channel"
+// into a silent, standing grant of message-content read access — exactly
+// the boundary requireWorkspaceMemberOrSystemAdmin's own doc comment says
+// is off-limits. A genuine workspace member is still auto-joined to a
+// channel they create, unchanged. An admin who actually wants to read the
+// channel must take the same further, explicit, auditable step anyone else
+// would (POST .../channels/:channelId/members).
 workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
+    const { viaSystemAdminOverride } = await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
     await requireWorkspaceNotArchived(db, workspaceId);
 
     const name = assertName(req.body?.name, 'channel name');
@@ -1093,7 +1152,9 @@ workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
       const [ch] = await trx('channels')
         .insert({ workspace_id: workspaceId, name, type })
         .returning(['id', 'workspace_id', 'name', 'type', 'created_at']);
-      await trx('channel_members').insert({ channel_id: ch.id, user_id: req.user.id });
+      if (!viaSystemAdminOverride) {
+        await trx('channel_members').insert({ channel_id: ch.id, user_id: req.user.id });
+      }
       return ch;
     });
 
@@ -1105,7 +1166,13 @@ workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
       payload: { workspaceId, type },
     });
 
-    res.status(201).json({ id: channel.id, workspaceId: channel.workspace_id, name: channel.name, type: channel.type });
+    res.status(201).json({
+      id: channel.id,
+      workspaceId: channel.workspace_id,
+      name: channel.name,
+      type: channel.type,
+      isMember: !viaSystemAdminOverride,
+    });
   } catch (err) {
     next(err);
   }

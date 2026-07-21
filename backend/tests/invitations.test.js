@@ -124,14 +124,15 @@ describe('GET /api/organizations/:orgId/invitations', () => {
 
     const res = await request(app).get(`/api/organizations/${org.id}/invitations`).set(authHeader(admin.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0]).toMatchObject({
+    expect(res.body.invitations).toHaveLength(1);
+    expect(res.body.total).toBe(1);
+    expect(res.body.invitations[0]).toMatchObject({
       id: pending.body.id,
       invitedByUsername: 'orginvitelist0',
       // FEATURE_REQUEST.md's "display names as the primary identity" entry.
       invitedByDisplayName: 'orginvitelist0',
     });
-    expect(res.body[0].email).toBeUndefined();
+    expect(res.body.invitations[0].email).toBeUndefined();
   });
 
   test('a non-member gets 404 for a real org, not 403', async () => {
@@ -141,6 +142,28 @@ describe('GET /api/organizations/:orgId/invitations', () => {
     const outsider = await signup('orginvitelistoutsider1');
     const res = await request(app).get(`/api/organizations/${org.id}/invitations`).set(authHeader(outsider.accessToken));
     expect(res.status).toBe(404);
+  });
+
+  // Finding 3, docs/reviews/security-performance-review-2026-07-20.md.
+  test('rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const admin = await seedSystemAdmin('orginvitepaging0');
+    const org = await createOrg(admin.accessToken);
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(app).post(`/api/organizations/${org.id}/invitations`).set(authHeader(admin.accessToken)).send({});
+    }
+
+    const badLimit = await request(app)
+      .get(`/api/organizations/${org.id}/invitations?limit=0`)
+      .set(authHeader(admin.accessToken));
+    expect(badLimit.status).toBe(400);
+
+    const page = await request(app)
+      .get(`/api/organizations/${org.id}/invitations?limit=2&offset=0`)
+      .set(authHeader(admin.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.invitations).toHaveLength(2);
+    expect(page.body.total).toBe(3);
   });
 });
 
@@ -162,13 +185,14 @@ describe('GET /api/workspaces/:workspaceId/invitations', () => {
 
     const res = await request(app).get(`/api/workspaces/${ws.id}/invitations`).set(authHeader(owner.accessToken));
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0]).toMatchObject({
+    expect(res.body.invitations).toHaveLength(1);
+    expect(res.body.total).toBe(1);
+    expect(res.body.invitations[0]).toMatchObject({
       id: pending.body.id,
       invitedByUsername: 'wsinvitelist0',
       invitedByDisplayName: 'wsinvitelist0',
     });
-    expect(res.body[0].email).toBeUndefined();
+    expect(res.body.invitations[0].email).toBeUndefined();
   });
 
   test('a plain member without WORKSPACE_MANAGE_MEMBERS gets 403', async () => {
@@ -179,6 +203,28 @@ describe('GET /api/workspaces/:workspaceId/invitations', () => {
 
     const res = await request(app).get(`/api/workspaces/${ws.id}/invitations`).set(authHeader(member.accessToken));
     expect(res.status).toBe(403);
+  });
+
+  // Finding 3, docs/reviews/security-performance-review-2026-07-20.md.
+  test('rejects malformed pagination params and returns a correctly bounded page', async () => {
+    const owner = await signup('wsinvitepaging0');
+    const ws = await createWorkspace(owner);
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(app).post(`/api/workspaces/${ws.id}/invitations`).set(authHeader(owner.accessToken)).send({});
+    }
+
+    const badOffset = await request(app)
+      .get(`/api/workspaces/${ws.id}/invitations?offset=-1`)
+      .set(authHeader(owner.accessToken));
+    expect(badOffset.status).toBe(400);
+
+    const page = await request(app)
+      .get(`/api/workspaces/${ws.id}/invitations?limit=2&offset=0`)
+      .set(authHeader(owner.accessToken));
+    expect(page.status).toBe(200);
+    expect(page.body.invitations).toHaveLength(2);
+    expect(page.body.total).toBe(3);
   });
 });
 
