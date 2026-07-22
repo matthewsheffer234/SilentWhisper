@@ -16,6 +16,16 @@
 # (Section 2): this host has 8 vCPU / 30GB RAM / no GPU, and memory is not
 # the binding constraint here.
 
+# SHIPMENT_PLAN.md Section 2.6: json-file's default is unbounded growth.
+# docker-compose.enclave.yml already had this (added alongside Section 1.1);
+# added here too so this host's own long-running containers get the same
+# rotation, not just the enclave override.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   # pgvector/pgvector:pg16, not postgres:16-alpine (FEATURE_REQUEST.md entry 1,
   # semantic search): a drop-in image built FROM postgres:16 with the vector
@@ -42,6 +52,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
     # Bumped from 1g (Local Test Environment Resource Envelope, Section 2):
     # the Debian-based pgvector image has a slightly heavier baseline than
     # postgres:16-alpine, plus HNSW index build/maintenance headroom for
@@ -70,6 +81,7 @@ services:
       APP_DB_USER: ${APP_DB_USER}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD}
     command: ["npm", "run", "migrate"]
+    logging: *default-logging
 
   backend:
     build:
@@ -153,6 +165,7 @@ services:
       retries: 5
       start_period: 10s
     mem_limit: 512m
+    logging: *default-logging
     networks:
       - default
       - wireservice_default
@@ -174,6 +187,7 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
+    logging: *default-logging
 
   # One-shot: pulls the configured generation model AND the embedding model
   # (FEATURE_REQUEST.md entry 1, semantic search) into the volume above. Not
@@ -191,6 +205,7 @@ services:
     command: ["ollama pull ${LLM_MODEL:-mistral} && ollama pull ${EMBEDDING_MODEL:-all-minilm}"]
     environment:
       OLLAMA_HOST: silent-whisper-ollama:11434
+    logging: *default-logging
 
   frontend:
     # Production static build (FEATURE_REQUEST.md "the deploy loop" entry,
@@ -219,6 +234,7 @@ services:
     # `docker stats` against a standalone container, so 64m is real headroom
     # (~8x), not a guess.
     mem_limit: 64m
+    logging: *default-logging
     networks:
       - default
       - wireservice_default
