@@ -1,0 +1,103 @@
+# Enclave override for docker-compose.yml — SHIPMENT_PLAN.md Section 1.1.
+#
+# docker-compose.yml on its own is the shared-host Silent Lattice topology:
+# it depends on a local Ollama sidecar, attaches backend/frontend to the
+# external wireservice_default network, and builds backend/migrate/frontend
+# from source at `up` time. None of that is valid in an air-gapped enclave —
+# there's no local Ollama (inference is delegated entirely to the enclave's
+# own dedicated vLLM GPU hosts, see PROJECT_PLAN.md Section 2), no
+# wireservice_default network, and no registry/source access to build from.
+#
+# This file is an OVERRIDE, not a replacement — docker-compose.yml stays the
+# dev/Silent-Lattice-integrated file it already is. Always invoke both
+# together, base file first:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.enclave.yml <cmd>
+#
+# Requires Docker Compose >= 2.24 for the `!reset`/`!override` merge tags
+# below (this repo's tested against 2.40.3). `!override` replaces a field's
+# value outright instead of the default deep-merge/list-concatenation
+# behavior; `!reset` clears a field the base file set, including dropping an
+# entire service. Both are how this file *subtracts* from the base file
+# rather than only adding to it.
+#
+# What this file does NOT do (see SHIPMENT_PLAN.md for why each is tracked
+# separately, not bundled into this override):
+# - Does not fix the backend Docker healthcheck's /health vs /health/live
+#   target (Section 2.2) — apply that to both this file and the base file
+#   together when 2.2 lands, so they don't drift.
+# - Does not create the versioned image tags this file references
+#   (silentwhisper-backend/-frontend:${SILENTWHISPER_VERSION}) — that's
+#   Section 1.2's offline image contract; build/tag/save those before this
+#   file is usable.
+# - Does not resolve the enclave's reverse-proxy/TLS story (Section 1.4) —
+#   this file only removes the wireservice_default attachment, it doesn't
+#   add a replacement ingress path. That's the enclave operator's own
+#   decision and artifact.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    logging: *default-logging
+
+  # No Ollama anywhere in this enclave — !reset drops both services from the
+  # merged config entirely (they still exist in the base docker-compose.yml
+  # for local/Silent-Lattice dev, just never appear when this override is
+  # layered on top).
+  silent-whisper-ollama: !reset null
+  ollama-pull-model: !reset null
+
+  migrate:
+    # Drop the base file's `build:` entirely (not just shadow it) so a bare
+    # `docker compose run migrate` can never accidentally trigger a source
+    # build/npm install in an offline environment that has no registry
+    # access to satisfy it — see Section 1.2 for how this tag is staged.
+    build: !reset null
+    image: silentwhisper-backend:${SILENTWHISPER_VERSION:-1.0.0}
+    logging: *default-logging
+
+  backend:
+    build: !reset null
+    image: silentwhisper-backend:${SILENTWHISPER_VERSION:-1.0.0}
+    logging: *default-logging
+    # !override replaces the base file's whole depends_on map instead of
+    # merging into it — without this tag, silent-whisper-ollama's entry
+    # would survive the merge even after the service above is reset, since
+    # map-type fields merge per-key rather than take the override wholesale.
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+    # Same reasoning for networks: it's a list here, and list-type fields
+    # concatenate across files by default — !override replaces rather than
+    # appends, which is what actually drops wireservice_default.
+    networks: !override
+      - default
+    environment:
+      # This enclave has no local Ollama to default to — force vllm unless
+      # the operator's .env explicitly says otherwise, and never silently
+      # fall back to the Ollama-shaped LLM_BASE_URL default docker-compose.yml
+      # uses for local dev (that hostname doesn't exist here). See
+      # SHIPMENT_PLAN.md Section 1.4/2.4: LLM_BASE_URL and ALLOWED_LLM_ORIGINS
+      # must be set to the enclave's real vLLM host in its own .env — there's
+      # no safe default to fall back to here, so none is given.
+      LLM_PROVIDER: ${LLM_PROVIDER:-vllm}
+
+  frontend:
+    build: !reset null
+    image: silentwhisper-frontend:${SILENTWHISPER_VERSION:-1.0.0}
+    logging: *default-logging
+    networks: !override
+      - default
+
+networks:
+  # The base file declares this as `external: true`, which still requires
+  # the network to exist on the host even though nothing in this override's
+  # merged services attaches to it anymore. !reset drops the declaration
+  # itself so `docker compose up` never checks for a wireservice_default
+  # network that has no reason to exist on an enclave host.
+  wireservice_default: !reset null

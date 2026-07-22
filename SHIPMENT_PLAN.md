@@ -30,7 +30,7 @@ One row per actionable item below. Update the **Status**/**Date** columns as wor
 
 | # | Item | Status | Date | Notes |
 |---|---|---|---|---|
-| 1.1 | `docker-compose.enclave.yml` override | Not started | | |
+| 1.1 | `docker-compose.enclave.yml` override | Partial | 2026-07-22 | File created and merge behavior verified (`docker compose config`); can't be used for a real install until 1.2's image tags exist, and its healthcheck will need the same `/health/live` fix as the base file once 2.2 lands |
 | 1.2 | Versioned/checksummed offline image contract | Not started | | |
 | 1.3 | Rewrite `scripts/airgap-install.sh` | Not started | | |
 | 1.4 | Enclave TLS/reverse-proxy decision | Not started | | Decision, not code — blocked on whoever owns the enclave's network topology |
@@ -58,6 +58,8 @@ The original punchlist assumed "stage three image tars, write an installer" was 
 - `frontend/Dockerfile` takes `VITE_API_URL`/`VITE_WS_URL` as build `ARG`s baked into the static bundle (confirmed: `ENV VITE_API_URL=$VITE_API_URL` before `RUN npm run build`). A frontend image built once in a networked staging environment is permanently pointed at whatever origin was used at build time — it cannot be repointed at a different enclave's hostname without rebuilding.
 
 ### 1.1 Action: add `docker-compose.enclave.yml`
+
+**Status: Partial (2026-07-22)** — file created at repo root, merge behavior verified against Compose 2.40.3; see `## 6. Progress log` for how. Blocked from real use until 1.2 (image tags) exists; still needs the `/health/live` healthcheck fix once 2.2 lands, and doesn't resolve 1.4 (proxy/TLS).
 
 An override (not a replacement — keep `docker-compose.yml` as the dev/Silent-Lattice-integrated file it already is and is documented to be) that:
 
@@ -320,7 +322,7 @@ Replaces the original punchlist's Section 2.2 phase list with the corrected vers
 
 Everything below must be true before go-live. Items new or corrected in this integration pass are marked **[new]**/**[corrected]**; unmarked items are unchanged from the original punchlist and were not disputed by the review.
 
-- [ ] **[new]** `docker-compose.enclave.yml` exists, removes Ollama + `wireservice_default`, uses pinned `image:` tags, and `docker compose -f docker-compose.yml -f docker-compose.enclave.yml config` has been run and its output saved as a release artifact.
+- [ ] **[new]** `docker-compose.enclave.yml` exists, removes Ollama + `wireservice_default`, uses pinned `image:` tags, and `docker compose -f docker-compose.yml -f docker-compose.enclave.yml config` has been run and its output saved as a release artifact. *(Partial 2026-07-22 — file exists, merge verified interactively; still needs a real release's image tags (1.2) before the rendered `config` output can be committed as an actual release artifact, not just a dev-time sanity check.)*
 - [ ] **[new]** Versioned, checksummed image tars exist (`silentwhisper-backend:1.0.0`, `silentwhisper-frontend:1.0.0`, `postgres-pgvector-pg16`) matching exactly what the enclave Compose file references.
 - [ ] **[new]** Frontend build-time URL decision made and documented (rebuild-per-enclave for v1.0, per Section 1.2); installer verifies the built bundle's baked origin.
 - [x] Root `.env.example`: `v2` prompt versions, no `GITHUB_PERSONAL_ACCESS_TOKEN`/`HF_TOKEN`, **[new]** reconciled with every key in `backend/.env.example`. *(Done 2026-07-22 — see Progress log. Bonus: the reconciled keys were also wired into `docker-compose.yml`/`frontend/Dockerfile` so they're actually functional, not just documented.)*
@@ -351,3 +353,18 @@ Dated, append-only — same convention as `PROJECT_PLAN.md` Section 11 (a record
 - **2.1c**: Added the 10 keys present in `backend/.env.example` but missing from root `.env.example` (`LLM_DIGEST_PROMPT_VERSION`, `ALLOWED_LLM_ORIGINS`, `AI_DIGEST_MAX_WINDOW_HOURS`, `EMBEDDING_TIMEOUT_MS`, `EMBEDDING_MAX_CONCURRENT_REQUESTS`, `EMBEDDING_WORKER_INTERVAL_MS`, `EMBEDDING_WORKER_BATCH_SIZE`, `EMBEDDING_MAX_ATTEMPTS`, `TASK_OWNER_TOKEN_ALIAS`, `TASK_DASHBOARD_WINDOW_DAYS`). Discovered while doing this that root `.env` values only reach a service if that service's `docker-compose.yml` `environment:`/`build.args` block references them — none of the 10 were wired in, so the doc fix alone would have been cosmetic. Fixed by also adding all 10 to `docker-compose.yml`'s backend `environment:` block (same `${VAR:-default}` pattern as the existing keys), and adding a `VITE_TASK_OWNER_TOKEN_ALIAS` build arg (`frontend/Dockerfile` + `docker-compose.yml`'s frontend `build.args`, reusing the single root `TASK_OWNER_TOKEN_ALIAS` value) since that one was documented as needing to match the backend's alias exactly but had no wiring on the frontend side at all. Verified with `docker compose config` — parses clean, every new key resolves to the same default `backend/src/config.js` already used, so no runtime behavior changed; the knobs are just reachable now.
 - Not done in this pass: `.env.enclave.example` (2.1's fourth deliverable) still doesn't exist.
 - Also fixed as a byproduct (not part of this plan, but the same investigation surfaced it): `RUNBOOK.md`'s "Check the `app_runtime_user` grants" section had the same flat "all tables except `audit_logs`" error as this plan's Section 2.7 — corrected there directly, independent of the `scripts/airgap-install.sh` fix this plan still needs (2.7/4).
+
+### 2026-07-22 — Section 1.1 (`docker-compose.enclave.yml` override)
+
+Added `docker-compose.enclave.yml` at repo root, meant to be layered with `-f docker-compose.yml -f docker-compose.enclave.yml`. Implements all five bullets from 1.1's spec: drops `silent-whisper-ollama`/`ollama-pull-model` entirely, drops the `wireservice_default` attachment on backend/frontend, swaps `build:` for pinned `image:` tags on migrate/backend/frontend (`silentwhisper-backend:${SILENTWHISPER_VERSION:-1.0.0}` / `silentwhisper-frontend:${SILENTWHISPER_VERSION:-1.0.0}`), leaves `postgres`'s image untouched, and adds the Section 2.6 `x-logging` block to all three.
+
+Mechanically, this needed Compose's `!reset`/`!override` YAML merge tags (Compose spec, supported since Compose CLI 2.24; this repo's Docker Compose is 2.40.3) — plain key omission in an override file does **not** remove anything, since Compose merges mapping fields (`environment`, `depends_on`) per-key and concatenates list fields (`networks`, `ports`) rather than replacing them:
+- `silent-whisper-ollama: !reset null` / `ollama-pull-model: !reset null` — drops each service from the merged result entirely.
+- `depends_on: !override { postgres: {...} }` on `backend` — without `!override` here, the base file's `silent-whisper-ollama` dependency would have survived the merge even after the service itself was reset, since map merge retains keys the override doesn't touch.
+- `networks: !override [default]` on `backend`/`frontend` — same reasoning; list fields concatenate by default, so this is what actually drops `wireservice_default` rather than adding to it.
+- `wireservice_default: !reset null` under the top-level `networks:` key — drops the `external: true` declaration itself, so nothing checks for that network's existence on an enclave host.
+- `build: !reset null` alongside the new `image:` on migrate/backend/frontend — without this, both `build:` and `image:` would coexist post-merge, leaving a latent (if unlikely) path to an accidental network build attempt.
+
+Also added `LLM_PROVIDER: ${LLM_PROVIDER:-vllm}` to backend's environment in this file — the base file's own default (`ollama`) is meaningless once the Ollama service is gone. **Caveat found during verification**: `${VAR:-default}` only applies when `VAR` is completely unset in whatever `.env` Compose loads; this repo's actual `.env` already sets `LLM_PROVIDER=ollama` explicitly (correct for local/Silent-Lattice dev), so testing this override against that same `.env` still resolves to `ollama` — expected, not a bug. This default only does real work once an enclave operator's own `.env` (2.1c's still-uncreated `.env.enclave.example`) is what's loaded instead.
+
+Verified with `docker compose -f docker-compose.yml -f docker-compose.enclave.yml config` (and `--profile tools` to also render `migrate`, which `config` hides by default): confirmed no `silent-whisper-ollama`/`ollama-pull-model` in the merged services, no `build:` key anywhere, `image:` resolves to the expected tags, `wireservice_default` absent from the merged `networks:` section, and logging present on postgres/backend/frontend/migrate. Not yet done: the image tags this file references don't exist yet (1.2), so the file can't actually be used for a real `docker compose up` until then; the base file's `/health` vs `/health/live` healthcheck mismatch (2.2) will need the identical fix applied here too once that lands, since this file doesn't currently override `healthcheck:` at all (it just inherits the base file's, unfixed).
