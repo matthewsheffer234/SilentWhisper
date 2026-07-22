@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/backup-db.sh — SHIPMENT_PLAN.md Section 2.5. Dumps the running
+# scripts/backup-db.sh — docs/plans/active/SHIPMENT_PLAN.md Section 2.5. Dumps the running
 # Postgres database in pg_dump's custom format (-Fc: compressed,
 # parallelizable restore, restorable into a differently-named database via
 # pg_restore -d — unlike plain SQL, which bakes in `\connect <original

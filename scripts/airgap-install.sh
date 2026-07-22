@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/airgap-install.sh — one-shot enclave installer for Silent Whisper.
-# SHIPMENT_PLAN.md Sections 1.3 (this file) and 4 (the 17-step shape this
+# docs/plans/active/SHIPMENT_PLAN.md Sections 1.3 (this file) and 4 (the 17-step shape this
 # implements). Idempotent-ish: safe to re-run after a partial failure up
 # through the point it failed (nothing here is destructive — see "What this
 # script deliberately does NOT do" at the bottom). Exits non-zero on the
@@ -8,7 +8,7 @@
 # broken state, and every step is logged clearly as it runs.
 #
 # Corrects several bugs found in this script's earlier draft (folded in from
-# SHIPMENT_PUNCHLIST_REVIEW.md via SHIPMENT_PLAN.md Section 1.3) rather than
+# docs/plans/active/SHIPMENT_PUNCHLIST_REVIEW.md via docs/plans/active/SHIPMENT_PLAN.md Section 1.3) rather than
 # re-deriving them:
 #   - .env is actually loaded (`set -a; source .env; set +a`) before any
 #     variable from it is referenced — the draft checked
@@ -31,7 +31,7 @@
 #     $COMPOSE array below.
 #
 # Required env vars (from the enclave's own .env — see .env.enclave.example
-# once it exists, SHIPMENT_PLAN.md Section 2.1c): POSTGRES_USER,
+# once it exists, docs/plans/active/SHIPMENT_PLAN.md Section 2.1c): POSTGRES_USER,
 # POSTGRES_PASSWORD, POSTGRES_DB, APP_DB_USER, APP_DB_PASSWORD, JWT_SECRET,
 # LLM_PROVIDER (must be "vllm"), LLM_BASE_URL, LLM_API_KEY, LLM_MODEL,
 # EMBEDDING_MODEL, EMBEDDING_DIMENSION, CORS_ORIGIN, VITE_API_URL,
@@ -44,7 +44,7 @@
 # ENV_FILE (optional, default .env): which env file to load and pass to every
 # `docker compose` invocation via --env-file. Exists so this script can be
 # rehearsed end-to-end on a host that's already running a real Silent Whisper
-# deployment from the default .env (SHIPMENT_PLAN.md Section 1.3's progress
+# deployment from the default .env (docs/plans/active/SHIPMENT_PLAN.md Section 1.3's progress
 # log — this script had never run start-to-finish for exactly that reason)
 # without ever touching that file: point ENV_FILE at a separate rehearsal env
 # and set COMPOSE_PROJECT_NAME (a plain shell/Compose env var, not something
@@ -96,7 +96,7 @@ phase_preflight() {
   command -v sha256sum >/dev/null || fail "sha256sum not found"
   pass "host prerequisites present (docker, compose v2, curl, timeout, xargs, sha256sum)"
 
-  [ -f "$ENV_FILE" ] || fail "$ENV_FILE missing — copy an enclave env template to $ENV_FILE and fill in real values first (SHIPMENT_PLAN.md Section 2.1c)"
+  [ -f "$ENV_FILE" ] || fail "$ENV_FILE missing — copy an enclave env template to $ENV_FILE and fill in real values first (docs/plans/active/SHIPMENT_PLAN.md Section 2.1c)"
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
@@ -115,7 +115,7 @@ phase_preflight() {
     "images/silentwhisper-backend-${SILENTWHISPER_VERSION:-1.0.0}.tar" \
     "images/silentwhisper-frontend-${SILENTWHISPER_VERSION:-1.0.0}.tar"
   do
-    [ -f "$img" ] || fail "$img not found — stage the offline image bundle first (SHIPMENT_PLAN.md Section 1.2)"
+    [ -f "$img" ] || fail "$img not found — stage the offline image bundle first (docs/plans/active/SHIPMENT_PLAN.md Section 1.2)"
   done
   [ -f images/CHECKSUMS.sha256 ] || fail "images/CHECKSUMS.sha256 not found — Section 1.2's staging build must produce this"
   pass "offline image tars + checksum manifest present"
@@ -150,7 +150,7 @@ phase_load_images() {
 }
 
 phase_frontend_bundle_check() {
-  log "Verifying the built frontend bundle was baked for this enclave's URLs (SHIPMENT_PLAN.md Section 1.2)"
+  log "Verifying the built frontend bundle was baked for this enclave's URLs (docs/plans/active/SHIPMENT_PLAN.md Section 1.2)"
   # Checked here, right after load, rather than after the containers are up —
   # this doesn't need anything running, so a URL mismatch is caught before
   # the rest of the install runs, not after.
@@ -198,7 +198,7 @@ phase_migrate() {
 }
 
 phase_grants() {
-  log "Phase E: verify app_runtime_user grants against the corrected per-table matrix (SHIPMENT_PLAN.md Section 2.7 — not a flat 'all except audit_logs' rule)"
+  log "Phase E: verify app_runtime_user grants against the corrected per-table matrix (docs/plans/active/SHIPMENT_PLAN.md Section 2.7 — not a flat 'all except audit_logs' rule)"
 
   local grants
   grants=$("${COMPOSE[@]}" exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -tAc "
@@ -223,7 +223,7 @@ phase_grants() {
         ;;
       *)
         [ "$privs" = "DELETE,INSERT,SELECT,UPDATE" ] \
-          || fail "$table privileges are '$privs', expected full CRUD (DELETE,INSERT,SELECT,UPDATE) — if this is a new table added since SHIPMENT_PLAN.md Section 2.7 was written, update that table there too"
+          || fail "$table privileges are '$privs', expected full CRUD (DELETE,INSERT,SELECT,UPDATE) — if this is a new table added since docs/plans/active/SHIPMENT_PLAN.md Section 2.7 was written, update that table there too"
         ;;
     esac
   done <<< "$grants"
@@ -262,7 +262,7 @@ phase_vllm_models() {
   # curl syntax — this is the actual integer-seconds fix (round up).
   local timeout_s=$(( (${LLM_TIMEOUT_MS:-30000} + 999) / 1000 ))
 
-  # Auth failure-mode check (SHIPMENT_PLAN.md Section 2.4: "confirm LLM_API_KEY
+  # Auth failure-mode check (docs/plans/active/SHIPMENT_PLAN.md Section 2.4: "confirm LLM_API_KEY
   # is actually honored — a wrong/missing key should fail cleanly, not
   # silently succeed against an unauthenticated gateway"). Only meaningful if
   # a key is actually configured; runs before the real round-trip below so a
@@ -287,7 +287,7 @@ phase_vllm_models() {
     || fail "test completion against ${LLM_BASE_URL} failed — check LLM_API_KEY and vLLM gateway logs"
   pass "vLLM completion round-trip succeeded"
 
-  # Streaming smoke test (SHIPMENT_PLAN.md Section 2.4: "a mock can't prove
+  # Streaming smoke test (docs/plans/active/SHIPMENT_PLAN.md Section 2.4: "a mock can't prove
   # this" — so this runs against whatever LLM_BASE_URL is actually
   # configured, at install time, on real hardware). Parses the same
   # OpenAI-compatible SSE shape backend/src/llm/adapters/vllmAdapter.js's
@@ -347,7 +347,7 @@ phase_vllm_models() {
     || fail "embedding returned length $emb_len, expected EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION} — message_embeddings.embedding is a fixed vector(N) column, this mismatch will break on the first real semantic search rather than failing here"
   pass "embedding dimension matches EMBEDDING_DIMENSION ($emb_len)"
 
-  # Concurrency/latency check (SHIPMENT_PLAN.md Section 2.4: "manually fire
+  # Concurrency/latency check (docs/plans/active/SHIPMENT_PLAN.md Section 2.4: "manually fire
   # several concurrent AI requests against the real GPU host and confirm
   # LLM_MAX_CONCURRENT_REQUESTS/LLM_TIMEOUT_MS ... are actually sane for this
   # hardware" — automated here instead of left to the operator to remember).
@@ -374,7 +374,7 @@ phase_vllm_models() {
       # trip `set -e` there too, aborting the whole script with a raw exit
       # code instead of a clean `fail()` message. Caught by testing this
       # against a mock gateway that deliberately rejects concurrent
-      # requests (SHIPMENT_PLAN.md Section 2.4's progress log).
+      # requests (docs/plans/active/SHIPMENT_PLAN.md Section 2.4's progress log).
       if curl -sf --max-time "$timeout_s" -X POST "${LLM_BASE_URL}/v1/completions" \
         -H "Authorization: Bearer ${LLM_API_KEY:-}" -H 'Content-Type: application/json' \
         -d "{\"model\":\"${LLM_MODEL}\",\"prompt\":\"concurrency probe ${i}\",\"max_tokens\":5}" >/dev/null 2>&1; then
@@ -552,7 +552,7 @@ phase_smoke_test() {
     || fail "AI summarize returned an empty response — this is the first real proof of the backend-to-vLLM path through the actual app (not just the direct provider round-trip in Phase F); check backend logs"
   pass "AI summarize returned a non-empty streamed response ($summary_bytes bytes) through the real app"
 
-  log "Not run here (time-dependent, belongs to the separate post-install acceptance checklist — SHIPMENT_PLAN.md Section 5 / the original punch list's verification steps 6-7): semantic search (needs to wait out EMBEDDING_WORKER_INTERVAL_MS) and the audit-dashboard API path."
+  log "Not run here (time-dependent, belongs to the separate post-install acceptance checklist — docs/plans/active/SHIPMENT_PLAN.md Section 5 / the original punch list's verification steps 6-7): semantic search (needs to wait out EMBEDDING_WORKER_INTERVAL_MS) and the audit-dashboard API path."
 }
 
 phase_audit_verify() {
@@ -599,7 +599,7 @@ main() {
   log ""
   log "Enclave install complete. See ${REPORT_FILE} for the full report."
   log "This script does not configure a reverse proxy or TLS in front of the"
-  log "stack (SHIPMENT_PLAN.md Section 1.4) — that decision and its artifact"
+  log "stack (docs/plans/active/SHIPMENT_PLAN.md Section 1.4) — that decision and its artifact"
   log "belong to whoever owns this enclave's network topology."
 }
 

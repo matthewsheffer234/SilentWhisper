@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/restore-db.sh — SHIPMENT_PLAN.md Section 2.5. Restores a
+# scripts/restore-db.sh — docs/plans/active/SHIPMENT_PLAN.md Section 2.5. Restores a
 # scripts/backup-db.sh dump into a NEW, distinctly-named database on the
 # same running Postgres instance — never into the original database name,
 # and never by dropping/overwriting anything. Verifying a backup is
@@ -18,7 +18,7 @@
 # includes each object's ACLs (GRANT statements) by default, so a restored
 # database should already have app_runtime_user's grants intact without
 # re-running database/migrations/0007_grants.js — verify this rather than
-# assuming it (see RUNBOOK.md's Enclave section / SHIPMENT_PLAN.md Section
+# assuming it (see RUNBOOK.md's Enclave section / docs/plans/active/SHIPMENT_PLAN.md Section
 # 2.7 for the expected per-table grant matrix to check against).
 
 set -euo pipefail

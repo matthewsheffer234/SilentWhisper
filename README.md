@@ -11,7 +11,7 @@ Deployed alongside the existing Silent Lattice stack, served under its own hostn
 **Agent-facing rules of engagement and offline run commands**: see [`CLAUDE.md`](./CLAUDE.md).
 **Proposed/planned feature backlog, ranked by utility, with a Done log of everything shipped**: see [`FEATURE_REQUEST.md`](./FEATURE_REQUEST.md).
 **Independent security review and UI/UX review**: see [`docs/reviews/security-review.md`](./docs/reviews/security-review.md) and [`docs/reviews/ui-ux-review.md`](./docs/reviews/ui-ux-review.md). Architecture and later security/performance reviews: [`docs/reviews/`](./docs/reviews/).
-**Air-gapped enclave shipment readiness (integrated punch list + fixes still open)**: see [`SHIPMENT_PLAN.md`](./SHIPMENT_PLAN.md).
+**Air-gapped enclave shipment readiness (living plan: what's done, what's a formally accepted risk, what's still open)**: see [`docs/plans/active/SHIPMENT_PLAN.md`](./docs/plans/active/SHIPMENT_PLAN.md).
 
 ## Status
 
@@ -29,8 +29,8 @@ The original five-phase roadmap (Local Foundation And Database Setup; Local Auth
 
 **Known issues, flagged for a deliberate decision rather than silently fixed**:
 - Every High/Medium finding from the 2026-07-15, 2026-07-19, and 2026-07-20 security/performance reviews is fixed and verified in current source — disabled-account access windows, the LLM `baseUrl` SSRF/DoS risk, archived-workspace/org invitation redemption, WebSocket payload and group-DM member caps, the global-admin self-escalation and cross-workspace channel-member injection issues, and all eight 2026-07-20 findings. See [`docs/reviews/`](./docs/reviews/) for the individual writeups and `PROJECT_PLAN.md` Section 11 for each fix's dated entry.
-- `LLM_PROVIDER=vllm` is implemented and unit-tested against a mocked endpoint but has not been exercised against a real vLLM instance (this test host has no GPU) — a hard gate before any enclave/GPU-backed deployment; see [`SHIPMENT_PLAN.md`](./SHIPMENT_PLAN.md).
-- The root `.env.example` still defaults `LLM_SUMMARY_PROMPT_VERSION`/`LLM_TASK_PROMPT_VERSION` to the pre-fix `v1`, even though `backend/src/config.js` and `docker-compose.yml` both default to `v2` — following the documented `cp .env.example .env` setup step silently re-enables the weaker, non-nonce-delimited prompt template. Two-line fix, tracked in [`SHIPMENT_PLAN.md`](./SHIPMENT_PLAN.md).
+- `LLM_PROVIDER=vllm` is implemented and unit-tested against a mocked endpoint but has never been exercised against a real vLLM instance (this test host has no GPU) — the installer (`scripts/airgap-install.sh` Phase F) now automatically checks streaming/auth-failure-mode/concurrency against whatever real host is configured at install time, but this is still the first time those checks run against real hardware at all. A formally accepted risk for v1.0 (no GPU hardware available before ship), offset by `RUNBOOK.md`'s "Enclave Go-Live: Accepted Risks & First-Real-Run Playbook"; see [`docs/plans/active/SHIPMENT_PLAN.md`](./docs/plans/active/SHIPMENT_PLAN.md) Sections 2.4 and 3.
+- `scripts/airgap-install.sh` has been proven correct phase-by-phase against real, isolated infrastructure, but has never run start-to-finish as one continuous process — this dev/test host doubles as Silent Whisper's own live production deployment, so a real single-process rehearsal isn't safe to attempt here. Also a formally accepted risk for v1.0, same playbook as above.
 - The shared `~/wireservice-dev` design tokens' `--text-3` and dark-mode active-row contrast measure under WCAG AA for their font sizes.
 - Certbot's renewal hooks are non-functional for all three domains on this server (not just Silent Whisper's).
 
@@ -52,7 +52,7 @@ See `RUNBOOK.md` for detail on each of the non-security items above.
 /frontend   Vite + React client application
 /backend    Node.js API, WebSocket server, auth, audit, and configurable LLM proxy
 /database   PostgreSQL migrations, grants, and seed data (Knex)
-/scripts    audit log verification, load testing, and local maintenance utilities
+/scripts    audit log verification, load testing, backup/restore, enclave image build + install, and local maintenance utilities
 ```
 
 ## Quick start

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/build-release-images.sh — SHIPMENT_PLAN.md Section 1.2: the
+# scripts/build-release-images.sh — docs/plans/active/SHIPMENT_PLAN.md Section 1.2: the
 # versioned, checksummed offline image contract. Run on the networked
 # staging/build host, from a clean checkout at the release tag — never on
 # the air-gapped enclave itself. Produces exactly the artifact set

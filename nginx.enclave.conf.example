@@ -1,5 +1,5 @@
 # Template reverse-proxy config for a Silent Whisper enclave deployment.
-# SHIPMENT_PLAN.md Section 1.4. NOT wired into docker-compose.enclave.yml
+# docs/plans/active/SHIPMENT_PLAN.md Section 1.4. NOT wired into docker-compose.enclave.yml
 # and NOT touched by scripts/airgap-install.sh — TLS/reverse-proxy ownership
 # belongs to the enclave operator, same "reload is scripted, edit is manual
 # and confirmed" split RUNBOOK.md already uses for wireservice-nginx-1. This
@@ -7,7 +7,7 @@
 # hostname, certificate paths, and any local hardening policy — not
 # something any script here reads or applies automatically.
 #
-# Decision this template encodes (SHIPMENT_PLAN.md Section 1.4, resolved
+# Decision this template encodes (docs/plans/active/SHIPMENT_PLAN.md Section 1.4, resolved
 # 2026-07-22): the enclave terminates TLS at its own reverse proxy in front
 # of frontend/backend (matches how this app already expects to sit behind a
 # proxy — see wireservice-nginx-1's role today), with certificates issued by
@@ -49,7 +49,7 @@ server {
     # listen [::]:443 ssl;  # uncomment if the enclave proxy also needs IPv6
     server_name enclave-hostname.example;  # replace with the real browser-facing hostname
 
-    # Internal/private CA-issued certificate for this hostname (SHIPMENT_PLAN.md
+    # Internal/private CA-issued certificate for this hostname (docs/plans/active/SHIPMENT_PLAN.md
     # Section 1.4's resolved decision) — paths below are placeholders, not a
     # real cert this repo ships.
     ssl_certificate     /etc/nginx/enclave-certs/enclave-hostname.example.crt;

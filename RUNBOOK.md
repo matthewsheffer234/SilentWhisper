@@ -1,6 +1,6 @@
 # Silent Whisper — Runbook
 
-This runbook covers day-to-day operation of the local test environment: first-time setup, starting/stopping, migrations, health checks, logs, and troubleshooting. For the design rationale behind any of these choices (why ports are bound to 127.0.0.1, why there are two Postgres roles, why the audit log uses an advisory lock, etc.), see `PROJECT_PLAN.md` — this document assumes that reasoning and just tells you what to run.
+This runbook covers day-to-day operation of the local test environment: first-time setup, starting/stopping, migrations, health checks, logs, and troubleshooting — plus air-gapped enclave deployment (image build, install, reverse proxy, go-live) in its own section below. For the design rationale behind any of these choices (why ports are bound to 127.0.0.1, why there are two Postgres roles, why the audit log uses an advisory lock, etc.), see `PROJECT_PLAN.md` — this document assumes that reasoning and just tells you what to run. For the enclave shipment effort's own status and open items, see `docs/plans/active/SHIPMENT_PLAN.md`.
 
 **Current implementation status**: substantially past Phases 1–5 of `PROJECT_PLAN.md`'s roadmap. The app is a working real-time chat client — workspaces, channels, threads, presence, organizations, invitations — with AI features (channel summarization, thread task extraction, semantic search) through a configurable local LLM provider, an admin audit dashboard, and inline task checkboxes. Self-service signup is closed; see "Create the first user" below for how accounts are actually provisioned. `PROJECT_PLAN.md` Section 11 is the authoritative, dated log of what's landed; Section 8 has the original phase roadmap for context.
 
@@ -123,7 +123,7 @@ Previously, the browser console showed a `WebSocket connection ... failed: Unexp
 
 ## Enclave Image Build (offline shipment)
 
-Separate from Production Deployment above — this is for staging the versioned, checksummed image tars an air-gapped enclave install (`scripts/airgap-install.sh`) loads instead of building from source. Full spec: `SHIPMENT_PLAN.md` Section 1.2. Run this on a **networked staging/build host**, never inside the enclave itself — the enclave has no registry access to satisfy `npm ci`/`npm install`, by design.
+Separate from Production Deployment above — this is for staging the versioned, checksummed image tars an air-gapped enclave install (`scripts/airgap-install.sh`) loads instead of building from source. Full spec: `docs/plans/active/SHIPMENT_PLAN.md` Section 1.2. Run this on a **networked staging/build host**, never inside the enclave itself — the enclave has no registry access to satisfy `npm ci`/`npm install`, by design.
 
 ```bash
 VITE_API_URL=https://<enclave-hostname>/api \
@@ -139,13 +139,13 @@ Produces `images/postgres-pgvector-pg16.tar`, `images/silentwhisper-backend-<ver
 - The backend and postgres images are enclave-agnostic — build once per release, ship the same tars everywhere.
 - The frontend image must be **rebuilt per enclave**, with that enclave's real browser-facing `VITE_API_URL`/`VITE_WS_URL` passed to `build-release-images.sh` at staging time. There is no way to repoint an already-built frontend image at a different hostname short of rebuilding it.
 - `scripts/airgap-install.sh` does not trust that the right build args were used weeks earlier — its `phase_frontend_bundle_check` greps the loaded image's built bundle for the enclave's configured `VITE_API_URL` and fails loudly if it's not baked in, so a mismatched or stale frontend tar is caught at install time, not the first time a browser tries to load the app.
-- A fast-follow (not a v1.0 blocker) would move to a runtime-injected `/config.js` so one frontend image works across enclaves — real simplification, tracked in `SHIPMENT_PLAN.md` Section 1.2, not required to ship once.
+- A fast-follow (not a v1.0 blocker) would move to a runtime-injected `/config.js` so one frontend image works across enclaves — real simplification, tracked in `docs/plans/active/SHIPMENT_PLAN.md` Section 1.2, not required to ship once.
 
 `SILENTWHISPER_VERSION` must match between this script's staging run and whatever `scripts/airgap-install.sh` is invoked with on the enclave host (both default to `1.0.0`) — `docker-compose.enclave.yml`'s `image:` tags are pinned to this exact value, deliberately never `:latest`, so a stale locally-present image can't silently satisfy the tag without actually being loaded from a verified tar.
 
 ## Enclave Reverse Proxy / TLS
 
-`SHIPMENT_PLAN.md` Section 1.4. Neither `docker-compose.enclave.yml` nor `scripts/airgap-install.sh` puts anything in front of `frontend`/`backend` — the enclave's reverse-proxy/TLS story is a decision and an artifact that belongs to whoever owns the enclave's network topology, same "reload is scripted, edit is manual and confirmed" split this runbook already uses for `wireservice-nginx-1` in Production Deployment above. This section documents the resolved decision and the requirements any proxy config must satisfy — it does not mean this repo (or its installer) generates or manages one.
+`docs/plans/active/SHIPMENT_PLAN.md` Section 1.4. Neither `docker-compose.enclave.yml` nor `scripts/airgap-install.sh` puts anything in front of `frontend`/`backend` — the enclave's reverse-proxy/TLS story is a decision and an artifact that belongs to whoever owns the enclave's network topology, same "reload is scripted, edit is manual and confirmed" split this runbook already uses for `wireservice-nginx-1` in Production Deployment above. This section documents the resolved decision and the requirements any proxy config must satisfy — it does not mean this repo (or its installer) generates or manages one.
 
 **Decision (resolved 2026-07-22)**: the enclave terminates TLS at its own reverse proxy in front of `frontend`/`backend` — this app already expects to sit behind one (same role `wireservice-nginx-1` plays for the shared-host deployment) — with certificates issued by the enclave's internal/private CA, not a long-lived self-signed cert requiring a manually tracked rotation date.
 
@@ -159,17 +159,17 @@ Validated with `nginx -t` in a throwaway `nginx:alpine` container (host aliases 
 
 ## Enclave Go-Live: Accepted Risks & First-Real-Run Playbook
 
-Two things could not be verified before this repo's first real air-gapped install, and the decision — made explicitly and directly by the user, not defaulted into or overlooked — is to ship v1.0 anyway and offset the risk operationally rather than block on further pre-ship engineering that has no resources to run against (real GPU hardware, a genuinely separate staging host). See `SHIPMENT_PLAN.md` Section 3 for the same decision recorded against the shipment plan itself. This section is the operational half of that decision: what's actually unverified, what already is, and what to do about the gap during the first real install.
+Two things could not be verified before this repo's first real air-gapped install, and the decision — made explicitly and directly by the user, not defaulted into or overlooked — is to ship v1.0 anyway and offset the risk operationally rather than block on further pre-ship engineering that has no resources to run against (real GPU hardware, a genuinely separate staging host). See `docs/plans/active/SHIPMENT_PLAN.md` Section 3 for the same decision recorded against the shipment plan itself. This section is the operational half of that decision: what's actually unverified, what already is, and what to do about the gap during the first real install.
 
 ### What was NOT verified before go-live
 
-1. **vLLM real-hardware behavior** (`SHIPMENT_PLAN.md` Section 2.4). `scripts/airgap-install.sh`'s Phase F now automatically checks three of these against whatever `LLM_BASE_URL` is actually configured, at install time, on the real hardware — not against a mock, since these are specifically the surfaces a mock can't prove:
+1. **vLLM real-hardware behavior** (`docs/plans/active/SHIPMENT_PLAN.md` Section 2.4). `scripts/airgap-install.sh`'s Phase F now automatically checks three of these against whatever `LLM_BASE_URL` is actually configured, at install time, on the real hardware — not against a mock, since these are specifically the surfaces a mock can't prove:
    - **Streaming SSE chunk format** — Phase F sends a real `stream:true` request and parses it with the same logic `backend/src/llm/adapters/vllmAdapter.js`'s `generate()` uses; fails loudly if the real deployment's shape doesn't match, with a pointer to the `LLM_STREAMING_ENABLED=false` fallback below.
    - **`LLM_API_KEY` failure-mode** — Phase F tries a deliberately wrong key first (if `LLM_API_KEY` is set) and fails the install if the gateway wrongly accepts it, before ever using the real key.
    - **Concurrency/latency** — Phase F fires 3 concurrent completion requests directly at the real host and logs actual latency, warning (not failing) if the slowest exceeds 70% of `LLM_TIMEOUT_MS`.
 
    Still genuinely unverified: this is the first time these checks run against *real* hardware at all (they were proven correct against several purpose-built mock servers, including negative-path testing, but never against an actual vLLM deployment) — the install itself is that first real test. And the app-level AI paths beyond summarize — task extraction, workspace digest — still aren't driven against real vLLM specifically by anything in this repo (summarize was, via the mock; semantic search was tested end-to-end, but against the real *Ollama* instance on this host, not vLLM).
-2. **`scripts/airgap-install.sh` has never run start-to-finish as one continuous process.** Every phase's actual logic (Postgres/pgvector setup, migrations, the full grants matrix, JSON-parsing helpers, backend health, the login→workspace→join→message→AI-summarize smoke test) was independently proven correct against real, isolated infrastructure (`SHIPMENT_PLAN.md` Section 1.3's progress log has the full detail) — but never in one uninterrupted run through real `docker compose` orchestration. The specific new risk this leaves is cross-phase sequencing/networking under `docker compose` itself (service startup ordering, its embedded DNS, timing), not the phase logic, which is already proven.
+2. **`scripts/airgap-install.sh` has never run start-to-finish as one continuous process.** Every phase's actual logic (Postgres/pgvector setup, migrations, the full grants matrix, JSON-parsing helpers, backend health, the login→workspace→join→message→AI-summarize smoke test) was independently proven correct against real, isolated infrastructure (`docs/plans/active/SHIPMENT_PLAN.md` Section 1.3's progress log has the full detail) — but never in one uninterrupted run through real `docker compose` orchestration. The specific new risk this leaves is cross-phase sequencing/networking under `docker compose` itself (service startup ordering, its embedded DNS, timing), not the phase logic, which is already proven.
 
 ### What WAS verified (the actual risk surface is narrower than "nothing has been tested")
 
@@ -183,13 +183,13 @@ Real, isolated, non-mocked testing already covers: Postgres/pgvector setup and `
    - **Auth `FAIL`**: the gateway accepted a wrong key — it isn't enforcing authentication as configured. Fix the gateway's auth enforcement, or confirm that's actually intentional for this deployment, before continuing.
    - **Concurrency `WARN`** (not a hard fail): the slowest of 3 concurrent requests used more than 70% of `LLM_TIMEOUT_MS`. Consider raising `LLM_TIMEOUT_MS` before real user load — this default was sized for the CPU-Ollama local test environment, not necessarily this hardware's real latency under concurrent load. (`LLM_MAX_CONCURRENT_REQUESTS` defaults to `1` and `AI_QUEUE_MAX_DEPTH` to `8` in `backend/src/config.js` — the app's own queue is separate from, and downstream of, what this check measures: it answers "can the hardware/network serve a few requests at once in reasonable time," a prerequisite for the app's queue behaving well, not a test of the queue itself.)
    - If Phase F passes cleanly, that's real signal — not a guarantee nothing else can go wrong, but the three specific gaps this playbook used to ask an operator to catch by hand are now caught by the installer itself.
-3. Only after Phase F passes (or its `WARN`s are addressed), work through the rest of `SHIPMENT_PLAN.md` Section 5's checklist and open the app to real users.
+3. Only after Phase F passes (or its `WARN`s are addressed), work through the rest of `docs/plans/active/SHIPMENT_PLAN.md` Section 5's checklist and open the app to real users.
 
 ### If something goes wrong
 
 - Re-running `scripts/airgap-install.sh` after a failure is safe — nothing it does is destructive, and earlier phases simply re-confirm already-satisfied state on a second run.
 - A vLLM-side failure (Phase F or Phase G) doesn't touch Postgres, migrations, or anything already loaded — fix the vLLM-side config/connectivity and re-run.
-- `scripts/backup-db.sh`/`scripts/restore-db.sh` exist and were proven against this host's real production data (`SHIPMENT_PLAN.md` Section 2.5) — not itself a mitigation for a bad first install (a fresh enclave has no prior backup to restore from), but worth knowing it's available for whatever comes after go-live.
+- `scripts/backup-db.sh`/`scripts/restore-db.sh` exist and were proven against this host's real production data (`docs/plans/active/SHIPMENT_PLAN.md` Section 2.5) — not itself a mitigation for a bad first install (a fresh enclave has no prior backup to restore from), but worth knowing it's available for whatever comes after go-live.
 
 ## First-Time Setup
 
@@ -554,6 +554,16 @@ Expect:
 
 (A flat "everything except `audit_logs`" rule is wrong — it was an oversimplification that crept into an earlier draft of an install-verification script; the table above is what the grants migrations actually do.)
 
+### Backup / restore
+
+```bash
+scripts/backup-db.sh                          # dumps to backups/<db>-<UTC timestamp>.dump
+scripts/restore-db.sh backups/<file>.dump      # restores into a new sibling database, e.g. silent_whisper_restored_<ts>
+scripts/restore-db.sh backups/<file>.dump my_test_db   # or a name you choose
+```
+
+Not enclave-specific — works the same against this local stack. `pg_dump -Fc`/`pg_restore` (custom format, not plain SQL), so a restore never has to target the same database name it came from. `restore-db.sh` only ever *creates* a new database; it never drops or overwrites one, and refuses if the target name already exists. Reads credentials via `docker compose exec postgres printenv` rather than parsing `.env` directly, so it's not tripped up by any secret containing a shell-meaningful character. `backups/` is gitignored — dump files contain real user data (emails, password hashes, message content); handle and store them with the same care as a database credential, and delete copies you don't need. Requires `postgres` already up (`docker compose up -d postgres`).
+
 ### Audit log verification script
 
 ```bash
@@ -702,14 +712,14 @@ curl http://localhost:8101/health
 
 If `db` comes back `"unreachable"` or the request 503s, Postgres is down, `app_runtime_user` doesn't exist yet (migrations not run), or the backend's `APP_DB_USER`/`APP_DB_PASSWORD` don't match what's actually in the database. `ai` is additive and read-only diagnostic info (FEATURE_REQUEST.md entry 3): it reflects the periodic health sweep's last cached result (`LLM_HEALTH_CHECK_INTERVAL_MS`, default 60s) rather than triggering a fresh provider call on every request, and `ai.healthy: false` never flips `status`/the HTTP code — this endpoint's pass/fail contract stays DB-only.
 
-Docker's own healthcheck (`docker compose ps`) checks the same endpoint from inside the container every 10s.
-
 ```bash
 curl http://localhost:8101/health/live
 # {"status":"ok"}
 ```
 
 Liveness-only: returns `200` immediately with no DB or provider touch, proving only that the Node process is up and Express is routing requests. Useful for telling "the process itself is wedged, needs a restart" apart from "the process is fine but a dependency (Postgres, the LLM provider) is briefly down" — `/health` alone can't distinguish those two failure modes since it's DB-inclusive by design.
+
+**Docker's own healthcheck (`docker compose ps`) checks `/health/live` from inside the container every 10s, not `/health`** — deliberately, since `/health` 503s whenever `checkDbConnection()` fails, which would otherwise couple container restarts to routine Postgres maintenance rather than actual process health. Both `docker-compose.yml` and `docker-compose.enclave.yml` target `/health/live`.
 
 ## Resource Usage
 

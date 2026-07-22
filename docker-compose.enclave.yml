@@ -1,4 +1,4 @@
-# Enclave override for docker-compose.yml — SHIPMENT_PLAN.md Section 1.1.
+# Enclave override for docker-compose.yml — docs/plans/active/SHIPMENT_PLAN.md Section 1.1.
 #
 # docker-compose.yml on its own is the shared-host Silent Lattice topology:
 # it depends on a local Ollama sidecar, attaches backend/frontend to the
@@ -21,7 +21,7 @@
 # entire service. Both are how this file *subtracts* from the base file
 # rather than only adding to it.
 #
-# What this file does NOT do (see SHIPMENT_PLAN.md for why each is tracked
+# What this file does NOT do (see docs/plans/active/SHIPMENT_PLAN.md for why each is tracked
 # separately, not bundled into this override):
 # - Does not create the versioned image tags this file references
 #   (silentwhisper-backend/-frontend:${SILENTWHISPER_VERSION}) — that's
@@ -86,7 +86,7 @@ services:
       # the operator's .env explicitly says otherwise, and never silently
       # fall back to the Ollama-shaped LLM_BASE_URL default docker-compose.yml
       # uses for local dev (that hostname doesn't exist here). See
-      # SHIPMENT_PLAN.md Section 1.4/2.4: LLM_BASE_URL and ALLOWED_LLM_ORIGINS
+      # docs/plans/active/SHIPMENT_PLAN.md Section 1.4/2.4: LLM_BASE_URL and ALLOWED_LLM_ORIGINS
       # must be set to the enclave's real vLLM host in its own .env — there's
       # no safe default to fall back to here, so none is given.
       LLM_PROVIDER: ${LLM_PROVIDER:-vllm}

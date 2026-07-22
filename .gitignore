@@ -12,11 +12,11 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
-# Release image tars (scripts/build-release-images.sh, SHIPMENT_PLAN.md
+# Release image tars (scripts/build-release-images.sh, docs/plans/active/SHIPMENT_PLAN.md
 # Section 1.2) — build artifacts staged for enclave transfer, not source;
 # regenerate with the script rather than committing.
 images/
-# Database dumps (scripts/backup-db.sh, SHIPMENT_PLAN.md Section 2.5) —
+# Database dumps (scripts/backup-db.sh, docs/plans/active/SHIPMENT_PLAN.md Section 2.5) —
 # contain real application data (user emails, password hashes, message
 # content), never source, never committed.
 backups/

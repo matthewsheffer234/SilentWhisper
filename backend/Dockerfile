@@ -12,7 +12,7 @@ RUN npm install --omit=dev
 COPY backend/ ./
 COPY database/ /app/database/
 
-# SHIPMENT_PLAN.md Section 2.3 — ships the standalone maintenance scripts
+# docs/plans/active/SHIPMENT_PLAN.md Section 2.3 — ships the standalone maintenance scripts
 # (create-first-admin.mjs, verify-audit-log.mjs, upgrade-prompt-versions.mjs
 # et al.) inside the backend image so an air-gapped install can run them
 # in-container without staging a second scripts/node_modules offline

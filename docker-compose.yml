@@ -18,13 +18,13 @@
 #
 # postgres/backend/frontend host ports are overridable
 # (POSTGRES_HOST_PORT/BACKEND_HOST_PORT/FRONTEND_HOST_PORT, defaults
-# unchanged: 5433/8101/3101) — SHIPMENT_PLAN.md Section 1.3's progress log:
+# unchanged: 5433/8101/3101) — docs/plans/active/SHIPMENT_PLAN.md Section 1.3's progress log:
 # this exists so scripts/airgap-install.sh can be rehearsed end-to-end
 # (distinct ports + COMPOSE_PROJECT_NAME) on a host already running a real
 # deployment from the default ports, without colliding with it. Not meant to
 # be set for a normal run — real deployments should stick to the defaults.
 
-# SHIPMENT_PLAN.md Section 2.6: json-file's default is unbounded growth.
+# docs/plans/active/SHIPMENT_PLAN.md Section 2.6: json-file's default is unbounded growth.
 # docker-compose.enclave.yml already had this (added alongside Section 1.1);
 # added here too so this host's own long-running containers get the same
 # rotation, not just the enclave override.
@@ -157,7 +157,7 @@ services:
     ports:
       - "127.0.0.1:${BACKEND_HOST_PORT:-8101}:8000"
     healthcheck:
-      # /health/live, not /health (SHIPMENT_PLAN.md Section 2.2): /health
+      # /health/live, not /health (docs/plans/active/SHIPMENT_PLAN.md Section 2.2): /health
       # returns 503 whenever checkDbConnection() fails, which makes Docker's
       # liveness probe couple container restarts to Postgres availability —
       # a routine Postgres maintenance window would trip a restart of an
