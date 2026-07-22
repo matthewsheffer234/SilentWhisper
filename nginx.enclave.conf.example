@@ -1,0 +1,105 @@
+# Template reverse-proxy config for a Silent Whisper enclave deployment.
+# SHIPMENT_PLAN.md Section 1.4. NOT wired into docker-compose.enclave.yml
+# and NOT touched by scripts/airgap-install.sh — TLS/reverse-proxy ownership
+# belongs to the enclave operator, same "reload is scripted, edit is manual
+# and confirmed" split RUNBOOK.md already uses for wireservice-nginx-1. This
+# file is a starting point to copy and adapt for the enclave's actual
+# hostname, certificate paths, and any local hardening policy — not
+# something any script here reads or applies automatically.
+#
+# Decision this template encodes (SHIPMENT_PLAN.md Section 1.4, resolved
+# 2026-07-22): the enclave terminates TLS at its own reverse proxy in front
+# of frontend/backend (matches how this app already expects to sit behind a
+# proxy — see wireservice-nginx-1's role today), with certificates issued by
+# the enclave's internal/private CA rather than a long-lived self-signed
+# cert (no manual rotation-date tracking to forget).
+#
+# Requirements this config MUST preserve, whatever else changes:
+#   - Upgrade/Connection headers on the WebSocket location (backend/src/
+#     ws/server.js attaches to the same HTTP server as the REST API at
+#     config.ws.path, default /ws — a plain HTTP proxy_pass without the
+#     upgrade headers below silently breaks every real-time feature:
+#     presence, typing indicators, live message delivery).
+#   - X-Forwarded-Proto and X-Forwarded-For passthrough. backend/src/
+#     index.js sets `app.set('trust proxy', 1)` — exactly ONE trusted
+#     hop — so req.ip (audit_logs.actor_ip, rate-limiter keying) and
+#     req.protocol both depend on this proxy being that one hop and
+#     setting these headers correctly. Do not chain a second proxy in
+#     front of this one without also raising `trust proxy` to match, or
+#     a downstream hop's client IP becomes spoofable.
+#   - Path-based routing, not host-based: /api/* and /ws go to backend
+#     (which already expects the /api prefix itself — see backend/src/
+#     index.js's `app.use('/api/...', ...)` mounts — so proxy_pass here
+#     must NOT strip the /api prefix), everything else goes to frontend
+#     (which serves the static build and needs the SPA fallback to
+#     index.html for client-side routes like /invite/:token — see
+#     frontend/nginx.conf's own `location /` for the same fallback).
+#
+# Upstream hostnames below (`backend`, `frontend`) are the compose service
+# names from docker-compose.yml/docker-compose.enclave.yml — this proxy
+# must be able to resolve them, which in practice means either running it
+# as a container attached to the same compose project's default network,
+# or replacing these with whatever addresses the enclave's proxy host
+# actually uses to reach those containers (a static IP, a different DNS
+# name, etc. — that topology decision belongs to whoever owns this
+# enclave's network, same as the rest of this section).
+
+server {
+    listen 443 ssl;
+    # listen [::]:443 ssl;  # uncomment if the enclave proxy also needs IPv6
+    server_name enclave-hostname.example;  # replace with the real browser-facing hostname
+
+    # Internal/private CA-issued certificate for this hostname (SHIPMENT_PLAN.md
+    # Section 1.4's resolved decision) — paths below are placeholders, not a
+    # real cert this repo ships.
+    ssl_certificate     /etc/nginx/enclave-certs/enclave-hostname.example.crt;
+    ssl_certificate_key /etc/nginx/enclave-certs/enclave-hostname.example.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # WebSocket path (config.ws.path, default /ws) — must come before the
+    # generic /api/ location below since both would otherwise match a
+    # literal /ws request through the longest-prefix rule, but keeping it
+    # first avoids relying on that ordering subtlety.
+    location /ws {
+        proxy_pass http://backend:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # WebSocket connections are long-lived — the default proxy_read_timeout
+        # (60s) will silently drop idle-but-open connections.
+        proxy_read_timeout 3600s;
+    }
+
+    location /api/ {
+        proxy_pass http://backend:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://frontend:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Plain-HTTP requests redirect to HTTPS rather than being served — this app
+# never expects to be reachable over unencrypted HTTP in an enclave any more
+# than it does today behind wireservice-nginx-1.
+server {
+    listen 80;
+    server_name enclave-hostname.example;
+    return 301 https://$host$request_uri;
+}

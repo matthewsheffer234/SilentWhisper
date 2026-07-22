@@ -143,6 +143,20 @@ Produces `images/postgres-pgvector-pg16.tar`, `images/silentwhisper-backend-<ver
 
 `SILENTWHISPER_VERSION` must match between this script's staging run and whatever `scripts/airgap-install.sh` is invoked with on the enclave host (both default to `1.0.0`) — `docker-compose.enclave.yml`'s `image:` tags are pinned to this exact value, deliberately never `:latest`, so a stale locally-present image can't silently satisfy the tag without actually being loaded from a verified tar.
 
+## Enclave Reverse Proxy / TLS
+
+`SHIPMENT_PLAN.md` Section 1.4. Neither `docker-compose.enclave.yml` nor `scripts/airgap-install.sh` puts anything in front of `frontend`/`backend` — the enclave's reverse-proxy/TLS story is a decision and an artifact that belongs to whoever owns the enclave's network topology, same "reload is scripted, edit is manual and confirmed" split this runbook already uses for `wireservice-nginx-1` in Production Deployment above. This section documents the resolved decision and the requirements any proxy config must satisfy — it does not mean this repo (or its installer) generates or manages one.
+
+**Decision (resolved 2026-07-22)**: the enclave terminates TLS at its own reverse proxy in front of `frontend`/`backend` — this app already expects to sit behind one (same role `wireservice-nginx-1` plays for the shared-host deployment) — with certificates issued by the enclave's internal/private CA, not a long-lived self-signed cert requiring a manually tracked rotation date.
+
+**`nginx.enclave.conf.example`** (repo root) is a starting template implementing that decision — copy and adapt it for the real hostname, certificate paths, and any local hardening policy; nothing reads it automatically. Whatever the enclave operator ends up running (this template, a different proxy entirely, hardware TLS termination upstream of Docker), it must preserve three things or the app breaks or misattributes requests:
+
+- **WebSocket upgrade headers** (`Upgrade`/`Connection: upgrade`, HTTP/1.1) on the `/ws` path — `backend/src/ws/server.js` attaches to the same HTTP server as the REST API at `config.ws.path` (default `/ws`); a plain proxy without these silently breaks presence, typing indicators, and live message delivery (the browser falls back to nothing — no WebSocket error a user would recognize as "the proxy is misconfigured").
+- **`X-Forwarded-Proto`/`X-Forwarded-For` passthrough, from exactly one hop.** `backend/src/index.js` sets `app.set('trust proxy', 1)` — Express trusts exactly one proxy hop for `req.ip` (audit log `actor_ip`, rate-limiter keying) and `req.protocol`. Chaining a second proxy in front of this one without also raising `trust proxy` to match makes the client IP spoofable by whatever sits between the two hops.
+- **Path-based routing, not host-based, with `/api` passed through unmodified.** `backend/src/index.js` mounts its own routers at `/api/...` — a proxy that strips the `/api` prefix before forwarding will 404 every request. Everything that isn't `/api/*` or `/ws` goes to `frontend`, which needs its own SPA fallback to `index.html` for client-side routes (`frontend/nginx.conf`'s `location /` already does this internally — the enclave proxy just needs to reach it, not duplicate it).
+
+Validated with `nginx -t` in a throwaway `nginx:alpine` container (host aliases stood in for the `backend`/`frontend` compose service names, which the template's upstream directives assume are resolvable — true if the proxy runs as a container on the same compose network, false otherwise and worth adjusting first) — syntax only, not a live TLS/WS handshake test, since that needs a real hostname and certificate.
+
 ## First-Time Setup
 
 ### 0. Create and configure `.env` files
