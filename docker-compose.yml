@@ -137,7 +137,17 @@ services:
     ports:
       - "127.0.0.1:8101:8000"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # /health/live, not /health (SHIPMENT_PLAN.md Section 2.2): /health
+      # returns 503 whenever checkDbConnection() fails, which makes Docker's
+      # liveness probe couple container restarts to Postgres availability —
+      # a routine Postgres maintenance window would trip a restart of an
+      # otherwise-fine backend process. /health/live only proves the Node
+      # process is up and Express is routing (backend/src/index.js), with no
+      # DB or LLM-provider touch. (ai.healthy never flips /health's own HTTP
+      # status today — additive JSON only — so this is not fixing a "vLLM
+      # blip causes a restart loop" risk, which isn't currently real; it's
+      # fixing the DB-coupling risk, which is.)
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5

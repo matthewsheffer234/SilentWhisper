@@ -23,9 +23,6 @@
 #
 # What this file does NOT do (see SHIPMENT_PLAN.md for why each is tracked
 # separately, not bundled into this override):
-# - Does not fix the backend Docker healthcheck's /health vs /health/live
-#   target (Section 2.2) — apply that to both this file and the base file
-#   together when 2.2 lands, so they don't drift.
 # - Does not create the versioned image tags this file references
 #   (silentwhisper-backend/-frontend:${SILENTWHISPER_VERSION}) — that's
 #   Section 1.2's offline image contract; build/tag/save those before this
@@ -37,8 +34,10 @@
 #   `build:` section.
 # - Does not resolve the enclave's reverse-proxy/TLS story (Section 1.4) —
 #   this file only removes the wireservice_default attachment, it doesn't
-#   add a replacement ingress path. That's the enclave operator's own
-#   decision and artifact.
+#   add a replacement ingress path. Resolved as "reverse proxy in front,
+#   internal CA cert" — see nginx.enclave.conf.example and RUNBOOK.md's
+#   "Enclave Reverse Proxy / TLS" section — but running it stays the
+#   enclave operator's own manual step, not something this file wires up.
 
 x-logging: &default-logging
   driver: json-file
