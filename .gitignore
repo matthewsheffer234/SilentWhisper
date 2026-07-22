@@ -16,3 +16,7 @@ playwright/.cache/
 # Section 1.2) — build artifacts staged for enclave transfer, not source;
 # regenerate with the script rather than committing.
 images/
+# Database dumps (scripts/backup-db.sh, SHIPMENT_PLAN.md Section 2.5) —
+# contain real application data (user emails, password hashes, message
+# content), never source, never committed.
+backups/
