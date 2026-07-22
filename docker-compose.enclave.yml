@@ -29,7 +29,12 @@
 # - Does not create the versioned image tags this file references
 #   (silentwhisper-backend/-frontend:${SILENTWHISPER_VERSION}) — that's
 #   Section 1.2's offline image contract; build/tag/save those before this
-#   file is usable.
+#   file is usable. Use scripts/build-release-images.sh on a networked
+#   staging host to produce them (see RUNBOOK.md's "Enclave Image Build"
+#   section) — do not use `docker compose -f docker-compose.yml -f
+#   docker-compose.enclave.yml build`, which silently no-ops once this
+#   file's `build: !reset null` below removes the merged config's only
+#   `build:` section.
 # - Does not resolve the enclave's reverse-proxy/TLS story (Section 1.4) —
 #   this file only removes the wireservice_default attachment, it doesn't
 #   add a replacement ingress path. That's the enclave operator's own

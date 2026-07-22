@@ -31,7 +31,7 @@ One row per actionable item below. Update the **Status**/**Date** columns as wor
 | # | Item | Status | Date | Notes |
 |---|---|---|---|---|
 | 1.1 | `docker-compose.enclave.yml` override | Partial | 2026-07-22 | File created and merge behavior verified (`docker compose config`); can't be used for a real install until 1.2's image tags exist, and its healthcheck will need the same `/health/live` fix as the base file once 2.2 lands |
-| 1.2 | Versioned/checksummed offline image contract | Not started | | |
+| 1.2 | Versioned/checksummed offline image contract | Partial | 2026-07-22 | `scripts/build-release-images.sh` written and run end-to-end for real (built, saved, checksummed, reloaded, bundle-verified) with `localhost` placeholder URLs and version `1.0.0-devproof` to prove the contract works; those proof tars were deleted afterward (not real release artifacts — no real enclave hostname exists yet). Still needs a real run against an actual enclave's `VITE_API_URL`/`VITE_WS_URL` before the checklist item can flip to Done. |
 | 1.3 | Rewrite `scripts/airgap-install.sh` | Partial | 2026-07-22 | Script written (17 phases per Section 4), `bash -n` + `shellcheck` clean. Can't run end-to-end yet — blocked on 1.2 (no real image tars to load) and 2.3 (backend image doesn't have `/app/scripts` yet, so `create-first-admin.mjs`/`verify-audit-log.mjs` calls would fail) |
 | 1.4 | Enclave TLS/reverse-proxy decision | Not started | | Decision, not code — blocked on whoever owns the enclave's network topology |
 | 2.1a | `.env.example` `v1`→`v2` prompt-version fix | **Done** | 2026-07-22 | |
@@ -76,23 +76,23 @@ should be run in the networked staging environment and the rendered output commi
 
 ### 1.2 Action: a real, versioned offline image contract
 
+**Status: Partial (2026-07-22)** — `scripts/build-release-images.sh` implements the contract below and has been run end-to-end for real against `localhost` placeholder build args to prove it (built, saved, checksummed, `docker load`-verified, frontend-bundle-verified); see `## 6. Progress log`. Not yet run against a real enclave's actual `VITE_API_URL`/`VITE_WS_URL`, since no real enclave hostname exists yet to build against — that run, whenever it happens, is what actually produces a shippable release artifact.
+
 Not "three tar files," a defined contract the installer can verify against:
 
 ```bash
 # In the networked staging/build host, from a clean checkout at the release tag:
-docker compose -f docker-compose.yml -f docker-compose.enclave.yml build backend frontend
-docker tag <built-backend-image>  silentwhisper-backend:1.0.0
-docker tag <built-frontend-image> silentwhisper-frontend:1.0.0
-
-mkdir -p images
-docker save pgvector/pgvector:pg16      -o images/postgres-pgvector-pg16.tar
-docker save silentwhisper-backend:1.0.0  -o images/silentwhisper-backend-1.0.0.tar
-docker save silentwhisper-frontend:1.0.0 -o images/silentwhisper-frontend-1.0.0.tar
-
-sha256sum images/*.tar > images/CHECKSUMS.sha256
+VITE_API_URL=https://<enclave-hostname>/api \
+VITE_WS_URL=wss://<enclave-hostname>/ws \
+SILENTWHISPER_VERSION=1.0.0 \
+  ./scripts/build-release-images.sh
 ```
 
-`docker-compose.enclave.yml` references the exact tags above (`silentwhisper-backend:1.0.0`, not `:latest`) — never rely on Compose's implicit project-derived image naming, which is what would let a stale locally-built image silently satisfy `image:` without ever being loaded from a tar. The installer (Section 1.3, Phase B) verifies the checksum file before `docker load`, and `docker image inspect` on the expected tag after — both currently missing from the punchlist's draft.
+**Correction (found while implementing this, 2026-07-22): the command this section originally specified here — `docker compose -f docker-compose.yml -f docker-compose.enclave.yml build backend frontend` — silently no-ops.** `docker-compose.enclave.yml` (Section 1.1) sets `build: !reset null` on `backend`/`frontend`/`migrate` specifically so the enclave file can never trigger an accidental source build; the side effect is that the *merged* config has no `build:` section left at all, and `docker compose build` treats "no build config for this service" as nothing-to-do rather than an error — exit 0, zero images produced, no warning surfaced by default. Verified empirically before writing the fix rather than assuming the original snippet was correct. `scripts/build-release-images.sh` instead runs `docker build` directly against the **base** `docker-compose.yml`'s Dockerfiles/contexts (`backend/Dockerfile` from repo root, `frontend/Dockerfile` from `./frontend`) and tags the result with the exact tags `docker-compose.enclave.yml` references — the base file's job is building, the enclave file's job is only ever referencing already-built, already-tagged images, and the two never overlap.
+
+The script also folds in the frontend build-time URL requirement directly (`VITE_API_URL`/`VITE_WS_URL` are required env vars, not optional) rather than leaving that as a separate manual step to forget, and self-verifies the checksum file immediately after writing it (`sha256sum -c`) so a corrupt write is caught at staging time, not at install time on the enclave host.
+
+`docker-compose.enclave.yml` references the exact tags above (`silentwhisper-backend:1.0.0`, not `:latest`) — never rely on Compose's implicit project-derived image naming, which is what would let a stale locally-built image silently satisfy `image:` without ever being loaded from a tar. The installer (Section 1.3, Phase B) verifies the checksum file before `docker load`, and `docker image inspect` on the expected tag after — both already implemented in `scripts/airgap-install.sh`.
 
 **Frontend build-time URL decision** — pick one, don't leave it implicit:
 - **v1.0 (recommended, ships now)**: accept that the frontend image must be built once per enclave, with that enclave's final browser-facing URL baked in at staging-build time (`VITE_API_URL=https://<enclave-hostname>/api`). Document this explicitly in the runbook as a staging-time input, and have the installer verify the *built bundle actually contains* the expected origin (Section 1.3, uses the punchlist's own `grep dist/assets/*.js` idea, just pointed at the real enclave URL instead of `localhost`) rather than silently trusting that the right build args were used weeks earlier.
@@ -325,8 +325,8 @@ Replaces the original punchlist's Section 2.2 phase list with the corrected vers
 Everything below must be true before go-live. Items new or corrected in this integration pass are marked **[new]**/**[corrected]**; unmarked items are unchanged from the original punchlist and were not disputed by the review.
 
 - [ ] **[new]** `docker-compose.enclave.yml` exists, removes Ollama + `wireservice_default`, uses pinned `image:` tags, and `docker compose -f docker-compose.yml -f docker-compose.enclave.yml config` has been run and its output saved as a release artifact. *(Partial 2026-07-22 — file exists, merge verified interactively; still needs a real release's image tags (1.2) before the rendered `config` output can be committed as an actual release artifact, not just a dev-time sanity check.)*
-- [ ] **[new]** Versioned, checksummed image tars exist (`silentwhisper-backend:1.0.0`, `silentwhisper-frontend:1.0.0`, `postgres-pgvector-pg16`) matching exactly what the enclave Compose file references.
-- [ ] **[new]** Frontend build-time URL decision made and documented (rebuild-per-enclave for v1.0, per Section 1.2); installer verifies the built bundle's baked origin.
+- [ ] **[new]** Versioned, checksummed image tars exist (`silentwhisper-backend:1.0.0`, `silentwhisper-frontend:1.0.0`, `postgres-pgvector-pg16`) matching exactly what the enclave Compose file references. *(Partial 2026-07-22 — `scripts/build-release-images.sh` written and proven end-to-end against `localhost` placeholder args; the real tars for an actual enclave hostname don't exist yet and are re-generated per release, not committed — see `## 6. Progress log`.)*
+- [x] **[new]** Frontend build-time URL decision made and documented (rebuild-per-enclave for v1.0, per Section 1.2); installer verifies the built bundle's baked origin. *(Done 2026-07-22 — documented in `RUNBOOK.md`'s new "Enclave Image Build" section; `scripts/airgap-install.sh`'s `phase_frontend_bundle_check` already did the verification, per Section 1.3's earlier pass.)*
 - [x] Root `.env.example`: `v2` prompt versions, no `GITHUB_PERSONAL_ACCESS_TOKEN`/`HF_TOKEN`, **[new]** reconciled with every key in `backend/.env.example`. *(Done 2026-07-22 — see Progress log. Bonus: the reconciled keys were also wired into `docker-compose.yml`/`frontend/Dockerfile` so they're actually functional, not just documented.)*
 - [ ] **[new]** `.env.enclave.example` exists with `LLM_PROVIDER=vllm` and real placeholder values, no Ollama-flavored defaults.
 - [ ] Backend Docker healthcheck targets `/health/live`, in both `docker-compose.yml` and `docker-compose.enclave.yml`.
@@ -390,3 +390,17 @@ Every specific correction from this section's spec is in the script:
 Checked with `bash -n` (syntax) and `shellcheck` (installed for this pass) — clean except two intentional single-quote infos (SC2016) where the quoting is deliberately protecting an inner `$(...)`/`{{...}}` from expanding in the outer shell (the Postgres-healthy wait loop and the `vector.control` check, both of which need to evaluate inside a different shell context — the polling subshell and the postgres container, respectively).
 
 **Not done in this pass**: the script cannot actually be run start-to-finish yet. Two hard blockers, both already tracked: 1.2 (no real `images/*.tar`/`CHECKSUMS.sha256` to load) and 2.3 (the backend image doesn't have `/app/scripts` copied in yet, so the `create-first-admin.mjs`/`verify-audit-log.mjs` calls in Phases G/12 would fail against a real container today, even though they're correctly written against the path 2.3 will produce).
+
+### 2026-07-22 — Section 1.2 (versioned/checksummed offline image contract)
+
+Wrote `scripts/build-release-images.sh` (new file). Before writing it, verified empirically that this section's own original example command doesn't work: `docker compose -f docker-compose.yml -f docker-compose.enclave.yml build backend frontend` exits `0` and builds nothing, because `docker-compose.enclave.yml`'s `build: !reset null` on `backend`/`frontend` (added in Section 1.1, deliberately, so the enclave file can never trigger a source build) leaves the merged config with no `build:` section at all — `compose build` silently treats that as nothing-to-do. Corrected the approach and this section's own text to match: the script runs `docker build` directly against the base `docker-compose.yml`'s Dockerfiles (backend from repo root, frontend from `./frontend`, matching each service's documented build context) and tags the result with the exact `silentwhisper-backend:<version>`/`silentwhisper-frontend:<version>` tags `docker-compose.enclave.yml` references — base file builds, enclave file only ever references what's already built and tagged.
+
+The script: requires `VITE_API_URL`/`VITE_WS_URL` as env vars (fails fast if unset, rather than silently baking in whatever `frontend/Dockerfile`'s own `ARG` defaults would resolve to), builds backend and frontend, pulls `pgvector/pgvector:pg16`, saves all three to `images/*.tar`, writes `images/CHECKSUMS.sha256`, and immediately self-verifies that checksum file with `sha256sum -c` before declaring success — catching a corrupt write at staging time instead of at install time on the enclave host.
+
+**Ran it for real** (network is available in this session, unlike a true enclave — this stood in for the "networked staging/build host" the plan calls for): `VITE_API_URL=http://localhost:8101/api VITE_WS_URL=ws://localhost:8101/ws SILENTWHISPER_VERSION=1.0.0-devproof ./scripts/build-release-images.sh`. Both images built successfully, all three tars saved, checksums written and self-verified. Then went further than the script itself does, to prove the *installer's* consumption side too: deleted the freshly-built local images, `docker load`-ed all three tars back in from the saved tar files, confirmed `docker image inspect` found both expected tags, confirmed the frontend bundle's built JS actually contains the baked `http://localhost:8101/api` string (same check `scripts/airgap-install.sh`'s `phase_frontend_bundle_check` does), and confirmed `docker compose -f docker-compose.yml -f docker-compose.enclave.yml config --services` resolves cleanly once `SILENTWHISPER_VERSION` matches the loaded tags.
+
+**Cleaned up afterward**: deleted the `1.0.0-devproof`-tagged local images and the `images/` directory — these were a proof run against `localhost`, not a real release artifact for an actual enclave, and 225MB of tars with a dev-only version tag isn't something to leave sitting around or commit. Added `images/` to `.gitignore` (release tars are regenerated build output, not source).
+
+Documented the frontend build-time URL decision explicitly in `RUNBOOK.md`'s new "Enclave Image Build" section (this section's own spec called for this, separately from the script) — rebuild-per-enclave is v1.0's answer, backend/postgres images are enclave-agnostic and build once per release, and `scripts/airgap-install.sh` already enforces the bundle-content check rather than trusting the right build args were used weeks earlier.
+
+**Not done in this pass**: no real enclave hostname exists yet, so no real, shippable `silentwhisper-frontend:1.0.0` tar exists — only the proof run (since deleted) that the contract itself works. The tracker/checklist above are marked Partial, not Done, for that reason. `docker-compose.enclave.yml`'s header comment (Section 1.1's file) still correctly states the tags it references don't exist yet — that comment wasn't changed, since it's still true; a pointer to `scripts/build-release-images.sh` was added to it so a future reader lands on the actual mechanism.

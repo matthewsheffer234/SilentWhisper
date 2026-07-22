@@ -12,3 +12,7 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
+# Release image tars (scripts/build-release-images.sh, SHIPMENT_PLAN.md
+# Section 1.2) — build artifacts staged for enclave transfer, not source;
+# regenerate with the script rather than committing.
+images/

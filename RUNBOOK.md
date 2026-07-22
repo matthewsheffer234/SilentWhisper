@@ -121,6 +121,28 @@ To change `nginx.conf`: edit `/root/wireservice/nginx/nginx.conf`, then either:
 
 Previously, the browser console showed a `WebSocket connection ... failed: Unexpected response code: 200` / Vite HMR warning when loading via `https://whisper.silentlattice.dev`, since a Vite dev server (with its own HMR client) was what actually served the public URL. Resolved by "the deploy loop" (`FEATURE_REQUEST.md`, `PROJECT_PLAN.md` Section 11, 2026-07-18) — the public URL now serves a real production static build via nginx, which has no dev-server client to fail in the first place.
 
+## Enclave Image Build (offline shipment)
+
+Separate from Production Deployment above — this is for staging the versioned, checksummed image tars an air-gapped enclave install (`scripts/airgap-install.sh`) loads instead of building from source. Full spec: `SHIPMENT_PLAN.md` Section 1.2. Run this on a **networked staging/build host**, never inside the enclave itself — the enclave has no registry access to satisfy `npm ci`/`npm install`, by design.
+
+```bash
+VITE_API_URL=https://<enclave-hostname>/api \
+VITE_WS_URL=wss://<enclave-hostname>/ws \
+SILENTWHISPER_VERSION=1.0.0 \
+  ./scripts/build-release-images.sh
+```
+
+Produces `images/postgres-pgvector-pg16.tar`, `images/silentwhisper-backend-<version>.tar`, `images/silentwhisper-frontend-<version>.tar`, and `images/CHECKSUMS.sha256` — exactly what `scripts/airgap-install.sh`'s Phase A/B expect to find before it will proceed. `images/` is gitignored; these are release artifacts to transfer into the enclave (removable media, one-way diode, whatever that enclave's transfer process is), not something to commit.
+
+**Frontend build-time URL decision (v1.0, ships now — Section 1.2)**: Vite bakes `VITE_API_URL`/`VITE_WS_URL` into the static bundle at build time (see Frontend Development above), so **the frontend image is only ever valid for the one enclave hostname it was built against**. This is a deliberate, documented staging-time input, not an oversight:
+
+- The backend and postgres images are enclave-agnostic — build once per release, ship the same tars everywhere.
+- The frontend image must be **rebuilt per enclave**, with that enclave's real browser-facing `VITE_API_URL`/`VITE_WS_URL` passed to `build-release-images.sh` at staging time. There is no way to repoint an already-built frontend image at a different hostname short of rebuilding it.
+- `scripts/airgap-install.sh` does not trust that the right build args were used weeks earlier — its `phase_frontend_bundle_check` greps the loaded image's built bundle for the enclave's configured `VITE_API_URL` and fails loudly if it's not baked in, so a mismatched or stale frontend tar is caught at install time, not the first time a browser tries to load the app.
+- A fast-follow (not a v1.0 blocker) would move to a runtime-injected `/config.js` so one frontend image works across enclaves — real simplification, tracked in `SHIPMENT_PLAN.md` Section 1.2, not required to ship once.
+
+`SILENTWHISPER_VERSION` must match between this script's staging run and whatever `scripts/airgap-install.sh` is invoked with on the enclave host (both default to `1.0.0`) — `docker-compose.enclave.yml`'s `image:` tags are pinned to this exact value, deliberately never `:latest`, so a stale locally-present image can't silently satisfy the tag without actually being loaded from a verified tar.
+
 ## First-Time Setup
 
 ### 0. Create and configure `.env` files
