@@ -108,7 +108,15 @@ services:
       LLM_STREAMING_ENABLED: ${LLM_STREAMING_ENABLED:-true}
       LLM_SUMMARY_PROMPT_VERSION: ${LLM_SUMMARY_PROMPT_VERSION:-v2}
       LLM_TASK_PROMPT_VERSION: ${LLM_TASK_PROMPT_VERSION:-v2}
+      LLM_DIGEST_PROMPT_VERSION: ${LLM_DIGEST_PROMPT_VERSION:-v2}
       LLM_HEALTH_CHECK_INTERVAL_MS: ${LLM_HEALTH_CHECK_INTERVAL_MS:-60000}
+      # Security.md (2026-07-15, MEDIUM: LLM baseUrl SSRF/DoS) — allowlist of
+      # origins the admin-editable `baseUrl` setting may be changed to;
+      # config.js falls back to LLM_BASE_URL's own origin if this is unset.
+      ALLOWED_LLM_ORIGINS: ${ALLOWED_LLM_ORIGINS:-}
+      # Cross-channel "Catch Me Up" workspace digest (FEATURE_REQUEST.md entry
+      # 6) — operational safety cap, not admin-editable. 336 = 14 days.
+      AI_DIGEST_MAX_WINDOW_HOURS: ${AI_DIGEST_MAX_WINDOW_HOURS:-336}
       # Semantic search (FEATURE_REQUEST.md entry 1): a separate, smaller
       # embedding model on the same local provider/host as LLM_* above —
       # config.embedding in backend/src/config.js reuses LLM_PROVIDER's live
@@ -116,6 +124,16 @@ services:
       # duplicating them here.
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-minilm}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      EMBEDDING_TIMEOUT_MS: ${EMBEDDING_TIMEOUT_MS:-15000}
+      EMBEDDING_MAX_CONCURRENT_REQUESTS: ${EMBEDDING_MAX_CONCURRENT_REQUESTS:-1}
+      EMBEDDING_WORKER_INTERVAL_MS: ${EMBEDDING_WORKER_INTERVAL_MS:-2000}
+      EMBEDDING_WORKER_BATCH_SIZE: ${EMBEDDING_WORKER_BATCH_SIZE:-3}
+      EMBEDDING_MAX_ATTEMPTS: ${EMBEDDING_MAX_ATTEMPTS:-5}
+      # Inline Markdown checkbox tasks (FEATURE_REQUEST.md entry 3). Must
+      # match the frontend build's VITE_TASK_OWNER_TOKEN_ALIAS (see the
+      # frontend service below) — no runtime handshake between the two.
+      TASK_OWNER_TOKEN_ALIAS: ${TASK_OWNER_TOKEN_ALIAS:-owner}
+      TASK_DASHBOARD_WINDOW_DAYS: ${TASK_DASHBOARD_WINDOW_DAYS:-30}
     ports:
       - "127.0.0.1:8101:8000"
     healthcheck:
@@ -177,6 +195,9 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8101/api}
         VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8101/ws}
+        # Must match the backend's TASK_OWNER_TOKEN_ALIAS above exactly — no
+        # runtime handshake between them, only agreement at build/deploy time.
+        VITE_TASK_OWNER_TOKEN_ALIAS: ${TASK_OWNER_TOKEN_ALIAS:-owner}
     restart: unless-stopped
     ports:
       - "127.0.0.1:3101:3000"

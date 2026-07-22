@@ -2,7 +2,7 @@
 
 This runbook covers day-to-day operation of the local test environment: first-time setup, starting/stopping, migrations, health checks, logs, and troubleshooting. For the design rationale behind any of these choices (why ports are bound to 127.0.0.1, why there are two Postgres roles, why the audit log uses an advisory lock, etc.), see `PROJECT_PLAN.md` — this document assumes that reasoning and just tells you what to run.
 
-**Current implementation status**: Phases 1–4 (Local Foundation And Database Setup; Local Auth And API Base; Real-Time WebSockets And Layout UI; Configurable Local LLM Integration). The app is a working real-time chat client with AI features: sign up, create workspaces/channels, join public channels, send and receive messages live over WebSocket, reply in threads, see presence, summarize a channel and extract action items from a thread via a local Ollama (or vLLM) instance. There is still no admin audit dashboard. See `PROJECT_PLAN.md` Section 11 for exactly what exists, and Section 8 for what's still to come. Sections below marked *(Phase N+)* describe future behavior and don't work yet.
+**Current implementation status**: substantially past Phases 1–5 of `PROJECT_PLAN.md`'s roadmap. The app is a working real-time chat client — workspaces, channels, threads, presence, organizations, invitations — with AI features (channel summarization, thread task extraction, semantic search) through a configurable local LLM provider, an admin audit dashboard, and inline task checkboxes. Self-service signup is closed; see "Create the first user" below for how accounts are actually provisioned. `PROJECT_PLAN.md` Section 11 is the authoritative, dated log of what's landed; Section 8 has the original phase roadmap for context.
 
 ## Start / Stop
 
@@ -155,7 +155,7 @@ docker compose ps    # wait for STATUS to show (healthy)
 docker compose run --rm migrate
 ```
 
-This creates all 9 application tables (`users`, `workspace_members`, `refresh_tokens`, `workspaces`, `channels`, `channel_members`, `messages`, `audit_logs`, `app_settings`) plus `uuid-ossp`, all indexes from `PROJECT_PLAN.md` Section 4, and the least-privilege `app_runtime_user` role with exactly the grants in Section 5.
+This applies every migration under `database/migrations/` (currently 22, `0001`–`0022`) — every application table, the `uuid-ossp`/`pgvector` extensions, all indexes from `PROJECT_PLAN.md` Section 4, and the least-privilege `app_runtime_user` role with the grants in Section 5 (see "Check the `app_runtime_user` grants match Section 5" below for the actual per-table breakdown — it's not a flat rule).
 
 Rerunning is safe — Knex tracks applied migrations in `knex_migrations` and only runs what's pending. To verify what's applied:
 
@@ -326,7 +326,7 @@ curl -s http://localhost:8101/api/ai/settings -H "Authorization: Bearer <accessT
 # {"healthy":true,"message":"ok","provider":"ollama","lastCheckedAt":"..."}
 ```
 
-The bearer token must belong to a user who is `ADMIN` of at least one workspace (`requireAnyWorkspaceAdmin` — `app_settings` has no per-workspace scoping of its own, so this is the closest fit; see `backend/src/authz/membershipService.js`). The same status is what the frontend's "AI Settings" panel shows as the green/red dot.
+The bearer token must belong to a system admin (`requireSystemAdmin`, `is_system_admin` — not any workspace role; see `backend/src/authz/membershipService.js` and the 2026-07-17 security-hardening entry in `PROJECT_PLAN.md` Section 11, which tightened this from the original Phase 4 "ADMIN of any workspace" convention). The same status is what the frontend's "AI Settings" panel shows as the green/red dot.
 
 ### Streaming response format
 
@@ -466,7 +466,7 @@ docker exec -it silentwhisper-postgres-1 psql -U <PGUSER> -d silent_whisper
 
 ```bash
 cd backend
-npx knex --knexfile knexfile.js migrate:rollback --all   # tears down all 7 migrations
+npx knex --knexfile knexfile.js migrate:rollback --all   # tears down every migration (currently 22)
 npx knex --knexfile knexfile.js migrate:latest            # re-applies them
 ```
 
@@ -477,7 +477,12 @@ docker exec silentwhisper-postgres-1 psql -U <PGUSER> -d silent_whisper -c \
   "SELECT table_name, privilege_type FROM information_schema.role_table_grants WHERE grantee='app_runtime_user' ORDER BY table_name, privilege_type;"
 ```
 
-Expect `SELECT, INSERT, UPDATE, DELETE` on every table except `audit_logs`, which should show only `SELECT, INSERT`.
+Expect:
+- `audit_logs`: `SELECT, INSERT` only (append-only — `database/migrations/0007_grants.js` explicitly revokes `UPDATE`/`DELETE`/`TRUNCATE`).
+- `organizations`, `users`, `workspaces`, `channels`, `messages`: `SELECT, INSERT, UPDATE` only, no `DELETE` (`0013_org_and_no_hard_delete_grants.js` — no route ever hard-deletes these; `organizations` never had `DELETE` to begin with, the other four had it revoked).
+- Every other table (`workspace_members`, `channel_members`, `refresh_tokens`, `app_settings`, `organization_members`, `invitations`, `mention_notifications`, `entities`, `message_entities`, `message_embeddings`, `embedding_jobs`, `user_notifications`, `membership_invitations`, `message_side_effect_jobs`): full `SELECT, INSERT, UPDATE, DELETE`.
+
+(A flat "everything except `audit_logs`" rule is wrong — it was an oversimplification that crept into an earlier draft of an install-verification script; the table above is what the grants migrations actually do.)
 
 ### Audit log verification script
 
@@ -638,7 +643,7 @@ Liveness-only: returns `200` immediately with no DB or provider touch, proving o
 
 ## Resource Usage
 
-Observed on this host (8 vCPU / 30GB RAM / no GPU) with all three Phase 1 services running and idle:
+Observed on this host (8 vCPU / 30GB RAM / no GPU) with all four services running and idle:
 
 | Service | Observed | Configured limit |
 |---|---|---|
