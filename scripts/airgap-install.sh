@@ -40,11 +40,23 @@
 # ALLOWED_LLM_ORIGINS (safe to leave unset — config.js falls back to
 # LLM_BASE_URL's own origin), SKIP_FIRST_ADMIN=1 (skip interactive
 # first-admin creation and the end-to-end smoke test that depends on it).
+#
+# ENV_FILE (optional, default .env): which env file to load and pass to every
+# `docker compose` invocation via --env-file. Exists so this script can be
+# rehearsed end-to-end on a host that's already running a real Silent Whisper
+# deployment from the default .env (SHIPMENT_PLAN.md Section 1.3's progress
+# log — this script had never run start-to-finish for exactly that reason)
+# without ever touching that file: point ENV_FILE at a separate rehearsal env
+# and set COMPOSE_PROJECT_NAME (a plain shell/Compose env var, not something
+# this script manages) to a distinct project name so the rehearsal's
+# containers/networks never collide with a real deployment's. Real enclave
+# installs should never need this — it exists for rehearsal, not normal use.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.enclave.yml)
+ENV_FILE="${ENV_FILE:-.env}"
+COMPOSE=(docker compose --env-file "$ENV_FILE" -f docker-compose.yml -f docker-compose.enclave.yml)
 REPORT_FILE="install-report-$(date +%Y%m%d-%H%M%S).txt"
 FIRST_ADMIN_USERNAME=""
 FIRST_ADMIN_PASSWORD=""
@@ -84,15 +96,15 @@ phase_preflight() {
   command -v sha256sum >/dev/null || fail "sha256sum not found"
   pass "host prerequisites present (docker, compose v2, curl, timeout, xargs, sha256sum)"
 
-  [ -f .env ] || fail ".env missing — copy an enclave env template to .env and fill in real values first (SHIPMENT_PLAN.md Section 2.1c)"
+  [ -f "$ENV_FILE" ] || fail "$ENV_FILE missing — copy an enclave env template to $ENV_FILE and fill in real values first (SHIPMENT_PLAN.md Section 2.1c)"
   set -a
-  # shellcheck disable=SC1091
-  source .env
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
   set +a
-  pass ".env loaded"
+  pass "$ENV_FILE loaded"
 
-  grep -q "your_.*_here" .env && fail ".env still has placeholder values — see RUNBOOK.md First-Time Setup"
-  pass "no placeholder values in .env"
+  grep -q "your_.*_here" "$ENV_FILE" && fail "$ENV_FILE still has placeholder values — see RUNBOOK.md First-Time Setup"
+  pass "no placeholder values in $ENV_FILE"
 
   [ "${LLM_PROVIDER:-}" = "vllm" ] || fail "LLM_PROVIDER must be 'vllm' in this enclave's .env — docker-compose.enclave.yml has no local Ollama fallback"
   [ -n "${LLM_BASE_URL:-}" ] || fail "LLM_BASE_URL must point at the enclave's vLLM host (e.g. https://vllm-gpu01.enclave.internal:8000)"
@@ -109,8 +121,8 @@ phase_preflight() {
   pass "offline image tars + checksum manifest present"
 
   log "Checking vLLM host reachability: ${LLM_BASE_URL}"
-  curl -sf --max-time 5 "${LLM_BASE_URL}/v1/models" >/dev/null \
-    || fail "vLLM host ${LLM_BASE_URL} is not reachable on /v1/models — confirm network path, firewall rules, and that vLLM is actually running there before continuing"
+  curl -sf --max-time 5 "${LLM_BASE_URL}/v1/models" -H "Authorization: Bearer ${LLM_API_KEY:-}" >/dev/null \
+    || fail "vLLM host ${LLM_BASE_URL} is not reachable on /v1/models — confirm network path, firewall rules, that vLLM is actually running there, and that LLM_API_KEY is correct if this gateway requires auth on /v1/models too, before continuing"
   pass "vLLM host reachable"
 }
 
@@ -222,7 +234,7 @@ phase_vllm_models() {
   log "Phase F: confirm the configured vLLM models are actually served, not just that the host answers"
 
   local models_json
-  models_json=$(curl -sf --max-time 5 "${LLM_BASE_URL}/v1/models") \
+  models_json=$(curl -sf --max-time 5 "${LLM_BASE_URL}/v1/models" -H "Authorization: Bearer ${LLM_API_KEY:-}") \
     || fail "could not fetch ${LLM_BASE_URL}/v1/models"
 
   local have_model have_embed
@@ -250,12 +262,74 @@ phase_vllm_models() {
   # curl syntax — this is the actual integer-seconds fix (round up).
   local timeout_s=$(( (${LLM_TIMEOUT_MS:-30000} + 999) / 1000 ))
 
+  # Auth failure-mode check (SHIPMENT_PLAN.md Section 2.4: "confirm LLM_API_KEY
+  # is actually honored — a wrong/missing key should fail cleanly, not
+  # silently succeed against an unauthenticated gateway"). Only meaningful if
+  # a key is actually configured; runs before the real round-trip below so a
+  # gateway that isn't enforcing auth is caught before anything else assumes
+  # it is.
+  if [ -n "${LLM_API_KEY:-}" ]; then
+    log "Auth failure-mode check: confirming a deliberately wrong LLM_API_KEY is rejected"
+    if curl -sf --max-time "$timeout_s" -X POST "${LLM_BASE_URL}/v1/completions" \
+      -H "Authorization: Bearer ${LLM_API_KEY}-deliberately-wrong-$(date +%s)" -H 'Content-Type: application/json' \
+      -d "{\"model\":\"${LLM_MODEL}\",\"prompt\":\"ping\",\"max_tokens\":1}" >/dev/null 2>&1; then
+      fail "vLLM host ${LLM_BASE_URL} accepted a deliberately wrong LLM_API_KEY — this gateway is not enforcing authentication as configured; fix the gateway's auth enforcement or confirm this is intentional before continuing"
+    fi
+    pass "wrong LLM_API_KEY correctly rejected by ${LLM_BASE_URL}"
+  else
+    log "LLM_API_KEY is unset — skipping auth failure-mode check (no key configured to test rejection of)"
+  fi
+
   log "Direct provider round-trip: completion"
   curl -sf --max-time "$timeout_s" -X POST "${LLM_BASE_URL}/v1/completions" \
     -H "Authorization: Bearer ${LLM_API_KEY:-}" -H 'Content-Type: application/json' \
     -d "{\"model\":\"${LLM_MODEL}\",\"prompt\":\"ping\",\"max_tokens\":1}" >/dev/null \
     || fail "test completion against ${LLM_BASE_URL} failed — check LLM_API_KEY and vLLM gateway logs"
   pass "vLLM completion round-trip succeeded"
+
+  # Streaming smoke test (SHIPMENT_PLAN.md Section 2.4: "a mock can't prove
+  # this" — so this runs against whatever LLM_BASE_URL is actually
+  # configured, at install time, on real hardware). Parses the same
+  # OpenAI-compatible SSE shape backend/src/llm/adapters/vllmAdapter.js's
+  # `generate()` does (data: <json> lines, terminated by a literal
+  # data: [DONE] line) — a failure here means this vLLM deployment's real
+  # streaming output doesn't match what the adapter expects, which is exactly
+  # the gap no amount of mocking could have caught earlier.
+  if [ "${LLM_STREAMING_ENABLED:-true}" != "false" ]; then
+    log "Direct provider round-trip: streaming"
+    local stream_text
+    stream_text=$(curl -sfN --max-time "$timeout_s" -X POST "${LLM_BASE_URL}/v1/completions" \
+      -H "Authorization: Bearer ${LLM_API_KEY:-}" -H 'Content-Type: application/json' \
+      -d "{\"model\":\"${LLM_MODEL}\",\"prompt\":\"Say hello in one word.\",\"max_tokens\":5,\"stream\":true}" \
+      | docker run --rm -i "$(backend_image)" node -e "
+        let buffer = '';
+        let full = '';
+        process.stdin.on('data', (c) => {
+          buffer += c.toString();
+          let nl;
+          while ((nl = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, nl).trim();
+            buffer = buffer.slice(nl + 1);
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice('data:'.length).trim();
+            if (payload === '[DONE]' || !payload) continue;
+            try {
+              const obj = JSON.parse(payload);
+              full += obj.choices?.[0]?.text ?? '';
+            } catch (e) {
+              process.stderr.write('SSE chunk did not parse as JSON: ' + payload + '\n');
+              process.exit(1);
+            }
+          }
+        });
+        process.stdin.on('end', () => { console.log(full); });
+      ") || fail "streaming completion request against ${LLM_BASE_URL} failed to parse as the expected OpenAI-compatible SSE shape (data: <json> lines, data: [DONE] terminator) — this vLLM deployment's real streaming output doesn't match what backend/src/llm/adapters/vllmAdapter.js expects; set LLM_STREAMING_ENABLED=false as an immediate fallback (RUNBOOK.md's Enclave Go-Live playbook) while this is investigated"
+    [ -n "$stream_text" ] \
+      || fail "streaming completion against ${LLM_BASE_URL} produced no assembled text — either no data: lines were sent or every chunk was empty; set LLM_STREAMING_ENABLED=false as an immediate fallback while this is investigated"
+    pass "streaming completion round-trip succeeded, assembled text: \"${stream_text}\""
+  else
+    log "LLM_STREAMING_ENABLED=false — skipping streaming smoke test (the app will use the non-streaming path, already exercised above)"
+  fi
 
   log "Direct provider round-trip: embedding dimension check"
   local emb_len
@@ -272,6 +346,68 @@ phase_vllm_models() {
   [ "$emb_len" = "${EMBEDDING_DIMENSION}" ] \
     || fail "embedding returned length $emb_len, expected EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION} — message_embeddings.embedding is a fixed vector(N) column, this mismatch will break on the first real semantic search rather than failing here"
   pass "embedding dimension matches EMBEDDING_DIMENSION ($emb_len)"
+
+  # Concurrency/latency check (SHIPMENT_PLAN.md Section 2.4: "manually fire
+  # several concurrent AI requests against the real GPU host and confirm
+  # LLM_MAX_CONCURRENT_REQUESTS/LLM_TIMEOUT_MS ... are actually sane for this
+  # hardware" — automated here instead of left to the operator to remember).
+  # This hits the vLLM host directly and concurrently, bypassing the app's
+  # own LLM_MAX_CONCURRENT_REQUESTS queue entirely (that queue is Node-process-
+  # side, in backend/src/llm/ — irrelevant to a set of bare curl processes) —
+  # it answers "can this hardware/network path serve N requests at once
+  # within a sane time," a prerequisite for the app's own queueing to behave
+  # well, not a test of the queue itself.
+  log "Concurrency/latency check: 3 concurrent completion requests against ${LLM_BASE_URL}"
+  local n=3
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  local pids=()
+  local i
+  for i in $(seq 1 "$n"); do
+    (
+      local t0 t1 rc
+      t0=$(date +%s%N)
+      # `if ...; then rc=0; else rc=$?; fi`, not a bare `curl ...; rc=$?` —
+      # this subshell inherits `set -e` from the parent function, so a bare
+      # nonzero curl exit would kill the subshell before `rc=$?` ever ran,
+      # and the subsequent `wait "$pid"` in the parent would then itself
+      # trip `set -e` there too, aborting the whole script with a raw exit
+      # code instead of a clean `fail()` message. Caught by testing this
+      # against a mock gateway that deliberately rejects concurrent
+      # requests (SHIPMENT_PLAN.md Section 2.4's progress log).
+      if curl -sf --max-time "$timeout_s" -X POST "${LLM_BASE_URL}/v1/completions" \
+        -H "Authorization: Bearer ${LLM_API_KEY:-}" -H 'Content-Type: application/json' \
+        -d "{\"model\":\"${LLM_MODEL}\",\"prompt\":\"concurrency probe ${i}\",\"max_tokens\":5}" >/dev/null 2>&1; then
+        rc=0
+      else
+        rc=$?
+      fi
+      t1=$(date +%s%N)
+      echo "$(( (t1 - t0) / 1000000 )) $rc" > "$tmpdir/$i"
+    ) &
+    pids+=("$!")
+  done
+  local pid
+  for pid in "${pids[@]}"; do wait "$pid"; done
+
+  local max_latency_ms=0 any_failed=0 lat rc
+  for i in $(seq 1 "$n"); do
+    read -r lat rc < "$tmpdir/$i"
+    log "  concurrent request $i: ${lat}ms (exit $rc)"
+    [ "$rc" -eq 0 ] || any_failed=1
+    [ "$lat" -gt "$max_latency_ms" ] && max_latency_ms=$lat
+  done
+  rm -rf "$tmpdir"
+
+  [ "$any_failed" -eq 0 ] \
+    || fail "at least one of $n concurrent completion requests against ${LLM_BASE_URL} failed — check this vLLM host's own concurrency limits and network capacity before opening the app to real users"
+  pass "all $n concurrent requests to ${LLM_BASE_URL} succeeded; slowest was ${max_latency_ms}ms against a configured LLM_TIMEOUT_MS of ${LLM_TIMEOUT_MS:-30000}ms"
+
+  local warn_threshold_ms=$(( (${LLM_TIMEOUT_MS:-30000} * 70) / 100 ))
+  if [ "$max_latency_ms" -gt "$warn_threshold_ms" ]; then
+    log "WARNING: the slowest concurrent request (${max_latency_ms}ms) used more than 70% of LLM_TIMEOUT_MS (${LLM_TIMEOUT_MS:-30000}ms) — this default was sized for the CPU-Ollama local test environment, not necessarily this hardware's real network latency under concurrent load; consider raising LLM_TIMEOUT_MS before opening the app to real users (RUNBOOK.md's Enclave Go-Live playbook)"
+    report "WARN: slowest concurrent vLLM request (${max_latency_ms}ms) exceeded 70% of LLM_TIMEOUT_MS (${LLM_TIMEOUT_MS:-30000}ms)"
+  fi
 }
 
 phase_bring_up_app() {

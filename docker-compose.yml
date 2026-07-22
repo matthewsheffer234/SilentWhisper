@@ -15,6 +15,14 @@
 # Resource limits follow the Local Test Environment Resource Envelope
 # (Section 2): this host has 8 vCPU / 30GB RAM / no GPU, and memory is not
 # the binding constraint here.
+#
+# postgres/backend/frontend host ports are overridable
+# (POSTGRES_HOST_PORT/BACKEND_HOST_PORT/FRONTEND_HOST_PORT, defaults
+# unchanged: 5433/8101/3101) — SHIPMENT_PLAN.md Section 1.3's progress log:
+# this exists so scripts/airgap-install.sh can be rehearsed end-to-end
+# (distinct ports + COMPOSE_PROJECT_NAME) on a host already running a real
+# deployment from the default ports, without colliding with it. Not meant to
+# be set for a normal run — real deployments should stick to the defaults.
 
 # SHIPMENT_PLAN.md Section 2.6: json-file's default is unbounded growth.
 # docker-compose.enclave.yml already had this (added alongside Section 1.1);
@@ -44,7 +52,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - silent_whisper_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -147,7 +155,7 @@ services:
       TASK_OWNER_TOKEN_ALIAS: ${TASK_OWNER_TOKEN_ALIAS:-owner}
       TASK_DASHBOARD_WINDOW_DAYS: ${TASK_DASHBOARD_WINDOW_DAYS:-30}
     ports:
-      - "127.0.0.1:8101:8000"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8101}:8000"
     healthcheck:
       # /health/live, not /health (SHIPMENT_PLAN.md Section 2.2): /health
       # returns 503 whenever checkDbConnection() fails, which makes Docker's
@@ -225,7 +233,7 @@ services:
         VITE_TASK_OWNER_TOKEN_ALIAS: ${TASK_OWNER_TOKEN_ALIAS:-owner}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3101:3000"
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3101}:3000"
     # Lowered from 512m (FEATURE_REQUEST.md "the deploy loop" entry,
     # 2026-07-18): that limit was sized for the old Vite dev server's esbuild
     # dependency pre-bundling on cold start (see the lucide-react entry this

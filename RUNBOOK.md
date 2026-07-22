@@ -157,6 +157,40 @@ Produces `images/postgres-pgvector-pg16.tar`, `images/silentwhisper-backend-<ver
 
 Validated with `nginx -t` in a throwaway `nginx:alpine` container (host aliases stood in for the `backend`/`frontend` compose service names, which the template's upstream directives assume are resolvable — true if the proxy runs as a container on the same compose network, false otherwise and worth adjusting first) — syntax only, not a live TLS/WS handshake test, since that needs a real hostname and certificate.
 
+## Enclave Go-Live: Accepted Risks & First-Real-Run Playbook
+
+Two things could not be verified before this repo's first real air-gapped install, and the decision — made explicitly and directly by the user, not defaulted into or overlooked — is to ship v1.0 anyway and offset the risk operationally rather than block on further pre-ship engineering that has no resources to run against (real GPU hardware, a genuinely separate staging host). See `SHIPMENT_PLAN.md` Section 3 for the same decision recorded against the shipment plan itself. This section is the operational half of that decision: what's actually unverified, what already is, and what to do about the gap during the first real install.
+
+### What was NOT verified before go-live
+
+1. **vLLM real-hardware behavior** (`SHIPMENT_PLAN.md` Section 2.4). `scripts/airgap-install.sh`'s Phase F now automatically checks three of these against whatever `LLM_BASE_URL` is actually configured, at install time, on the real hardware — not against a mock, since these are specifically the surfaces a mock can't prove:
+   - **Streaming SSE chunk format** — Phase F sends a real `stream:true` request and parses it with the same logic `backend/src/llm/adapters/vllmAdapter.js`'s `generate()` uses; fails loudly if the real deployment's shape doesn't match, with a pointer to the `LLM_STREAMING_ENABLED=false` fallback below.
+   - **`LLM_API_KEY` failure-mode** — Phase F tries a deliberately wrong key first (if `LLM_API_KEY` is set) and fails the install if the gateway wrongly accepts it, before ever using the real key.
+   - **Concurrency/latency** — Phase F fires 3 concurrent completion requests directly at the real host and logs actual latency, warning (not failing) if the slowest exceeds 70% of `LLM_TIMEOUT_MS`.
+
+   Still genuinely unverified: this is the first time these checks run against *real* hardware at all (they were proven correct against several purpose-built mock servers, including negative-path testing, but never against an actual vLLM deployment) — the install itself is that first real test. And the app-level AI paths beyond summarize — task extraction, workspace digest — still aren't driven against real vLLM specifically by anything in this repo (summarize was, via the mock; semantic search was tested end-to-end, but against the real *Ollama* instance on this host, not vLLM).
+2. **`scripts/airgap-install.sh` has never run start-to-finish as one continuous process.** Every phase's actual logic (Postgres/pgvector setup, migrations, the full grants matrix, JSON-parsing helpers, backend health, the login→workspace→join→message→AI-summarize smoke test) was independently proven correct against real, isolated infrastructure (`SHIPMENT_PLAN.md` Section 1.3's progress log has the full detail) — but never in one uninterrupted run through real `docker compose` orchestration. The specific new risk this leaves is cross-phase sequencing/networking under `docker compose` itself (service startup ordering, its embedded DNS, timing), not the phase logic, which is already proven.
+
+### What WAS verified (the actual risk surface is narrower than "nothing has been tested")
+
+Real, isolated, non-mocked testing already covers: Postgres/pgvector setup and `CREATE EXTENSION vector`; all 22 migrations; the exact `app_runtime_user` grants matrix against a real post-migration schema (all 20 tables); the image build → tag → save → checksum → load → tag-verify contract end-to-end; the frontend's build-time URL baking and the installer's bundle-content check; the backend healthcheck's DB-outage decoupling (`/health/live` staying healthy while `/health` correctly reports a real DB outage); `CORS_ORIGIN`/`ALLOWED_LLM_ORIGINS` validation logic against several cases including a substring-collision trap; a full login → workspace → channel → join → message → AI-summarize flow through the real app (LLM responses mocked); the audit hash-chain surviving a real backup/restore of this host's actual production data; and `idx_message_embeddings_hnsw` surviving that same restore, `indisvalid` and a real nearest-neighbor query both confirmed correct.
+
+### Recommended first-real-run sequence (this run *is* the rehearsal — treat it that way)
+
+1. **Someone watches it live.** `scripts/airgap-install.sh` is fail-fast (`set -euo pipefail`) and, per its own closing comment, never destructive (no drop, no rollback, no build, ever) — a failure halts cleanly rather than cascading. Don't kick it off and walk away on the very first real run; read each phase's `PASS`/`FAIL` line as it happens, and read `install-report-<timestamp>.txt` afterward regardless of outcome.
+2. **Phase F does most of the vLLM-specific checking automatically now** — streaming, the auth failure-mode, and concurrency/latency (see above) all run as part of the install itself, not as separate manual steps. What to do with each outcome:
+   - **Streaming `FAIL`**: the real deployment's SSE shape doesn't match what the adapter expects. Fastest mitigation: set `LLM_STREAMING_ENABLED=false` and restart the backend, which falls back to a single non-streamed JSON response over the same `/v1/completions` endpoint (`backend/src/llm/adapters/vllmAdapter.js`'s non-streaming branch — already exercised end-to-end against a mock, unlike the streaming branch). Re-enable streaming once the real SSE shape is confirmed to match.
+   - **Auth `FAIL`**: the gateway accepted a wrong key — it isn't enforcing authentication as configured. Fix the gateway's auth enforcement, or confirm that's actually intentional for this deployment, before continuing.
+   - **Concurrency `WARN`** (not a hard fail): the slowest of 3 concurrent requests used more than 70% of `LLM_TIMEOUT_MS`. Consider raising `LLM_TIMEOUT_MS` before real user load — this default was sized for the CPU-Ollama local test environment, not necessarily this hardware's real latency under concurrent load. (`LLM_MAX_CONCURRENT_REQUESTS` defaults to `1` and `AI_QUEUE_MAX_DEPTH` to `8` in `backend/src/config.js` — the app's own queue is separate from, and downstream of, what this check measures: it answers "can the hardware/network serve a few requests at once in reasonable time," a prerequisite for the app's queue behaving well, not a test of the queue itself.)
+   - If Phase F passes cleanly, that's real signal — not a guarantee nothing else can go wrong, but the three specific gaps this playbook used to ask an operator to catch by hand are now caught by the installer itself.
+3. Only after Phase F passes (or its `WARN`s are addressed), work through the rest of `SHIPMENT_PLAN.md` Section 5's checklist and open the app to real users.
+
+### If something goes wrong
+
+- Re-running `scripts/airgap-install.sh` after a failure is safe — nothing it does is destructive, and earlier phases simply re-confirm already-satisfied state on a second run.
+- A vLLM-side failure (Phase F or Phase G) doesn't touch Postgres, migrations, or anything already loaded — fix the vLLM-side config/connectivity and re-run.
+- `scripts/backup-db.sh`/`scripts/restore-db.sh` exist and were proven against this host's real production data (`SHIPMENT_PLAN.md` Section 2.5) — not itself a mitigation for a bad first install (a fresh enclave has no prior backup to restore from), but worth knowing it's available for whatever comes after go-live.
+
 ## First-Time Setup
 
 ### 0. Create and configure `.env` files
