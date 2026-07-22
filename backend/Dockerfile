@@ -12,6 +12,16 @@ RUN npm install --omit=dev
 COPY backend/ ./
 COPY database/ /app/database/
 
+# SHIPMENT_PLAN.md Section 2.3 — ships the standalone maintenance scripts
+# (create-first-admin.mjs, verify-audit-log.mjs, upgrade-prompt-versions.mjs
+# et al.) inside the backend image so an air-gapped install can run them
+# in-container without staging a second scripts/node_modules offline
+# artifact. Safe: scripts/package.json's dependencies (dotenv, pg, knex,
+# bcryptjs, jsonwebtoken, ws) are an exact-version-range subset of
+# backend/package.json's own, already installed above.
+COPY scripts/*.mjs /app/scripts/
+RUN ln -s /app/backend/node_modules /app/node_modules
+
 EXPOSE 8000
 
 CMD ["node", "src/index.js"]

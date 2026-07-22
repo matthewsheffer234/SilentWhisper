@@ -59,7 +59,7 @@ const SEND_DELAY_MS = 400;
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) {
-    console.error(`Missing required environment variable: ${name} (expected in backend/.env)`);
+    console.error(`Missing required environment variable: ${name} (expected in backend/.env on the host, or already injected via Docker Compose/the container environment when run inside a container)`);
     process.exit(2);
   }
   return value;

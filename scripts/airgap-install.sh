@@ -387,6 +387,22 @@ phase_smoke_test() {
   if [ -z "$ch_id" ] || [ "$ch_id" = "undefined" ]; then fail "smoke-test channel creation did not return an id"; fi
   pass "smoke-test workspace/channel created"
 
+  # The first admin is always a system admin (create-first-admin.mjs hardcodes
+  # is_system_admin=true), and backend/src/routes/workspaces.js deliberately
+  # does NOT auto-join a system admin to a channel they create via the
+  # structural-management override (Finding 1,
+  # docs/reviews/security-performance-review-2026-07-20.md — creating a
+  # channel is structural management, not a standing grant of message-content
+  # read access). Confirmed by running this smoke test for real against a
+  # throwaway stack: without this explicit join, the message send below
+  # 404s ("Channel not found") on every install, not just in testing —
+  # the admin has to take the same further, explicit, auditable step anyone
+  # else would (POST .../channels/:channelId/join), same as a genuine member.
+  curl -sf -X POST "http://localhost:8101/api/workspaces/${ws_id}/channels/${ch_id}/join" \
+    -H "Authorization: Bearer $token" >/dev/null \
+    || fail "smoke-test channel join failed"
+  pass "smoke-test admin joined the channel (required before posting — see comment above)"
+
   curl -sf -X POST "http://localhost:8101/api/channels/${ch_id}/messages" \
     -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
     -d '{"content":"enclave install smoke test"}' >/dev/null \

@@ -99,7 +99,7 @@ const CHARACTERS = [
 async function main() {
   if (!process.env.PGDATABASE) {
     throw new Error(
-      'PGDATABASE is not set (expected in backend/.env) — refusing to run against an unknown database.',
+      'PGDATABASE is not set (expected in backend/.env on the host, or already injected via Docker Compose/the container environment when run inside a container) — refusing to run against an unknown database.',
     );
   }
   console.log(`Seeding "${WORKSPACE_NAME}" into database "${process.env.PGDATABASE}" (host ${process.env.PGHOST}:${process.env.PGPORT || 5432})...\n`);
