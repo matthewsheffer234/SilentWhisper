@@ -94,7 +94,22 @@ export async function requireWorkspacePermission(db, userId, workspaceId, permis
 // existing bypass, not an oversight: "manage the workspace" and "read every
 // private conversation in it" are different privileges, and only the first
 // is being granted here.
+// Genuine membership is checked before the system-admin override, not after:
+// a system admin who is also a real workspace_members row (e.g. because they
+// created the workspace themselves, which auto-enrolls the creator as OWNER
+// regardless of admin status) must be treated as the genuine member they
+// are, not as a non-member exercising the structural override. Checking
+// isSystemAdminUser first returned viaSystemAdminOverride: true
+// unconditionally for every system admin, including in their own workspace —
+// which meant POST .../channels skipped the channel_members insert (Finding 1
+// above) even for an admin creating a channel in a workspace they genuinely
+// own, so the composer never left its "Joining channel…" state.
 export async function requireWorkspaceMemberOrSystemAdmin(db, userId, workspaceId) {
+  const role = await getWorkspaceRole(db, userId, workspaceId);
+  if (role) {
+    return { role, viaSystemAdminOverride: false };
+  }
+
   if (await isSystemAdminUser(db, userId)) {
     const workspace = await db('workspaces').where({ id: workspaceId }).first();
     if (!workspace) {
@@ -103,8 +118,7 @@ export async function requireWorkspaceMemberOrSystemAdmin(db, userId, workspaceI
     return { role: null, viaSystemAdminOverride: true };
   }
 
-  const role = await requireWorkspaceMember(db, userId, workspaceId);
-  return { role, viaSystemAdminOverride: false };
+  throw new NotFoundError('Workspace not found');
 }
 
 // System-wide surfaces (AI settings, audit dashboard) have no per-workspace

@@ -215,3 +215,35 @@ describe('system admin structural workspace management (not a member)', () => {
     expect(searchRes.status).toBe(404);
   });
 });
+
+// A system admin who is *also* a genuine workspace member (most commonly:
+// they created the workspace themselves, which auto-enrolls the creator as
+// OWNER in workspace_members regardless of admin status) must be treated as
+// that genuine member, not funneled through the non-member structural
+// override above. Regression coverage for a real bug: requireWorkspaceMemberOrSystemAdmin
+// used to check isSystemAdminUser first and return viaSystemAdminOverride:
+// true unconditionally for any system admin, even in a workspace they own —
+// so POST .../channels (which skips the channel_members insert specifically
+// for viaSystemAdminOverride, per Finding 1 above) never auto-joined the
+// admin to a channel they just created in their own workspace, leaving the
+// composer stuck indefinitely on "Joining channel…".
+describe('system admin who is a genuine workspace member (owns the workspace)', () => {
+  test('creating a channel in a workspace they own auto-joins them, same as any other owner', async () => {
+    const admin = await seedSystemAdmin('sawmselfowner0');
+    const wsRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'Admin Own Workspace' });
+    expect(wsRes.status).toBe(201);
+
+    const chRes = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/channels`)
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'general', type: 'PUBLIC' });
+    expect(chRes.status).toBe(201);
+    expect(chRes.body.isMember).toBe(true);
+
+    const memberRow = await db('channel_members').where({ channel_id: chRes.body.id, user_id: admin.userId }).first();
+    expect(memberRow).toBeDefined();
+  });
+});
