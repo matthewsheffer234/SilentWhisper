@@ -22,6 +22,7 @@ import {
   transferWorkspaceOwnership,
   changeWorkspaceVisibility,
   updateWorkspaceSettings,
+  renameWorkspace,
   archiveWorkspace,
 } from '../api/workspaces.js';
 import {
@@ -560,6 +561,12 @@ export default function SystemAdminPanel({ onClose }) {
     setAllWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, managersCanArchive } : ws)));
     setManagingWorkspace((prev) => (prev && prev.id === workspaceId ? { ...prev, managersCanArchive } : prev));
   }
+  // FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"), Part 2.
+  async function handleAdminRenameWorkspace(workspaceId, name) {
+    await renameWorkspace(workspaceId, name);
+    setAllWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, name } : ws)));
+    setManagingWorkspace((prev) => (prev && prev.id === workspaceId ? { ...prev, name } : prev));
+  }
 
   useEffect(() => {
     loadOrganizations();
@@ -835,6 +842,7 @@ export default function SystemAdminPanel({ onClose }) {
             onTransferOwnership={(username) => handleAdminTransferOwnership(managingWorkspace.id, username)}
             onChangeVisibility={(visibility) => handleAdminChangeVisibility(managingWorkspace.id, visibility)}
             onToggleManagersCanArchive={(value) => handleAdminToggleManagersCanArchive(managingWorkspace.id, value)}
+            onRenameWorkspace={(name) => handleAdminRenameWorkspace(managingWorkspace.id, name)}
             onArchiveWorkspace={() => handleAdminArchiveWorkspace(managingWorkspace.id)}
           />
         )}

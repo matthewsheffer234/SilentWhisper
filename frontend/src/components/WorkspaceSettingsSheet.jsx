@@ -197,6 +197,47 @@ function InviteLinkSection({ onCreateInviteLink }) {
   );
 }
 
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 2 — organizations already had this (OrgManagementPanel.jsx's own
+// rename row); workspaces never did.
+function RenameWorkspaceSection({ workspaceName, onRenameWorkspace }) {
+  const [name, setName] = useState(workspaceName);
+  const [status, setStatus] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === workspaceName) return;
+    setStatus(null);
+    try {
+      await onRenameWorkspace(trimmed);
+      setStatus({ type: 'success', message: 'Renamed' });
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to rename workspace' });
+    }
+  }
+
+  return (
+    <div>
+      <form style={styles.inlineForm} onSubmit={handleSubmit}>
+        <input
+          style={styles.inlineInput}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Workspace name"
+          aria-label="Workspace name"
+        />
+        <button type="submit" style={styles.actionButton} disabled={!name.trim() || name.trim() === workspaceName}>
+          Rename
+        </button>
+      </form>
+      {status && (
+        <div style={{ ...styles.feedback, ...(status.type === 'error' ? styles.error : styles.success) }}>{status.message}</div>
+      )}
+    </div>
+  );
+}
+
 // A successful transfer demotes the caller to Manager, which flips
 // `canTransferOwnership` false on the very next re-render (the workspace
 // list refetch in ChatShell.jsx's handleTransferOwnership) — that unmounts
@@ -422,6 +463,7 @@ export default function WorkspaceSettingsSheet({
   onTransferOwnership,
   onChangeVisibility,
   onToggleManagersCanArchive,
+  onRenameWorkspace,
   onArchiveWorkspace,
   // FEATURE_REQUEST.md: "any system admin should be able to fully manage
   // all workspaces." Set when this sheet is opened from SystemAdminPanel.jsx
@@ -457,6 +499,13 @@ export default function WorkspaceSettingsSheet({
       width={520}
       maxHeight="86vh"
     >
+      {canManageSettings && (
+        <>
+          <div style={sectionTitleStyle()}>Name</div>
+          <RenameWorkspaceSection workspaceName={workspace.name} onRenameWorkspace={onRenameWorkspace} />
+        </>
+      )}
+
       {canChangeVisibility && (
         <>
           <div style={sectionTitleStyle()}>Visibility</div>

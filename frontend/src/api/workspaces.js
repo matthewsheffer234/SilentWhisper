@@ -91,6 +91,8 @@ export const changeWorkspaceVisibility = (workspaceId, visibility) =>
   apiFetch(`/workspaces/${workspaceId}/visibility`, { method: 'POST', body: { visibility } });
 export const updateWorkspaceSettings = (workspaceId, { managersCanArchive }) =>
   apiFetch(`/workspaces/${workspaceId}/settings`, { method: 'POST', body: { managersCanArchive } });
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"), Part 2.
+export const renameWorkspace = (workspaceId, name) => apiFetch(`/workspaces/${workspaceId}`, { method: 'PATCH', body: { name } });
 
 // FEATURE_REQUEST.md entry 2: GET /workspaces/:workspaceId/channels is now
 // offset-paginated server-side; this loops every page into the flat list
@@ -105,6 +107,14 @@ export const joinChannel = (workspaceId, channelId) =>
   apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/join`, { method: 'POST' });
 export const addChannelMember = (workspaceId, channelId, username) =>
   apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members`, { method: 'POST', body: { username } });
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"), Part 4 — the
+// delete counterpart addChannelMember never had: removes someone from just
+// this channel, not the whole workspace (removeWorkspaceMember, above).
+export const removeChannelMember = (workspaceId, channelId, userId) =>
+  apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/members/${userId}`, { method: 'DELETE' });
+// Part 2.
+export const renameChannel = (workspaceId, channelId, name) =>
+  apiFetch(`/workspaces/${workspaceId}/channels/${channelId}`, { method: 'PATCH', body: { name } });
 
 // FEATURE_REQUEST.md's "channel details panel" entry — the full roster, not
 // the mention-autocomplete search endpoint above. FEATURE_REQUEST.md entry

@@ -2,7 +2,7 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
-import { signup, authHeader } from './helpers/testUsers.js';
+import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 
 // FEATURE_REQUEST.md's "channel details panel with private-channel member
 // management" entry: GET /:workspaceId/channels gained `memberCount` (no
@@ -263,5 +263,266 @@ describe('POST /workspaces/:workspaceId/channels/:channelId/members', () => {
 
     const row = await db('channel_members').where({ channel_id: channelA, user_id: targetInB.userId }).first();
     expect(row).toBeFalsy();
+  });
+});
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 2: channels had no rename path at all.
+describe('PATCH /workspaces/:workspaceId/channels/:channelId', () => {
+  test('a channel member can rename it, and it is audited', async () => {
+    const owner = await signup('chanrenameowner0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE', 'old-name');
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/channels/${channelId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'new-name' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: channelId, workspaceId, name: 'new-name' });
+
+    const channel = await db('channels').where({ id: channelId }).first('name');
+    expect(channel.name).toBe('new-name');
+
+    const row = await db('audit_logs').where({ action_type: 'CHANNEL_RENAMED' }).first();
+    expect(row.payload).toMatchObject({ workspaceId, fromName: 'old-name', toName: 'new-name' });
+  });
+
+  test('is idempotent — setting the same name again does not write a duplicate audit row', async () => {
+    const owner = await signup('chanrenameowner1');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PUBLIC', 'same-name');
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/channels/${channelId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'same-name' });
+    expect(res.status).toBe(200);
+
+    const rows = await db('audit_logs').where({ action_type: 'CHANNEL_RENAMED' });
+    expect(rows).toHaveLength(0);
+  });
+
+  test('a non-member of the channel gets 404, even as a workspace member (existence-hiding)', async () => {
+    const owner = await signup('chanrenameowner2');
+    const workspaceMember = await signup('chanrenamewsmember2');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, workspaceMember);
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/channels/${channelId}`)
+      .set(authHeader(workspaceMember.accessToken))
+      .send({ name: 'hijacked' });
+    expect(res.status).toBe(404);
+  });
+
+  test('a system admin (non-member) can rename via the structural-management override', async () => {
+    const owner = await signup('chanrenameowner3');
+    const admin = await seedSystemAdmin('chanrenameadmin3');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE', 'before');
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/channels/${channelId}`)
+      .set(authHeader(admin.accessToken))
+      .send({ name: 'after' });
+    expect(res.status).toBe(200);
+
+    const channel = await db('channels').where({ id: channelId }).first('name');
+    expect(channel.name).toBe('after');
+  });
+
+  test('a channelId/workspaceId pair from different workspaces 400s', async () => {
+    const owner = await signup('chanrenameowner4');
+    const workspaceId = await createWorkspace(owner);
+    const otherWorkspaceId = await createWorkspace(owner);
+    const otherChannelId = await createChannel(owner, otherWorkspaceId, 'PRIVATE');
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/channels/${otherChannelId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'hijacked' });
+    expect(res.status).toBe(400);
+  });
+
+  test('an empty name 400s', async () => {
+    const owner = await signup('chanrenameowner5');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PUBLIC');
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/channels/${channelId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: '' });
+    expect(res.status).toBe(400);
+  });
+
+  test('an archived workspace 409s', async () => {
+    const owner = await signup('chanrenameowner6');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PUBLIC');
+    await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/channels/${channelId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'renamed' });
+    expect(res.status).toBe(409);
+  });
+});
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 4: the only way to remove someone from one private channel used to
+// be DELETE /:workspaceId/members/:userId, which removes them from the
+// *entire workspace*. Mirrors the cross-workspace-injection coverage the
+// sibling POST .../members route above already has.
+describe('DELETE /workspaces/:workspaceId/channels/:channelId/members/:userId', () => {
+  test('a channel member can remove another channel member, and it is audited', async () => {
+    const owner = await signup('chanremoveowner0');
+    const member = await signup('chanremovemember0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, member);
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: member.username });
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/channels/${channelId}/members/${member.userId}`)
+      .set(authHeader(owner.accessToken));
+    expect(res.status).toBe(204);
+
+    const row = await db('channel_members').where({ channel_id: channelId, user_id: member.userId }).first();
+    expect(row).toBeFalsy();
+
+    // The member's workspace membership itself is untouched — this is a
+    // channel-scoped removal, not a workspace-scoped one.
+    const wsRow = await db('workspace_members').where({ workspace_id: workspaceId, user_id: member.userId }).first();
+    expect(wsRow).toBeTruthy();
+
+    const auditRow = await db('audit_logs').where({ action_type: 'CHANNEL_MEMBERSHIP_CHANGE' }).orderBy('id', 'desc').first();
+    expect(auditRow.payload).toMatchObject({ action: 'remove', removedUserId: member.userId, removedUsername: member.username });
+  });
+
+  test('removing the last member leaves a valid, empty channel rather than erroring', async () => {
+    const owner = await signup('chanremoveowner1');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PUBLIC');
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/channels/${channelId}/members/${owner.userId}`)
+      .set(authHeader(owner.accessToken));
+    expect(res.status).toBe(204);
+
+    const remaining = await db('channel_members').where({ channel_id: channelId }).count('user_id as count').first();
+    expect(Number(remaining.count)).toBe(0);
+    const channel = await db('channels').where({ id: channelId }).first();
+    expect(channel).toBeTruthy();
+  });
+
+  test('a DIRECT channel is unreachable through this route — its workspace_id is always null, so the workspace-binding check itself rejects it', async () => {
+    const userA = await signup('chanremovedma0');
+    const userB = await signup('chanremovedmb0');
+    const dmRes = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(userA.accessToken))
+      .send({ targetUserId: userB.userId });
+    expect(dmRes.status).toBeLessThan(300);
+    const channelId = dmRes.body.id;
+
+    // Any real workspace userA belongs to — the DM channel was never
+    // created under it, so channel.workspace_id (null) never matches.
+    const workspaceId = await createWorkspace(userA);
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/channels/${channelId}/members/${userB.userId}`)
+      .set(authHeader(userA.accessToken));
+    expect(res.status).toBe(400);
+
+    const row = await db('channel_members').where({ channel_id: channelId, user_id: userB.userId }).first();
+    expect(row).toBeTruthy();
+  });
+
+  test('a non-member of the channel gets 404, even as a workspace member', async () => {
+    const owner = await signup('chanremoveowner2');
+    const workspaceMember = await signup('chanremovewsmember2');
+    const target = await signup('chanremovetarget2');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, workspaceMember);
+    await addToWorkspace(owner, workspaceId, target);
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: target.username });
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/channels/${channelId}/members/${target.userId}`)
+      .set(authHeader(workspaceMember.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('a system admin (non-member) can remove via the structural-management override', async () => {
+    const owner = await signup('chanremoveowner3');
+    const member = await signup('chanremovemember3');
+    const admin = await seedSystemAdmin('chanremoveadmin3');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, member);
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: member.username });
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/channels/${channelId}/members/${member.userId}`)
+      .set(authHeader(admin.accessToken));
+    expect(res.status).toBe(204);
+  });
+
+  test('a channelId/workspaceId pair from different workspaces 400s and removes nothing', async () => {
+    const ownerA = await signup('chanremoveinjectA0');
+    const workspaceA = await createWorkspace(ownerA);
+    const channelA = await createChannel(ownerA, workspaceA, 'PRIVATE');
+
+    const ownerB = await signup('chanremoveinjectB0');
+    const workspaceB = await createWorkspace(ownerB);
+    const targetInA = await signup('chanremoveinjecttarget0');
+    await addToWorkspace(ownerA, workspaceA, targetInA);
+    await request(app)
+      .post(`/api/workspaces/${workspaceA}/channels/${channelA}/members`)
+      .set(authHeader(ownerA.accessToken))
+      .send({ username: targetInA.username });
+    // ownerA is also a member of workspaceB, the same setup the sibling
+    // add-member injection test above uses.
+    await addToWorkspace(ownerB, workspaceB, ownerA);
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceB}/channels/${channelA}/members/${targetInA.userId}`)
+      .set(authHeader(ownerA.accessToken));
+    expect(res.status).toBe(400);
+
+    const row = await db('channel_members').where({ channel_id: channelA, user_id: targetInA.userId }).first();
+    expect(row).toBeTruthy();
+  });
+
+  test('an archived workspace 409s', async () => {
+    const owner = await signup('chanremoveowner4');
+    const member = await signup('chanremovemember4');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, member);
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: member.username });
+    await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/channels/${channelId}/members/${member.userId}`)
+      .set(authHeader(owner.accessToken));
+    expect(res.status).toBe(409);
   });
 });

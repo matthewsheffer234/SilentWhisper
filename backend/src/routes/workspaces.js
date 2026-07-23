@@ -986,11 +986,30 @@ workspacesRouter.delete('/:workspaceId/members/:userId', async (req, res, next) 
 // ("a human typing into that form knows a username, not a UUID"), and avoids
 // the frontend needing a separate roster fetch just to resolve a username
 // before submitting the sidebar's inline form.
+//
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 1: this used to demote req.user.id's own workspace_members row to
+// MANAGER, assuming the caller *is* the current owner. That's true for the
+// normal OWNER-initiated path, but requireWorkspacePermission always routes
+// a system admin through its override branch first (membershipService.js),
+// so a system admin using this via SystemAdminPanel's "Manage" override
+// (2026-07-20, "System admins can structurally manage any workspace" — the
+// exact feature this route exists to support for an orphaned workspace) has
+// no workspace_members row of their own: the old "demote the caller" update
+// silently matched zero rows, the real previous owner's row was never
+// touched, and the workspace ended up with two OWNER rows simultaneously.
+// Reproduced live against silent_whisper_test before this fix. Fixed by
+// looking up the workspace's actual current owner instead of assuming it's
+// the caller — a no-op change for the owner-initiated path (owner_id already
+// equals req.user.id there) and correct for the override path.
 workspacesRouter.post('/:workspaceId/transfer-ownership', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
     await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP);
     await requireWorkspaceNotArchived(db, workspaceId);
+
+    const workspace = await db('workspaces').where({ id: workspaceId }).first('owner_id');
+    const currentOwnerId = workspace.owner_id;
 
     const username = assertUsername(req.body?.username);
     const targetUser = await db('users').where({ username }).first('id', 'username');
@@ -1001,13 +1020,13 @@ workspacesRouter.post('/:workspaceId/transfer-ownership', async (req, res, next)
     if (!targetRole) {
       throw new ValidationError('Target user is not a member of this workspace');
     }
-    if (targetUser.id === req.user.id) {
-      throw new ValidationError('Cannot transfer ownership to yourself');
+    if (targetUser.id === currentOwnerId) {
+      throw new ValidationError('Target user is already the workspace owner');
     }
 
     await db.transaction(async (trx) => {
       await trx('workspace_members')
-        .where({ workspace_id: workspaceId, user_id: req.user.id })
+        .where({ workspace_id: workspaceId, user_id: currentOwnerId })
         .update({ system_role: 'MANAGER' });
       await trx('workspace_members')
         .where({ workspace_id: workspaceId, user_id: targetUser.id })
@@ -1020,7 +1039,7 @@ workspacesRouter.post('/:workspaceId/transfer-ownership', async (req, res, next)
       actorIp: req.ip,
       actionType: 'WORKSPACE_OWNERSHIP_TRANSFERRED',
       targetResource: workspaceId,
-      payload: { fromUserId: req.user.id, toUserId: targetUser.id, toUsername: targetUser.username },
+      payload: { fromUserId: currentOwnerId, toUserId: targetUser.id, toUsername: targetUser.username },
     });
 
     res.status(200).json({ id: workspaceId, ownerId: targetUser.id });
@@ -1077,6 +1096,44 @@ workspacesRouter.post('/:workspaceId/settings', async (req, res, next) => {
     await db('workspaces').where({ id: workspaceId }).update({ managers_can_archive: managersCanArchive });
 
     res.status(200).json({ id: workspaceId, managersCanArchive });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 2: organizations already had PATCH /:orgId for renaming
+// (organizations.js); workspaces never did, so a typo'd name was permanent
+// short of recreating the workspace. Gated on WORKSPACE_MANAGE_SETTINGS —
+// the same OWNER-only (plus system-admin override) tier POST
+// .../settings above already uses, since renaming is the same class of
+// workspace-level setting, not a membership or content change. Gated on
+// requireWorkspaceNotArchived, unlike .../settings above (which
+// deliberately isn't, so an owner can pre-configure managers_can_archive
+// before unarchiving) — a rename has no comparable "must be settable while
+// archived" need, so it follows the majority convention every other
+// workspace-mutating route in this file already uses.
+workspacesRouter.patch('/:workspaceId', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspacePermission(db, req.user.id, workspaceId, PERMISSIONS.WORKSPACE_MANAGE_SETTINGS);
+    await requireWorkspaceNotArchived(db, workspaceId);
+
+    const name = assertName(req.body?.name, 'workspace name');
+    const workspace = await db('workspaces').where({ id: workspaceId }).first('name');
+
+    if (workspace.name !== name) {
+      await db('workspaces').where({ id: workspaceId }).update({ name });
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'WORKSPACE_RENAMED',
+        targetResource: workspaceId,
+        payload: { fromName: workspace.name, toName: name },
+      });
+    }
+
+    res.status(200).json({ id: workspaceId, name });
   } catch (err) {
     next(err);
   }
@@ -1173,6 +1230,48 @@ workspacesRouter.post('/:workspaceId/channels', async (req, res, next) => {
       type: channel.type,
       isMember: !viaSystemAdminOverride,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 2: channels had no rename path at all. Gated on
+// requireChannelMemberOrSystemAdmin — the same tier POST
+// .../channels/:channelId/members (add a channel member) already uses,
+// since channel creation itself only requires plain workspace membership
+// (requireWorkspaceMemberOrSystemAdmin above), so gating rename any higher
+// than "current channel member" would be inconsistent with how low the bar
+// already is for growing this channel's own roster.
+workspacesRouter.patch('/:workspaceId/channels/:channelId', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const channelId = assertUuid(req.params.channelId, 'channelId');
+    // Caller must already belong to the channel, or be a system admin — or
+    // be bound to a workspaceId that doesn't match the channel at all
+    // (Security.md, 2026-07-15, HIGH: "Cross-Workspace Channel Membership
+    // Injection" — same check every other channel-membership route in this
+    // file already applies before trusting the path's workspaceId).
+    const channel = await requireChannelMemberOrSystemAdmin(db, req.user.id, channelId);
+    if (channel.workspace_id !== workspaceId) {
+      throw new ValidationError('Channel not found in this workspace');
+    }
+    await requireWorkspaceNotArchived(db, workspaceId);
+
+    const name = assertName(req.body?.name, 'channel name');
+
+    if (channel.name !== name) {
+      await db('channels').where({ id: channelId }).update({ name });
+      await appendAuditEvent(db, {
+        actorId: req.user.id,
+        actorIp: req.ip,
+        actionType: 'CHANNEL_RENAMED',
+        targetResource: channelId,
+        payload: { workspaceId, fromName: channel.name, toName: name },
+      });
+    }
+
+    res.status(200).json({ id: channelId, workspaceId, name });
   } catch (err) {
     next(err);
   }
@@ -1364,6 +1463,63 @@ workspacesRouter.post('/:workspaceId/channels/:channelId/members', async (req, r
         payload: { action: 'add', addedUserId: targetUser.id, addedUsername: targetUser.username },
       });
     }
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 4: addChannelMember (above) had no delete counterpart anywhere —
+// the only way to remove someone from one private channel used to be
+// DELETE /:workspaceId/members/:userId, which removes them from the
+// *entire workspace* and cascades every channel they're in. Gated on the
+// same requireChannelMemberOrSystemAdmin tier as adding a member — growing
+// and shrinking a channel's roster are symmetric privileges, matching
+// workspace_members' own add/remove pair.
+workspacesRouter.delete('/:workspaceId/channels/:channelId/members/:userId', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const channelId = assertUuid(req.params.channelId, 'channelId');
+    const targetUserId = assertUuid(req.params.userId, 'userId');
+
+    const channel = await requireChannelMemberOrSystemAdmin(db, req.user.id, channelId);
+    // Same cross-workspace path-binding check every other channel-membership
+    // route in this file applies (Security.md, 2026-07-15, HIGH). This also
+    // structurally excludes DIRECT/GROUP_DM channels from this route with
+    // no separate type check needed: per directMessages.js's own comment,
+    // those channel types have no workspace_id at all (Section 4), so
+    // channel.workspace_id is NULL and never equals any real :workspaceId
+    // path value — removing a DM participant would break the two-party
+    // contract directMessages.js relies on, and this route can never reach
+    // one to try.
+    if (channel.workspace_id !== workspaceId) {
+      throw new ValidationError('Channel not found in this workspace');
+    }
+    await requireWorkspaceNotArchived(db, channel.workspace_id);
+
+    const targetRow = await db('channel_members as cm')
+      .join('users', 'users.id', 'cm.user_id')
+      .where({ 'cm.channel_id': channelId, 'cm.user_id': targetUserId })
+      .first('users.username');
+    if (!targetRow) {
+      throw new NotFoundError('Channel member not found');
+    }
+
+    // No last-member guard: a zero-member channel is already a reachable,
+    // harmless state today (a system admin creating a channel via the
+    // structural-management override is never auto-joined to it — see
+    // POST .../channels above), so this doesn't introduce a new one.
+    await db('channel_members').where({ channel_id: channelId, user_id: targetUserId }).del();
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'CHANNEL_MEMBERSHIP_CHANGE',
+      targetResource: channelId,
+      payload: { action: 'remove', removedUserId: targetUserId, removedUsername: targetRow.username },
+    });
 
     res.status(204).end();
   } catch (err) {

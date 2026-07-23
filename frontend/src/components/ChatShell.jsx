@@ -657,6 +657,12 @@ function ChatShellInner() {
     setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, managersCanArchive } : ws)));
   }
 
+  // FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"), Part 2.
+  async function handleRenameWorkspace(workspaceId, name) {
+    await workspacesApi.renameWorkspace(workspaceId, name);
+    setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, name } : ws)));
+  }
+
   async function handleJoinChannel(channelId) {
     await workspacesApi.joinChannel(selectedWorkspaceId, channelId);
     setChannels((prev) => prev.map((c) => (c.id === channelId ? { ...c, isMember: true } : c)));
@@ -665,6 +671,17 @@ function ChatShellInner() {
 
   function handleInviteToChannel(channelId, username) {
     return workspacesApi.addChannelMember(selectedWorkspaceId, channelId, username);
+  }
+
+  // Part 4 — addChannelMember's delete counterpart.
+  function handleRemoveChannelMember(channelId, userId) {
+    return workspacesApi.removeChannelMember(selectedWorkspaceId, channelId, userId);
+  }
+
+  // Part 2.
+  async function handleRenameChannel(channelId, name) {
+    await workspacesApi.renameChannel(selectedWorkspaceId, channelId, name);
+    setChannels((prev) => prev.map((c) => (c.id === channelId ? { ...c, name } : c)));
   }
 
   // FEATURE_REQUEST.md entry 3. Threaded into both ChannelView and
@@ -1036,6 +1053,8 @@ function ChatShellInner() {
           canAddMembers={canAddChannelMembers}
           archived={isSelectedWorkspaceArchived}
           onAddMember={handleInviteToChannel}
+          onRemoveMember={handleRemoveChannelMember}
+          onRename={handleRenameChannel}
           onClose={() => setChannelDetailsOpen(false)}
         />
       )}
@@ -1103,6 +1122,7 @@ function ChatShellInner() {
           onTransferOwnership={(username) => handleTransferOwnership(workspaceSettingsTarget.id, username)}
           onChangeVisibility={(visibility) => handleChangeVisibility(workspaceSettingsTarget.id, visibility)}
           onToggleManagersCanArchive={(value) => handleToggleManagersCanArchive(workspaceSettingsTarget.id, value)}
+          onRenameWorkspace={(name) => handleRenameWorkspace(workspaceSettingsTarget.id, name)}
           onArchiveWorkspace={() => handleArchiveWorkspace(workspaceSettingsTarget.id)}
         />
       )}
