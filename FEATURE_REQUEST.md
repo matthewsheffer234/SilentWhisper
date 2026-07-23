@@ -104,13 +104,13 @@ Design:
 
 ### Admin workflow gap-closing: fix the ownership-transfer duplicate-owner bug, and add rename, self-service leave, and per-channel member removal
 
-**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Admin workflow gap-closing, Parts 1/2/4..." (2026-07-23) and "Admin workflow gap-closing, Part 3: self-service leave for workspace, organization, and channel" (2026-07-23). Originally ranked entry 1.
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Admin workflow gap-closing, Parts 1/2/4..." (2026-07-23), "Admin workflow gap-closing, Part 3: self-service leave for workspace, organization, and channel" (2026-07-23), and "Live smoke test of the admin workflow gap-closing endpoints" (2026-07-23). Originally ranked entry 1.
 
 A structural audit of the full admin hierarchy (system admin → organization → workspace → channel), requested directly by the user (2026-07-23), surfaced one live data-integrity bug reachable through the shipped `SystemAdminPanel` (workspace ownership transfer via the system-admin structural-management override silently produced two `OWNER` rows on the same workspace — reproduced empirically against `silent_whisper_test`, then fixed) plus three gaps where an admin or ordinary member had no UI/API path to do something they'd reasonably need to: workspace/channel rename, self-service leave (workspace/organization/channel), and per-channel member removal without removing the whole workspace membership. Shipped in two passes the same day — Parts 1/2/4 first, Part 3 (self-service leave) as a direct follow-up.
 
 **A structural finding made twice, not re-litigated the second time**: both Part 3's channel-leave route and Part 4's channel-member-removal route were originally designed with an explicit `type === 'DIRECT'` rejection, on the assumption that a `DIRECT`/`GROUP_DM` channel could otherwise be reached. Both times, implementation found the same thing first: those channel types have `workspace_id = NULL` (`directMessages.js`'s own existing comment already documents this), so any route nested under `/:workspaceId/channels/:channelId/...` structurally excludes them via its own cross-workspace path-binding check — no separate type guard was ever needed or shipped.
 
-**Verification**: 45/45 backend test suites, 600/600 tests passing across both passes combined (16 new for Part 3 alone). 104/104 frontend unit tests pass, clean production build. `npm audit` clean in both `backend` and `frontend`.
+**Verification**: 45/45 backend test suites, 600/600 tests passing across both passes combined (16 new for Part 3 alone). 104/104 frontend unit tests pass, clean production build. `npm audit` clean in both `backend` and `frontend`. **Followed by a live smoke test against the real running stack** (32/32 checks passing across two passes — leave endpoints, then the transfer-ownership fix and both rename endpoints), including the exact ownership-transfer bug scenario reproduced live and confirmed fixed, not just against the test database.
 
 ### Fixes for the last two findings (7-8) of the 2026-07-20 security/performance review
 
