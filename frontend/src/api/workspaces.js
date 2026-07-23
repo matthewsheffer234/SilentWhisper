@@ -73,6 +73,8 @@ export const removeWorkspaceMember = (workspaceId, userId) =>
   apiFetch(`/workspaces/${workspaceId}/members/${userId}`, { method: 'DELETE' });
 export const resetWorkspaceMemberPassword = (workspaceId, userId, newPassword) =>
   apiFetch(`/workspaces/${workspaceId}/members/${userId}/reset-password`, { method: 'POST', body: { newPassword } });
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"), Part 3.
+export const leaveWorkspace = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/leave`, { method: 'POST' });
 
 export const archiveWorkspace = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/archive`, { method: 'POST' });
 export const unarchiveWorkspace = (workspaceId) => apiFetch(`/workspaces/${workspaceId}/unarchive`, { method: 'POST' });
@@ -115,6 +117,9 @@ export const removeChannelMember = (workspaceId, channelId, userId) =>
 // Part 2.
 export const renameChannel = (workspaceId, channelId, name) =>
   apiFetch(`/workspaces/${workspaceId}/channels/${channelId}`, { method: 'PATCH', body: { name } });
+// Part 3.
+export const leaveChannel = (workspaceId, channelId) =>
+  apiFetch(`/workspaces/${workspaceId}/channels/${channelId}/leave`, { method: 'POST' });
 
 // FEATURE_REQUEST.md's "channel details panel" entry — the full roster, not
 // the mention-autocomplete search endpoint above. FEATURE_REQUEST.md entry

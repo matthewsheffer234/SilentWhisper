@@ -526,3 +526,114 @@ describe('DELETE /workspaces/:workspaceId/channels/:channelId/members/:userId', 
     expect(res.status).toBe(409);
   });
 });
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: self-service — plain requireChannelMember, no elevated
+// permission needed to remove yourself.
+describe('POST /workspaces/:workspaceId/channels/:channelId/leave', () => {
+  test('a channel member can leave, and it is audited', async () => {
+    const owner = await signup('chanleaveowner0');
+    const member = await signup('chanleavemember0');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, member);
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: member.username });
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/leave`)
+      .set(authHeader(member.accessToken));
+    expect(res.status).toBe(204);
+
+    const row = await db('channel_members').where({ channel_id: channelId, user_id: member.userId }).first();
+    expect(row).toBeFalsy();
+
+    // The member's workspace membership itself is untouched.
+    const wsRow = await db('workspace_members').where({ workspace_id: workspaceId, user_id: member.userId }).first();
+    expect(wsRow).toBeTruthy();
+
+    const auditRow = await db('audit_logs').where({ action_type: 'CHANNEL_MEMBERSHIP_CHANGE' }).orderBy('id', 'desc').first();
+    expect(auditRow.payload).toMatchObject({ action: 'leave' });
+  });
+
+  test('the last member leaving leaves a valid, empty channel rather than erroring', async () => {
+    const owner = await signup('chanleaveowner1');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PUBLIC');
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/leave`)
+      .set(authHeader(owner.accessToken));
+    expect(res.status).toBe(204);
+
+    const remaining = await db('channel_members').where({ channel_id: channelId }).count('user_id as count').first();
+    expect(Number(remaining.count)).toBe(0);
+    const channel = await db('channels').where({ id: channelId }).first();
+    expect(channel).toBeTruthy();
+  });
+
+  test('a DIRECT channel is unreachable through this route — its workspace_id is always null', async () => {
+    const userA = await signup('chanleavedma0');
+    const userB = await signup('chanleavedmb0');
+    const dmRes = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(userA.accessToken))
+      .send({ targetUserId: userB.userId });
+    expect(dmRes.status).toBeLessThan(300);
+    const channelId = dmRes.body.id;
+    const workspaceId = await createWorkspace(userA);
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/leave`)
+      .set(authHeader(userA.accessToken));
+    expect(res.status).toBe(400);
+
+    const row = await db('channel_members').where({ channel_id: channelId, user_id: userA.userId }).first();
+    expect(row).toBeTruthy();
+  });
+
+  test('a non-member of the channel gets 404, even as a workspace member', async () => {
+    const owner = await signup('chanleaveowner2');
+    const workspaceMember = await signup('chanleavewsmember2');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, workspaceMember);
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/leave`)
+      .set(authHeader(workspaceMember.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('a channelId/workspaceId pair from different workspaces 400s', async () => {
+    const owner = await signup('chanleaveowner3');
+    const workspaceId = await createWorkspace(owner);
+    const otherWorkspaceId = await createWorkspace(owner);
+    const otherChannelId = await createChannel(owner, otherWorkspaceId, 'PRIVATE');
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${otherChannelId}/leave`)
+      .set(authHeader(owner.accessToken));
+    expect(res.status).toBe(400);
+  });
+
+  test('an archived workspace 409s', async () => {
+    const owner = await signup('chanleaveowner4');
+    const member = await signup('chanleavemember4');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId, 'PRIVATE');
+    await addToWorkspace(owner, workspaceId, member);
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: member.username });
+    await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelId}/leave`)
+      .set(authHeader(member.accessToken));
+    expect(res.status).toBe(409);
+  });
+});

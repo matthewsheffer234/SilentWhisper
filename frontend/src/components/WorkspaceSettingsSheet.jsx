@@ -290,6 +290,46 @@ function TransferOwnershipSection({ workspaceId, workspaceName, onTransferOwners
   );
 }
 
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: shown to any real member (never in isSystemAdminOverride mode —
+// a system admin using the structural override was never a member, so
+// there's nothing for them to leave). The OWNER can't leave directly
+// (backend 409s), so the button stays visible but disabled with an
+// explanatory title, matching this codebase's "disabled + discoverable
+// reason" convention rather than hiding the control entirely. Closes the
+// whole sheet on success, same reasoning TransferOwnershipSection's own
+// comment already gives — the workspace disappears from the caller's list
+// once they've left it, so the sheet would otherwise be showing stale data.
+function LeaveWorkspaceSection({ workspaceName, isOwner, onLeaveWorkspace, onClose }) {
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <div>
+      <button
+        type="button"
+        style={styles.dangerButton}
+        disabled={isOwner}
+        title={isOwner ? 'Transfer ownership to someone else before leaving' : undefined}
+        onClick={() => setConfirming(true)}
+      >
+        Leave workspace
+      </button>
+      {confirming && (
+        <ConfirmDialog
+          title="Leave Workspace"
+          message={`Leave "${workspaceName}"? You'll lose access to its channels and messages unless someone adds you back.`}
+          confirmLabel="Leave"
+          onConfirm={async () => {
+            await onLeaveWorkspace();
+            onClose();
+          }}
+          onClose={() => setConfirming(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function AdminChannelMembersSection({ workspaceId, channelId }) {
   const [members, setMembers] = useState([]);
   const [person, setPerson] = useState(null);
@@ -465,6 +505,7 @@ export default function WorkspaceSettingsSheet({
   onToggleManagersCanArchive,
   onRenameWorkspace,
   onArchiveWorkspace,
+  onLeaveWorkspace,
   // FEATURE_REQUEST.md: "any system admin should be able to fully manage
   // all workspaces." Set when this sheet is opened from SystemAdminPanel.jsx
   // for a workspace the caller isn't a member of (workspace.role is null in
@@ -599,6 +640,19 @@ export default function WorkspaceSettingsSheet({
           }}
           onClose={() => setConfirmingArchive(false)}
         />
+      )}
+
+      {!isSystemAdminOverride && (
+        <>
+          <hr style={styles.divider} />
+          <div style={styles.sectionTitle}>Leave this workspace</div>
+          <LeaveWorkspaceSection
+            workspaceName={workspace.name}
+            isOwner={workspace.role === 'OWNER'}
+            onLeaveWorkspace={onLeaveWorkspace}
+            onClose={onClose}
+          />
+        </>
       )}
     </Sheet>
   );

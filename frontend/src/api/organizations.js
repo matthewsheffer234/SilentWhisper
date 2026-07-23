@@ -25,6 +25,8 @@ export const changeOrgMemberRole = (orgId, userId, role) =>
   apiFetch(`/organizations/${orgId}/members/${userId}`, { method: 'PATCH', body: { role } });
 export const removeOrgMember = (orgId, userId) =>
   apiFetch(`/organizations/${orgId}/members/${userId}`, { method: 'DELETE' });
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"), Part 3.
+export const leaveOrganization = (orgId) => apiFetch(`/organizations/${orgId}/leave`, { method: 'POST' });
 
 // System Admin panel: manage organizations and existing users.
 export const renameOrganization = (orgId, name) =>

@@ -14,9 +14,11 @@ import {
   User,
   Users,
   Sparkles,
+  LogOut,
 } from 'lucide-react';
 import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
+import ConfirmDialog from './ConfirmDialog.jsx';
 import SearchBar from './SearchBar.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
@@ -313,9 +315,15 @@ function WorkspaceSidebar({
   onOpenCreateChannel,
   directMessages,
   onOpenNewMessage,
+  onLeaveOrganization,
 }) {
   const notif = useNotificationPermission();
   const { theme, setTheme } = useTheme();
+  // FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+  // Part 3: pending leave-organization confirmation. "Leave workspace" lives
+  // inside WorkspaceSettingsSheet instead — its own overflow trigger opens
+  // that sheet, not a Menu popover the way the org switcher below is.
+  const [confirmLeaveOrg, setConfirmLeaveOrg] = useState(null);
 
   // Org-scoped (FEATURE_REQUEST.md entry 1, slice 3): filters/groups
   // client-side rather than refetching from the server on every switch, for
@@ -353,6 +361,21 @@ function WorkspaceSidebar({
             label: <IconLabel icon={<Plus size={14} aria-hidden="true" />}>Create organization…</IconLabel>,
             separatorBefore: true,
             onSelect: onOpenCreateOrganization,
+          },
+        ]
+      : []),
+    // FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+    // Part 3: acts on whichever org is currently selected — no per-org row
+    // action, since the switcher's per-org rows are already single-purpose
+    // (select) checkable items, and leaving an org you're not currently
+    // looking at isn't a request this menu needs to support.
+    ...(currentOrg
+      ? [
+          {
+            key: 'leave-org',
+            label: <IconLabel icon={<LogOut size={14} aria-hidden="true" />}>Leave organization</IconLabel>,
+            separatorBefore: !isSystemAdmin,
+            onSelect: () => setConfirmLeaveOrg(currentOrg),
           },
         ]
       : []),
@@ -487,24 +510,18 @@ function WorkspaceSidebar({
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Workspaces</div>
         {activeWorkspaces.map((ws) => {
-          const canInvite = hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_MEMBERS);
-          const canArchive = hasPermission(ws.role, PERMISSIONS.WORKSPACE_ARCHIVE);
-          // Owner-only block (FEATURE_REQUEST.md entry 1, slice 4): all
-          // three permissions here are OWNER-only, so checking one is
-          // effectively one gate for the whole block — kept as three
-          // separate checks anyway so a future narrowing of any one of them
-          // doesn't silently widen the others.
-          const canTransferOwnership = hasPermission(ws.role, PERMISSIONS.WORKSPACE_TRANSFER_OWNERSHIP);
-          const canChangeVisibility = hasPermission(ws.role, PERMISSIONS.WORKSPACE_CHANGE_VISIBILITY);
-          const canManageSettings = hasPermission(ws.role, PERMISSIONS.WORKSPACE_MANAGE_SETTINGS);
           // FEATURE_REQUEST.md's "dedicated admin/settings area" entry:
           // what used to be up to five separate overflow-menu items
           // (Invite member…, Create invite link…, Archive workspace,
           // Transfer ownership…, the visibility-toggle label, and the
           // managers-can-archive checkbox) collapses to one trigger opening
           // WorkspaceSettingsSheet, which gates each of its own sections on
-          // these same permissions internally.
-          const hasWorkspaceSettings = canInvite || canArchive || canTransferOwnership || canChangeVisibility || canManageSettings;
+          // these same permissions internally. FEATURE_REQUEST.md entry 1
+          // (2026-07-23, "Admin workflow gap-closing"), Part 3: the sheet now
+          // always has at least one section available (Leave workspace — for
+          // a plain MEMBER with none of the permissions above, or a
+          // disabled-with-tooltip row for the OWNER), so this trigger is no
+          // longer conditionally hidden.
           return (
             <div key={ws.id}>
               <div
@@ -522,19 +539,17 @@ function WorkspaceSidebar({
                 {shouldShowDigestTrigger(ws.id, selectedWorkspaceId, channels.length) && (
                   <DigestTrigger onOpenDigest={onOpenDigest} />
                 )}
-                {hasWorkspaceSettings && (
-                  <button
-                    type="button"
-                    style={styles.overflowTrigger}
-                    aria-label={`${ws.name} settings`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenWorkspaceSettings(ws.id);
-                    }}
-                  >
-                    <MoreHorizontal size={18} aria-hidden="true" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  style={styles.overflowTrigger}
+                  aria-label={`${ws.name} settings`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenWorkspaceSettings(ws.id);
+                  }}
+                >
+                  <MoreHorizontal size={18} aria-hidden="true" />
+                </button>
               </div>
             </div>
           );
@@ -665,6 +680,19 @@ function WorkspaceSidebar({
           New message
         </button>
       </div>
+
+      {confirmLeaveOrg && (
+        <ConfirmDialog
+          title="Leave Organization"
+          message={`Leave "${confirmLeaveOrg.name}"? You'll keep any existing workspace memberships you already hold, but you won't be able to create new workspaces in this organization or see it in this switcher anymore.`}
+          confirmLabel="Leave"
+          onConfirm={async () => {
+            await onLeaveOrganization(confirmLeaveOrg.id);
+            setConfirmLeaveOrg(null);
+          }}
+          onClose={() => setConfirmLeaveOrg(null)}
+        />
+      )}
     </aside>
   );
 }

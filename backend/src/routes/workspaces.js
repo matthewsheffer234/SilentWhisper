@@ -27,9 +27,11 @@ import {
   membershipInvitationCreateLimiter,
 } from '../auth/rateLimit.js';
 import {
+  requireWorkspaceMember,
   requireWorkspaceMemberOrSystemAdmin,
   requireWorkspacePermission,
   requireWorkspaceNotArchived,
+  requireChannelMember,
   requireChannelMemberOrSystemAdmin,
   requireOrgMember,
   requireOrgNotArchived,
@@ -981,6 +983,51 @@ workspacesRouter.delete('/:workspaceId/members/:userId', async (req, res, next) 
   }
 });
 
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: no leave-workspace endpoint existed at all — a member who joined
+// the wrong workspace had no path except asking someone with
+// WORKSPACE_MANAGE_MEMBERS to remove them. Gated only on plain
+// requireWorkspaceMember (self-service — no elevated permission needed to
+// remove yourself), unlike the admin-driven DELETE above. Reuses that
+// route's exact removal logic (cascade + OWNER guard) rather than
+// duplicating it under a different shape.
+workspacesRouter.post('/:workspaceId/leave', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceNotArchived(db, workspaceId);
+
+    const targetRow = await db('workspace_members as wm')
+      .join('users', 'users.id', 'wm.user_id')
+      .where({ 'wm.workspace_id': workspaceId, 'wm.user_id': req.user.id })
+      .first('users.username', 'wm.system_role');
+
+    if (targetRow.system_role === 'OWNER') {
+      throw new ConflictError('Cannot leave a workspace you own; transfer ownership first');
+    }
+
+    await db.transaction(async (trx) => {
+      await trx('channel_members')
+        .where({ user_id: req.user.id })
+        .whereIn('channel_id', trx('channels').select('id').where({ workspace_id: workspaceId }))
+        .del();
+      await trx('workspace_members').where({ workspace_id: workspaceId, user_id: req.user.id }).del();
+    });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'WORKSPACE_MEMBERSHIP_CHANGE',
+      targetResource: workspaceId,
+      payload: { action: 'leave', targetUserId: req.user.id, targetUsername: targetRow.username },
+    });
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // New (FEATURE_REQUEST.md entry 1, slice 4): OWNER only. Takes a username,
 // not a userId — mirrors POST /:workspaceId/members's own precedent/comment
 // ("a human typing into that form knows a username, not a UUID"), and avoids
@@ -1519,6 +1566,44 @@ workspacesRouter.delete('/:workspaceId/channels/:channelId/members/:userId', asy
       actionType: 'CHANNEL_MEMBERSHIP_CHANGE',
       targetResource: channelId,
       payload: { action: 'remove', removedUserId: targetUserId, removedUsername: targetRow.username },
+    });
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: no leave-channel endpoint existed. Gated on plain
+// requireChannelMember (self-service, no elevated permission) rather than
+// the *OrSystemAdmin variant above — a system admin using the structural
+// override was never a real channel_members row to begin with, so there's
+// nothing for them to leave via this route. Same structural exclusion of
+// DIRECT/GROUP_DM channels as the DELETE route above, for the identical
+// reason (null workspace_id) — no separate type guard needed here either.
+workspacesRouter.post('/:workspaceId/channels/:channelId/leave', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const channelId = assertUuid(req.params.channelId, 'channelId');
+
+    const channel = await requireChannelMember(db, req.user.id, channelId);
+    if (channel.workspace_id !== workspaceId) {
+      throw new ValidationError('Channel not found in this workspace');
+    }
+    await requireWorkspaceNotArchived(db, channel.workspace_id);
+
+    // No last-member guard, same reasoning as the admin-driven removal
+    // route above — a zero-member channel is already a reachable, harmless
+    // state today.
+    await db('channel_members').where({ channel_id: channelId, user_id: req.user.id }).del();
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'CHANNEL_MEMBERSHIP_CHANGE',
+      targetResource: channelId,
+      payload: { action: 'leave' },
     });
 
     res.status(204).end();

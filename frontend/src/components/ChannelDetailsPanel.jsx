@@ -93,7 +93,49 @@ const styles = {
   },
   error: { color: '#c0392b', fontSize: 'var(--text-sm)', marginTop: 8 },
   success: { color: 'var(--brg)', fontSize: 'var(--text-sm)', marginTop: 8 },
+  dangerButton: {
+    minHeight: 44,
+    padding: '0 16px',
+    borderRadius: 8,
+    border: '1px solid #c0392b',
+    background: 'none',
+    color: '#c0392b',
+    fontWeight: 600,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  divider: { border: 'none', borderTop: '1px solid var(--border)', margin: '18px 0' },
 };
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: this panel is only ever reachable for a workspace-scoped
+// PUBLIC/PRIVATE channel — ChannelView.jsx hides the "channel details"
+// trigger entirely for a direct conversation — so there's no DIRECT/
+// GROUP_DM case to special-case here the way the backend route's own
+// comment documents structurally excluding them.
+function LeaveChannelSection({ channelName, onLeave, onClose }) {
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <div>
+      <button type="button" style={styles.dangerButton} onClick={() => setConfirming(true)}>
+        Leave channel
+      </button>
+      {confirming && (
+        <ConfirmDialog
+          title="Leave Channel"
+          message={`Leave #${channelName}? You can be added back later by another member.`}
+          confirmLabel="Leave"
+          onConfirm={async () => {
+            await onLeave();
+            onClose();
+          }}
+          onClose={() => setConfirming(false)}
+        />
+      )}
+    </div>
+  );
+}
 
 // FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
 // Part 2 — channels had no rename path at all before this. Shown to any
@@ -148,6 +190,7 @@ export default function ChannelDetailsPanel({
   onAddMember,
   onRemoveMember,
   onRename,
+  onLeave,
   onClose,
 }) {
   const [members, setMembers] = useState(null);
@@ -272,6 +315,14 @@ export default function ChannelDetailsPanel({
           {addStatus && (
             <div style={addStatus.type === 'error' ? styles.error : styles.success}>{addStatus.message}</div>
           )}
+        </div>
+      )}
+
+      {channel.isMember && !archived && (
+        <div style={styles.section}>
+          <hr style={styles.divider} />
+          <div style={styles.sectionTitle}>Leave this channel</div>
+          <LeaveChannelSection channelName={channel.name} onLeave={() => onLeave(channel.id)} onClose={onClose} />
         </div>
       )}
 

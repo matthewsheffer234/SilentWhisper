@@ -450,6 +450,42 @@ organizationsRouter.delete('/:orgId/members/:userId', async (req, res, next) => 
   }
 });
 
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: no leave-organization endpoint existed. Gated only on plain
+// requireOrgMember (self-service — no ORG_MANAGE_MEMBERS needed to remove
+// yourself), unlike the admin-driven DELETE above. No last-admin guard,
+// same reasoning as that route's own comment — an org can already
+// structurally hold zero ORG_ADMINs, so a sole admin leaving isn't a new
+// gap this route introduces.
+organizationsRouter.post('/:orgId/leave', async (req, res, next) => {
+  try {
+    const orgId = assertUuid(req.params.orgId, 'orgId');
+    await requireOrgMember(db, req.user.id, orgId);
+    await requireOrgNotArchived(db, orgId);
+
+    const targetRow = await db('organization_members as om')
+      .join('users', 'users.id', 'om.user_id')
+      .where({ 'om.organization_id': orgId, 'om.user_id': req.user.id })
+      .first('users.username');
+
+    // Same no-cascade behavior as the admin-driven DELETE above — leaving
+    // an org never touches the caller's workspace_members rows.
+    await db('organization_members').where({ organization_id: orgId, user_id: req.user.id }).del();
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ORGANIZATION_MEMBERSHIP_CHANGE',
+      targetResource: orgId,
+      payload: { action: 'leave', targetUserId: req.user.id, targetUsername: targetRow.username },
+    });
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Raw token returned once — no email infra exists in this project, same
 // out-of-band precedent as admin-set passwords (workspaces.js's
 // POST /:workspaceId/users). The invitee supplies their own email at

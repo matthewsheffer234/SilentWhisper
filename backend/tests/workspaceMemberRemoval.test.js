@@ -160,3 +160,71 @@ describe('DELETE /api/workspaces/:workspaceId/members/:userId', () => {
     expect(res.status).toBe(409);
   });
 });
+
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: self-service — no elevated permission needed, unlike the DELETE
+// route above.
+describe('POST /api/workspaces/:workspaceId/leave', () => {
+  test('a plain member can leave, cascading to their channel_members rows', async () => {
+    const owner = await signup('leaveowner0');
+    const member = await signup('leavetarget0');
+    const workspaceId = await createWorkspace(owner);
+    await addMember(owner, workspaceId, 'leavetarget0');
+    const channelA = await createChannel(owner, workspaceId, 'general');
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels/${channelA}/join`)
+      .set(authHeader(member.accessToken));
+
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/leave`).set(authHeader(member.accessToken));
+    expect(res.status).toBe(204);
+
+    const membershipRow = await db('workspace_members').where({ workspace_id: workspaceId, user_id: member.userId }).first();
+    expect(membershipRow).toBeUndefined();
+    const channelRow = await db('channel_members').where({ channel_id: channelA, user_id: member.userId }).first();
+    expect(channelRow).toBeUndefined();
+
+    const row = await db('audit_logs').where({ action_type: 'WORKSPACE_MEMBERSHIP_CHANGE' }).orderBy('id', 'desc').first();
+    expect(row.payload).toMatchObject({ action: 'leave', targetUserId: member.userId, targetUsername: 'leavetarget0' });
+  });
+
+  test('a MANAGER can leave without needing WORKSPACE_MANAGE_MEMBERS/MANAGERS', async () => {
+    const owner = await signup('leaveowner1');
+    const manager = await signup('leavemanager1');
+    const workspaceId = await createWorkspace(owner);
+    await addMember(owner, workspaceId, 'leavemanager1', 'MANAGER');
+
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/leave`).set(authHeader(manager.accessToken));
+    expect(res.status).toBe(204);
+  });
+
+  test('the OWNER gets 409 — must transfer ownership first', async () => {
+    const owner = await signup('leaveowner2');
+    const workspaceId = await createWorkspace(owner);
+
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/leave`).set(authHeader(owner.accessToken));
+    expect(res.status).toBe(409);
+
+    const membershipRow = await db('workspace_members').where({ workspace_id: workspaceId, user_id: owner.userId }).first();
+    expect(membershipRow).toBeTruthy();
+  });
+
+  test('a non-member gets 404', async () => {
+    const owner = await signup('leaveowner3');
+    const outsider = await signup('leaveoutsider3');
+    const workspaceId = await createWorkspace(owner);
+
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/leave`).set(authHeader(outsider.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('an archived workspace 409s', async () => {
+    const owner = await signup('leaveowner4');
+    const member = await signup('leavetarget4');
+    const workspaceId = await createWorkspace(owner);
+    await addMember(owner, workspaceId, 'leavetarget4');
+    await request(app).post(`/api/workspaces/${workspaceId}/archive`).set(authHeader(owner.accessToken));
+
+    const res = await request(app).post(`/api/workspaces/${workspaceId}/leave`).set(authHeader(member.accessToken));
+    expect(res.status).toBe(409);
+  });
+});

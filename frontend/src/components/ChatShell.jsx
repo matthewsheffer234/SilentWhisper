@@ -581,6 +581,14 @@ function ChatShellInner() {
     setCreateOrgOpen(false);
   }
 
+  // FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"), Part 3.
+  async function handleLeaveOrganization(orgId) {
+    await organizationsApi.leaveOrganization(orgId);
+    const remaining = organizations.filter((org) => org.id !== orgId);
+    setOrganizations(remaining);
+    setSelectedOrganizationId((current) => (current === orgId ? (remaining[0]?.id ?? null) : current));
+  }
+
   function handleSubscribed(ws) {
     setWorkspaces((prev) => [...prev, ws]);
     setSelectedWorkspaceId(ws.id);
@@ -663,6 +671,20 @@ function ChatShellInner() {
     setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? { ...ws, name } : ws)));
   }
 
+  // Part 3 — self-removal, same "no longer in the caller's own list at all"
+  // outcome handleArchiveWorkspace's own comment doesn't need (archiving
+  // keeps the workspace visible; leaving doesn't).
+  async function handleLeaveWorkspace(workspaceId) {
+    await workspacesApi.leaveWorkspace(workspaceId);
+    const remaining = workspaces.filter((ws) => ws.id !== workspaceId);
+    setWorkspaces(remaining);
+    if (selectedWorkspaceId === workspaceId) {
+      setSelectedChannelId(null);
+      setThreadRoot(null);
+      setSelectedWorkspaceId(remaining[0]?.id ?? null);
+    }
+  }
+
   async function handleJoinChannel(channelId) {
     await workspacesApi.joinChannel(selectedWorkspaceId, channelId);
     setChannels((prev) => prev.map((c) => (c.id === channelId ? { ...c, isMember: true } : c)));
@@ -682,6 +704,29 @@ function ChatShellInner() {
   async function handleRenameChannel(channelId, name) {
     await workspacesApi.renameChannel(selectedWorkspaceId, channelId, name);
     setChannels((prev) => prev.map((c) => (c.id === channelId ? { ...c, name } : c)));
+  }
+
+  // Part 3 — a PRIVATE channel disappears from the list entirely once the
+  // caller isn't a member anymore (matching GET /:workspaceId/channels'
+  // own visibility rule); a PUBLIC channel stays listed, just isMember: false,
+  // same as it would for anyone who's never joined it.
+  async function handleLeaveChannel(channelId) {
+    await workspacesApi.leaveChannel(selectedWorkspaceId, channelId);
+    setChannels((prev) =>
+      prev.reduce((acc, c) => {
+        if (c.id !== channelId) {
+          acc.push(c);
+        } else if (c.type !== 'PRIVATE') {
+          acc.push({ ...c, isMember: false, memberCount: Math.max(0, (c.memberCount ?? 1) - 1) });
+        }
+        return acc;
+      }, []),
+    );
+    setChannelDetailsOpen(false);
+    if (selectedChannelId === channelId) {
+      setSelectedChannelId(null);
+      setThreadRoot(null);
+    }
   }
 
   // FEATURE_REQUEST.md entry 3. Threaded into both ChannelView and
@@ -957,6 +1002,7 @@ function ChatShellInner() {
         onOpenCreateChannel={() => setCreateChannelOpen(true)}
         directMessages={directMessages}
         onOpenNewMessage={() => setNewMessageOpen(true)}
+        onLeaveOrganization={handleLeaveOrganization}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -1055,6 +1101,7 @@ function ChatShellInner() {
           onAddMember={handleInviteToChannel}
           onRemoveMember={handleRemoveChannelMember}
           onRename={handleRenameChannel}
+          onLeave={handleLeaveChannel}
           onClose={() => setChannelDetailsOpen(false)}
         />
       )}
@@ -1124,6 +1171,7 @@ function ChatShellInner() {
           onToggleManagersCanArchive={(value) => handleToggleManagersCanArchive(workspaceSettingsTarget.id, value)}
           onRenameWorkspace={(name) => handleRenameWorkspace(workspaceSettingsTarget.id, name)}
           onArchiveWorkspace={() => handleArchiveWorkspace(workspaceSettingsTarget.id)}
+          onLeaveWorkspace={() => handleLeaveWorkspace(workspaceSettingsTarget.id)}
         />
       )}
       {notificationsOpen && (

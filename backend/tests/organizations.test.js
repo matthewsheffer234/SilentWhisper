@@ -284,6 +284,82 @@ describe('org membership routes', () => {
   });
 });
 
+// FEATURE_REQUEST.md entry 1 (2026-07-23, "Admin workflow gap-closing"),
+// Part 3: self-service — plain requireOrgMember, no ORG_MANAGE_MEMBERS
+// needed to remove yourself.
+describe('POST /api/organizations/:orgId/leave', () => {
+  test('a plain ORG_MEMBER can leave, and it is audited', async () => {
+    const admin = await seedSystemAdmin('orgleaveadmin0');
+    const orgRes = await createOrg(admin, 'Org Leave Test');
+    const orgId = orgRes.body.id;
+    const member = await signup('orgleavemember0');
+    await request(app).post(`/api/organizations/${orgId}/members`).set(authHeader(admin.accessToken)).send({ username: 'orgleavemember0' });
+
+    const res = await request(app).post(`/api/organizations/${orgId}/leave`).set(authHeader(member.accessToken));
+    expect(res.status).toBe(204);
+
+    const membershipRow = await db('organization_members').where({ organization_id: orgId, user_id: member.userId }).first();
+    expect(membershipRow).toBeUndefined();
+
+    const row = await db('audit_logs').where({ action_type: 'ORGANIZATION_MEMBERSHIP_CHANGE' }).orderBy('id', 'desc').first();
+    expect(row.payload).toMatchObject({ action: 'leave', targetUserId: member.userId, targetUsername: 'orgleavemember0' });
+  });
+
+  test('leaving does not cascade to workspace memberships', async () => {
+    const admin = await seedSystemAdmin('orgleavecascade0');
+    const orgRes = await createOrg(admin, 'Org Leave Cascade Test');
+    const orgId = orgRes.body.id;
+    const member = await signup('orgleavecascademember0');
+    await request(app)
+      .post(`/api/organizations/${orgId}/members`)
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'orgleavecascademember0' });
+    const wsRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(member.accessToken))
+      .send({ name: 'Member Workspace', organizationId: orgId });
+
+    await request(app).post(`/api/organizations/${orgId}/leave`).set(authHeader(member.accessToken));
+
+    const wsMembership = await db('workspace_members').where({ workspace_id: wsRes.body.id, user_id: member.userId }).first();
+    expect(wsMembership).toBeDefined();
+  });
+
+  test('the sole ORG_ADMIN leaving succeeds — no invariant blocks it', async () => {
+    const admin = await seedSystemAdmin('orgleavelastadmin0');
+    const orgRes = await createOrg(admin, 'Org Leave Last Admin Test');
+    const orgId = orgRes.body.id;
+
+    const res = await request(app).post(`/api/organizations/${orgId}/leave`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(204);
+
+    const remaining = await db('organization_members').where({ organization_id: orgId });
+    expect(remaining).toHaveLength(0);
+  });
+
+  test('a non-member gets 404', async () => {
+    const admin = await seedSystemAdmin('orgleaveadmin1');
+    const orgRes = await createOrg(admin, 'Org Leave Outsider Test');
+    const orgId = orgRes.body.id;
+    const outsider = await signup('orgleaveoutsider1');
+
+    const res = await request(app).post(`/api/organizations/${orgId}/leave`).set(authHeader(outsider.accessToken));
+    expect(res.status).toBe(404);
+  });
+
+  test('an archived organization 409s', async () => {
+    const admin = await seedSystemAdmin('orgleaveadmin2');
+    const orgRes = await createOrg(admin, 'Org Leave Archived Test');
+    const orgId = orgRes.body.id;
+    const member = await signup('orgleavemember2');
+    await request(app).post(`/api/organizations/${orgId}/members`).set(authHeader(admin.accessToken)).send({ username: 'orgleavemember2' });
+    await request(app).post(`/api/organizations/${orgId}/archive`).set(authHeader(admin.accessToken));
+
+    const res = await request(app).post(`/api/organizations/${orgId}/leave`).set(authHeader(member.accessToken));
+    expect(res.status).toBe(409);
+  });
+});
+
 // System Admin panel: manage organizations and existing users. Organization
 // lifecycle (rename/archive/unarchive) stays system-admin-only, same as
 // creation — never ORG_ADMIN-manageable.
