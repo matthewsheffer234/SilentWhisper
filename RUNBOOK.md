@@ -39,8 +39,8 @@ docker compose run --rm ollama-pull-model
 | Service | Local URL | Notes |
 |---|---|---|
 | Frontend (production static build, nginx) | http://localhost:3101 | full chat UI — login, workspaces, channels, threads (self-service signup is closed). A Vite dev server can still be run via `docker-compose.dev.yml` — see Frontend Development below |
-| Backend health | http://localhost:8101/health | `{"status":"ok","db":"ok","ai":{...},"uptimeSeconds":N}` |
-| Backend liveness | http://localhost:8101/health/live | `{"status":"ok"}` — process-alive only, no DB/provider touch |
+| Backend health | http://localhost:8101/health | `{"status":"ok","version":"1.1.0","db":"ok","ai":{...},"uptimeSeconds":N}` |
+| Backend liveness | http://localhost:8101/health/live | `{"status":"ok","version":"1.1.0"}` — process-alive only, no DB/provider touch. `version` is `SILENTWHISPER_VERSION` (falls back to `backend/package.json`'s own version outside Docker) — see CHANGELOG.md |
 | Backend REST API | http://localhost:8101/api | see API Reference below |
 | Backend WebSocket | ws://localhost:8101/ws | authenticate-frame handshake — see WebSocket Protocol below |
 | Postgres | localhost:5433 | `psql -h localhost -p 5433 -U <PGUSER> -d silent_whisper` |
@@ -141,7 +141,7 @@ Produces `images/postgres-pgvector-pg16.tar`, `images/silentwhisper-backend-<ver
 - `scripts/airgap-install.sh` does not trust that the right build args were used weeks earlier — its `phase_frontend_bundle_check` greps the loaded image's built bundle for the enclave's configured `VITE_API_URL` and fails loudly if it's not baked in, so a mismatched or stale frontend tar is caught at install time, not the first time a browser tries to load the app.
 - A fast-follow (not a v1.0 blocker) would move to a runtime-injected `/config.js` so one frontend image works across enclaves — real simplification, tracked in `docs/plans/active/SHIPMENT_PLAN.md` Section 1.2, not required to ship once.
 
-`SILENTWHISPER_VERSION` must match between this script's staging run and whatever `scripts/airgap-install.sh` is invoked with on the enclave host (both default to `1.0.0`) — `docker-compose.enclave.yml`'s `image:` tags are pinned to this exact value, deliberately never `:latest`, so a stale locally-present image can't silently satisfy the tag without actually being loaded from a verified tar.
+`SILENTWHISPER_VERSION` must match between this script's staging run and whatever `scripts/airgap-install.sh`/`scripts/airgap-upgrade.sh` is invoked with on the enclave host (both default to `1.0.0`) — `docker-compose.enclave.yml`'s `image:` tags are pinned to this exact value, deliberately never `:latest`, so a stale locally-present image can't silently satisfy the tag without actually being loaded from a verified tar. See `CHANGELOG.md` for what version is actually current and what each one changed — that file, not this one, is the record of what to set `SILENTWHISPER_VERSION` to for a given release.
 
 ## Enclave Reverse Proxy / TLS
 
@@ -190,6 +190,43 @@ Real, isolated, non-mocked testing already covers: Postgres/pgvector setup and `
 - Re-running `scripts/airgap-install.sh` after a failure is safe — nothing it does is destructive, and earlier phases simply re-confirm already-satisfied state on a second run.
 - A vLLM-side failure (Phase F or Phase G) doesn't touch Postgres, migrations, or anything already loaded — fix the vLLM-side config/connectivity and re-run.
 - `scripts/backup-db.sh`/`scripts/restore-db.sh` exist and were proven against this host's real production data (`docs/plans/active/SHIPMENT_PLAN.md` Section 2.5) — not itself a mitigation for a bad first install (a fresh enclave has no prior backup to restore from), but worth knowing it's available for whatever comes after go-live.
+
+## Enclave Upgrade
+
+Upgrades an already-installed enclave to a new `SILENTWHISPER_VERSION` while preserving every existing row of real data — the same offline image contract as a fresh install (Enclave Image Build above), just applied to a running system instead of a blank one. `scripts/airgap-install.sh` is only ever a fresh install; this is the separate, sibling script for everything after that.
+
+**The versioning and changelog convention this depends on** lives in `CHANGELOG.md`, not here — read that file's own "Versioning" section once before your first upgrade. Short version: `MINOR`/`PATCH` releases are always additive migrations with safe-defaulted new config, so `scripts/airgap-upgrade.sh` handles them unattended; a `MAJOR` release means something needs a human to read that version's changelog entry and do a manual step first, and the script refuses to proceed on one without `CONFIRM_MAJOR_UPGRADE=1`.
+
+**Prerequisites, staged on a networked build host exactly like a fresh install (Enclave Image Build above)**:
+
+```bash
+VITE_API_URL=https://<enclave-hostname>/api \
+VITE_WS_URL=wss://<enclave-hostname>/ws \
+SILENTWHISPER_VERSION=<new version — see CHANGELOG.md> \
+  ./scripts/build-release-images.sh
+```
+
+Transfer the resulting `images/*.tar` + `images/CHECKSUMS.sha256` into the enclave the same way the original install artifacts got there. On the enclave host, bump `SILENTWHISPER_VERSION` in `.env` to the new version (do **not** touch anything else in `.env` unless that release's `CHANGELOG.md` entry says to), then:
+
+```bash
+./scripts/airgap-upgrade.sh
+```
+
+**What it does, in order** (full detail in the script's own header comment and each phase's inline comments):
+
+1. **Preflight** — confirms an existing install is actually running, reads the *currently running* version straight off the live backend's own `GET /health` (not off any config file, so it can't be fooled by a `.env` that was edited but never actually applied), confirms the target version in `.env` is genuinely different, enforces the `MAJOR`-bump confirmation gate above, and confirms the new image tars are staged.
+2. **Mandatory backup** — a full `scripts/backup-db.sh` run, before anything else touches the running stack. This is the actual rollback mechanism, not a nice-to-have; there's a `SKIP_BACKUP=1` escape hatch, but it exists only for rehearsal against a throwaway stack and must never be used against the real enclave.
+3. **Load + verify the new images** (checksum-verified, same as install).
+4. **Frontend bundle check** — same `VITE_API_URL` bake-in check `airgap-install.sh` does, so a frontend built for the wrong hostname is caught before it's ever served.
+5. **Migrate** — `knex migrate:latest`, the same non-destructive, never-`migrate:rollback` step the installer uses. Runs against the **old** backend still serving traffic (safe, since every migration this script will ever run unattended is additive per the versioning rule above) — nothing is torn down before this succeeds.
+6. **Re-verify `app_runtime_user` grants** against the same per-table matrix the installer checks, in case the new migration added a table.
+7. **Bring up the new backend/frontend containers** (`docker compose up -d`, which recreates a service whose resolved image changed — no manual stop needed, same mechanism `scripts/deploy.sh` already uses), then confirms the running backend's `GET /health` now actually reports the **new** version — proof the new image is really what's serving traffic, not a stale container that failed to recreate.
+8. **Re-verify the audit log hash chain** is still intact.
+9. Writes `upgrade-report-<timestamp>.txt` (same shape as the installer's own report) recording the previous version, the new version, and the backup file path.
+
+**If anything fails after step 7 starts**, the script prints an explicit rollback recipe to stderr (and into the report) before exiting: the exact previous image tag to point `.env` back at (still loaded locally under its old tag unless something pruned it — confirm with `docker images | grep silentwhisper`) plus the pre-upgrade backup's path, with a reminder that `scripts/restore-db.sh` never overwrites the live database — it only ever restores into a new, separate one for inspection. A failure *before* step 7 (preflight, backup, image load, migrate, grants) leaves the running enclave completely untouched; the script says so rather than printing rollback guidance that would apply to nothing.
+
+**Rehearsing before the first real upgrade**: same `ENV_FILE`/`COMPOSE_PROJECT_NAME` mechanism `scripts/airgap-install.sh` already supports for rehearsing against an isolated throwaway stack — point `ENV_FILE` at a separate rehearsal env and set a distinct `COMPOSE_PROJECT_NAME` so nothing collides with a real deployment. Strongly recommended before trusting this script against the actual production enclave for the first time, the same "this run *is* the rehearsal, treat it that way" posture the Go-Live playbook above already recommends for the installer — this script has been validated logic-by-logic (version-parsing against real `/health` output, the major-version guard, each reused phase's SQL/checksum logic inherited from the already-verified installer) but, as of this writing, has not yet been run start-to-finish as one continuous process against a real two-version enclave rehearsal, for the same reason the installer's own first real run once hadn't: no second host and no GPU hardware exist in the environment this was built in. Treat that gap the same way — someone watches the first real run live, reads every `PASS`/`FAIL` line, and reads the report afterward regardless of outcome.
 
 ## First-Time Setup
 

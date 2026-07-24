@@ -2,12 +2,18 @@ import { jest } from '@jest/globals';
 import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
+import { config } from '../src/config.js';
 import { _resetForTests as resetHealthStatus } from '../src/llm/healthCheck.js';
 
 // FEATURE_REQUEST.md entry 3: GET /health/live is liveness-only (no DB or
 // provider touch); GET /health gains an additive `ai` field reusing the
 // health sweep's already-cached status rather than triggering a new
 // provider call.
+//
+// CHANGELOG.md / RUNBOOK.md "Enclave Upgrade": both endpoints also report
+// `version` (config.version — SILENTWHISPER_VERSION, falling back to
+// backend/package.json's own version), so a running instance can always
+// self-report exactly what was installed.
 
 // db.raw is a non-writable (but configurable) property on the knex instance
 // — jest.spyOn's direct-assignment path can't touch it, so it's swapped out
@@ -36,7 +42,7 @@ describe('GET /health/live', () => {
     mockDbRaw(rawFn);
     const res = await request(app).get('/health/live');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok' });
+    expect(res.body).toEqual({ status: 'ok', version: config.version });
     expect(rawFn).not.toHaveBeenCalled();
   });
 
@@ -44,7 +50,7 @@ describe('GET /health/live', () => {
     mockDbRaw(() => Promise.reject(new Error('simulated db outage')));
     const res = await request(app).get('/health/live');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok' });
+    expect(res.body).toEqual({ status: 'ok', version: config.version });
   });
 });
 
@@ -54,6 +60,7 @@ describe('GET /health', () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
+    expect(res.body.version).toBe(config.version);
     expect(res.body.db).toBe('ok');
     expect(res.body.ai).toEqual({
       healthy: false,

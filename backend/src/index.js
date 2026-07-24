@@ -44,7 +44,7 @@ app.use(cookieParser());
 // needs a restart" from "process fine, a dependency is briefly down" in a
 // way GET /health's DB-inclusive check can't (FEATURE_REQUEST.md entry 3).
 app.get('/health/live', (_req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', version: config.version });
 });
 
 // Plain /health — no path-prefix collision risk since Silent Whisper owns
@@ -57,7 +57,13 @@ app.get('/health', async (_req, res) => {
     // outbound calls/latency) — purely additive, and ai.healthy never flips
     // this endpoint's own status/HTTP code (FEATURE_REQUEST.md entry 3: "do
     // not make provider health a hard dependency for the whole app").
-    res.json({ status: 'ok', db: 'ok', ai: getHealthStatus(), uptimeSeconds: Math.round(process.uptime()) });
+    res.json({
+      status: 'ok',
+      version: config.version,
+      db: 'ok',
+      ai: getHealthStatus(),
+      uptimeSeconds: Math.round(process.uptime()),
+    });
   } catch (err) {
     res.status(503).json({ status: 'error', db: 'unreachable', message: err.message });
   }

@@ -104,6 +104,13 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8000
+      # CHANGELOG.md / RUNBOOK.md "Enclave Upgrade": the same tag
+      # docker-compose.enclave.yml uses to select which image to run,
+      # threaded into the container too so a live instance's GET /health
+      # reports exactly what was actually installed. Left unset (empty
+      # string) here for local/Silent-Lattice dev — backend/src/config.js
+      # falls back to backend/package.json's own version in that case.
+      SILENTWHISPER_VERSION: ${SILENTWHISPER_VERSION:-}
       PGHOST: postgres
       PGPORT: 5432
       PGUSER: ${POSTGRES_USER}

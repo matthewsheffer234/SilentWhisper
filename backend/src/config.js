@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function required(name, value) {
   if (value === undefined || value === '') {
@@ -6,6 +9,20 @@ function required(name, value) {
   }
   return value;
 }
+
+// CHANGELOG.md / RUNBOOK.md "Enclave Upgrade": SILENTWHISPER_VERSION is the
+// same tag docker-compose.enclave.yml uses to select which image is
+// running — threaded into the container's environment (docker-compose.yml,
+// docker-compose.enclave.yml) so a live instance can self-report exactly
+// what an operator installed, via GET /health, without cross-referencing
+// anything. Falls back to backend/package.json's own "version" field for
+// local/dev runs where nothing sets the env var (a bare `node src/index.js`
+// or `npm run dev`, neither of which goes through docker-compose).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const backendPackageVersion = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+).version;
+const appVersion = process.env.SILENTWHISPER_VERSION || backendPackageVersion;
 
 // Hoisted out of the llm block below so allowedLlmOrigins' default can
 // reference the same value baseUrl uses, without duplicating the fallback.
@@ -28,6 +45,7 @@ if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/.test(taskOwnerTokenAlias)) {
 }
 
 export const config = {
+  version: appVersion,
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 8000),
   corsOrigin: (process.env.CORS_ORIGIN || 'http://localhost:5173')
