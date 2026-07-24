@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
+import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, seedSystemAdmin, authHeader } from './helpers/testUsers.js';
 
@@ -166,6 +167,161 @@ describe('GET /api/direct-messages', () => {
     const list = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
     expect(list.body.directMessages[0].id).toBe(dmBob.body.id);
     expect(list.body.directMessages.some((c) => c.id === dmCarol.body.id)).toBe(true);
+  });
+});
+
+// FEATURE_REQUEST.md entry 2: ephemeral direct/group messages via per-user
+// auto-archive. Dormancy is always computed live off each channel's actual
+// last-activity timestamp (last main-feed message, or channel.created_at if
+// it's never had one) against the caller's own effective threshold
+// (users.dm_auto_archive_days, falling back to config.dm.autoArchiveDefaultDays)
+// — never a stored flag.
+describe('GET /api/direct-messages — auto-archive dormancy', () => {
+  test("a dormant channel is excluded from the caller's list, while a member with a longer/disabled threshold still sees it; total matches the filtered set", async () => {
+    const alice = await signup('dmarchivealice1');
+    const bob = await signup('dmarchivebob1');
+
+    const dmRes = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+    await request(app)
+      .post(`/api/channels/${dmRes.body.id}/messages`)
+      .set(authHeader(alice.accessToken))
+      .send({ content: 'old message' });
+
+    const staleDate = new Date(Date.now() - (config.dm.autoArchiveDefaultDays + 1) * 24 * 60 * 60 * 1000);
+    await db('messages').where({ channel_id: dmRes.body.id }).update({ created_at: staleDate });
+
+    // Alice has no override -> falls back to the system default -> dormant.
+    const aliceList = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
+    expect(aliceList.body.directMessages).toEqual([]);
+    expect(aliceList.body.total).toBe(0);
+
+    // Bob disables archiving entirely (0) -> still sees the same channel.
+    await db('users').where({ id: bob.userId }).update({ dm_auto_archive_days: 0 });
+    const bobList = await request(app).get('/api/direct-messages').set(authHeader(bob.accessToken));
+    expect(bobList.body.directMessages.map((c) => c.id)).toEqual([dmRes.body.id]);
+    expect(bobList.body.total).toBe(1);
+  });
+
+  test('autoArchiveDays: 0 disables filtering even for a channel dormant for years', async () => {
+    const alice = await signup('dmarchivealice2');
+    const bob = await signup('dmarchivebob2');
+    await db('users').where({ id: alice.userId }).update({ dm_auto_archive_days: 0 });
+
+    const dmRes = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+    const yearsAgo = new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000);
+    await db('channels').where({ id: dmRes.body.id }).update({ created_at: yearsAgo });
+
+    const list = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
+    expect(list.body.directMessages.map((c) => c.id)).toEqual([dmRes.body.id]);
+  });
+
+  test('a channel with no messages ever falls back to channel.created_at for the dormancy check', async () => {
+    const alice = await signup('dmarchivealice3');
+    const bob = await signup('dmarchivebob3');
+
+    const dmRes = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+
+    const staleDate = new Date(Date.now() - (config.dm.autoArchiveDefaultDays + 1) * 24 * 60 * 60 * 1000);
+    await db('channels').where({ id: dmRes.body.id }).update({ created_at: staleDate });
+
+    const list = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
+    expect(list.body.directMessages).toEqual([]);
+  });
+
+  test('a new message landing in a dormant channel reactivates it live, for free, with no code of its own', async () => {
+    const alice = await signup('dmarchivealice4');
+    const bob = await signup('dmarchivebob4');
+
+    const dmRes = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+    const staleDate = new Date(Date.now() - (config.dm.autoArchiveDefaultDays + 1) * 24 * 60 * 60 * 1000);
+    await db('channels').where({ id: dmRes.body.id }).update({ created_at: staleDate });
+
+    const dormantList = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
+    expect(dormantList.body.directMessages).toEqual([]);
+
+    await request(app)
+      .post(`/api/channels/${dmRes.body.id}/messages`)
+      .set(authHeader(bob.accessToken))
+      .send({ content: 'hi again' });
+
+    const revivedList = await request(app).get('/api/direct-messages').set(authHeader(alice.accessToken));
+    expect(revivedList.body.directMessages.map((c) => c.id)).toEqual([dmRes.body.id]);
+  });
+});
+
+describe('POST /api/direct-messages — auto-archive reuse', () => {
+  test('a channel dormant for the caller is not reused: a fresh channel is created instead, with zero message history', async () => {
+    const alice = await signup('dmarchivereusealice1');
+    const bob = await signup('dmarchivereusebob1');
+
+    const first = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+    expect(first.status).toBe(201);
+    await request(app)
+      .post(`/api/channels/${first.body.id}/messages`)
+      .set(authHeader(alice.accessToken))
+      .send({ content: 'old conversation' });
+
+    const staleDate = new Date(Date.now() - (config.dm.autoArchiveDefaultDays + 1) * 24 * 60 * 60 * 1000);
+    await db('messages').where({ channel_id: first.body.id }).update({ created_at: staleDate });
+
+    const second = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+    expect(second.status).toBe(201);
+    expect(second.body.id).not.toBe(first.body.id);
+
+    const channels = await db('channels').where({ type: 'DIRECT' });
+    expect(channels).toHaveLength(2);
+
+    const newChannelMessages = await db('messages').where({ channel_id: second.body.id });
+    expect(newChannelMessages).toHaveLength(0);
+  });
+
+  test("reuse is governed by the caller's own effective threshold, never the target's", async () => {
+    const alice = await signup('dmarchivereusealice2');
+    const bob = await signup('dmarchivereusebob2');
+    await db('users').where({ id: alice.userId }).update({ dm_auto_archive_days: 0 });
+
+    const first = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+    const staleDate = new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000);
+    await db('channels').where({ id: first.body.id }).update({ created_at: staleDate });
+
+    // Alice (caller) disabled archiving -> still reused for her, even though
+    // the channel is ancient and Bob has no override of his own.
+    const second = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(alice.accessToken))
+      .send({ targetUserId: bob.userId });
+    expect(second.status).toBe(200);
+    expect(second.body.id).toBe(first.body.id);
+
+    // Bob (caller this time, default threshold) gets a *new* channel despite
+    // Alice's 0 override — his own threshold is what governs his own call.
+    const third = await request(app)
+      .post('/api/direct-messages')
+      .set(authHeader(bob.accessToken))
+      .send({ targetUserId: alice.userId });
+    expect(third.status).toBe(201);
+    expect(third.body.id).not.toBe(first.body.id);
   });
 });
 

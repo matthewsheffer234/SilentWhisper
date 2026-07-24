@@ -307,14 +307,17 @@ All routes except `/api/auth/*` require `Authorization: Bearer <accessToken>`. S
 | POST | `/api/organizations/:orgId/archive` \| `/unarchive` | system-admin only. Idempotent; an archived org blocks new members/invitations/workspaces but stays browsable |
 | POST | `/api/auth/refresh` | reads refresh cookie, rotates it → `{accessToken}` + new refresh cookie |
 | POST | `/api/auth/logout` | reads refresh cookie, revokes it → `204` |
-| GET | `/api/auth/me` | requires a bearer token → `{user}` — added in Phase 3 so the frontend can restore a session after a bare `/refresh` (which only returns a token, not the user) |
+| GET | `/api/auth/me` | requires a bearer token → `{user}` — added in Phase 3 so the frontend can restore a session after a bare `/refresh` (which only returns a token, not the user); `user` includes `dmAutoArchiveDays`/`dmAutoArchiveDefaultDays` (FEATURE_REQUEST.md entry 2) |
+| PATCH | `/api/auth/me/display-name` | `{displayName}` — self-service, caller's own row only |
+| PATCH | `/api/auth/me/dm-settings` | `{autoArchiveDays}` (integer, `0`–`DM_AUTO_ARCHIVE_MAX_DAYS`; `0` = never archive) — self-service, caller's own row only. See "Ephemeral direct messages" below |
 | POST | `/api/workspaces` | `{name}` → creates a workspace; creator becomes its `ADMIN` |
 | GET | `/api/workspaces` | `?limit=&offset=` (default 50, max 100) → `{workspaces, total, limit, offset}` — workspaces the caller belongs to |
 | POST | `/api/workspaces/:workspaceId/channels` | `{name, type: "PUBLIC"\|"PRIVATE"}` — creator auto-joined |
 | GET | `/api/workspaces/:workspaceId/channels` | all `PUBLIC` channels + `PRIVATE` ones the caller has joined |
 | POST | `/api/workspaces/:workspaceId/channels/:channelId/join` | self-service join — `PUBLIC` only, 400 for `PRIVATE` |
 | POST | `/api/workspaces/:workspaceId/channels/:channelId/members` | `{username}` — caller must already be a channel member; `channelId` must belong to `workspaceId` (400 otherwise); target must already be a member of that same workspace |
-| POST | `/api/direct-messages` | `{targetUserId}` → creates or reuses a 1:1 `DIRECT` channel (`workspace_id` is `NULL`) |
+| GET | `/api/direct-messages` | `?limit=&offset=` (default 50, max 100) → `{directMessages, total, limit, offset}`, most-recent-activity-first — the caller's `DIRECT`/`GROUP_DM` channels, minus any dormant per the caller's own auto-archive threshold. See "Ephemeral direct messages" below |
+| POST | `/api/direct-messages` | `{targetUserId}` → creates or reuses a 1:1 `DIRECT` channel (`workspace_id` is `NULL`); a channel dormant per the caller's own threshold is not reused — a fresh one is created instead |
 | POST | `/api/group-direct-messages` | `{memberIds: [...]}` → creates a `GROUP_DM` channel |
 | GET | `/api/channels/:channelId/messages` | `?limit=&before=&parentMessageId=` — newest-first, paginated by timestamp cursor |
 | POST | `/api/channels/:channelId/messages` | `{content, parentMessageId?}` — max 10,000 chars |
@@ -498,6 +501,17 @@ FEATURE_REQUEST.md entry 3: Obsidian-style inline checkboxes typed directly into
 `frontend/.env.example`'s `VITE_TASK_OWNER_TOKEN_ALIAS` (default `owner`) is baked into the frontend bundle at build time, like `VITE_API_URL`/`VITE_WS_URL` — changing it requires rebuilding the frontend image, not just restarting the container.
 
 Toggling a checkbox (`PATCH .../tasks/:taskIndex`) is the first intentional post-create mutation of `messages.content` — messages are otherwise immutable once sent. It re-enqueues an embedding refresh (so semantic search doesn't keep serving the pre-toggle vector) but deliberately does **not** re-run entity linking (a checkbox flip can't add/remove a `[[Entity]]` token) or mention notifications (a checkbox state change shouldn't re-notify `@mentions`/the task's owner). Audited as `MESSAGE_TASK_TOGGLED` with `messageId`/`channelId`/`taskIndex`/`checked` — never message content.
+
+### Ephemeral direct messages (auto-archive)
+
+FEATURE_REQUEST.md entry 2: `DIRECT`/`GROUP_DM` channels a caller hasn't touched in a while quietly drop out of `GET /api/direct-messages` and stop being reused by `POST /api/direct-messages` — nothing is ever deleted, hidden from a DBA, or flagged with a stored `archived_at` column. "Dormant" is recomputed live on every call from each channel's actual last-activity timestamp (its newest main-feed message, or `channels.created_at` if it's never had one) against the caller's own effective threshold, so a new message landing in a dormant channel un-hides it automatically — no reactivation code exists because none is needed.
+
+| Env var | Default here | Meaning |
+|---|---|---|
+| `DM_AUTO_ARCHIVE_DEFAULT_DAYS` | `90` | system default threshold, used whenever a user's own `users.dm_auto_archive_days` is `NULL` (every account starts this way) |
+| `DM_AUTO_ARCHIVE_MAX_DAYS` | `3650` | upper bound `PATCH /api/auth/me/dm-settings` accepts for a user's own override |
+
+The threshold is per-user, never per-workspace or app-wide — `0` means "never archive," any positive integer overrides the default, and there's no way to clear an override back to "use the default" once one is set (the PATCH endpoint always requires an explicit integer). Because the threshold is evaluated per-caller, two members of the same DM can disagree about whether it's dormant; if the caller with the shorter threshold starts a fresh DM with the same person while the other member's longer/disabled threshold still shows the old one, the pair briefly has two live `DIRECT` channels — a known, self-resolving edge case (either one stays alive once someone replies in it), not a bug.
 
 The dashboard endpoint's `LIKE '%- [ ]%'`-shaped candidate scan is backed by a `pg_trgm` GIN index on `messages.content` (migration `0021_task_dashboard_index.js`) within its own rolling window — the SQL only narrows candidates, the actual tokenization always runs server-side via `parseTasks()`.
 

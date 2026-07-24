@@ -1,9 +1,26 @@
 import { Router } from 'express';
 import { db } from '../db.js';
+import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { appendAuditEvent } from '../audit/auditService.js';
 import { assertUuid, MAX_GROUP_DM_MEMBERS, parseOffsetPagination } from '../validation.js';
 import { ValidationError, NotFoundError } from '../errors.js';
+
+// FEATURE_REQUEST.md entry 2: a channel is "dormant" for a given caller when
+// its own last-activity timestamp (last main-feed message, or the channel's
+// created_at if it's never had one — never a stored flag, always recomputed
+// live) is older than that caller's own effective threshold. 0 means "never
+// archive". Mirrors tasks.js's parseDashboardQuery's own "compute the cutoff
+// in JS off the server clock, bind it as a plain parameter" convention
+// rather than doing interval arithmetic in SQL.
+async function resolveEffectiveArchiveDays(userId) {
+  const row = await db('users').where({ id: userId }).first('dm_auto_archive_days');
+  return row?.dm_auto_archive_days ?? config.dm.autoArchiveDefaultDays;
+}
+
+function archiveCutoff(effectiveDays) {
+  return effectiveDays === 0 ? null : new Date(Date.now() - effectiveDays * 24 * 60 * 60 * 1000);
+}
 
 export const directMessagesRouter = Router();
 
@@ -34,14 +51,27 @@ directMessagesRouter.use(requireAuth);
 directMessagesRouter.get('/', async (req, res, next) => {
   try {
     const { limit, offset } = parseOffsetPagination(req.query);
+    // Resolved once per request, not per row — both queries below must apply
+    // the identical predicate or total stops matching the visible page.
+    const effectiveDays = await resolveEffectiveArchiveDays(req.user.id);
+    const cutoff = archiveCutoff(effectiveDays);
 
-    const countRow = await db('channels as c')
-      .join('channel_members as cm', 'cm.channel_id', 'c.id')
-      .where('cm.user_id', req.user.id)
-      .whereIn('c.type', ['DIRECT', 'GROUP_DM'])
-      .count('c.id as count')
-      .first();
-    const total = Number(countRow.count);
+    const countResult = await db.raw(
+      `SELECT count(*) AS count
+       FROM channels c
+       JOIN channel_members cm ON cm.channel_id = c.id AND cm.user_id = ?
+       LEFT JOIN LATERAL (
+         SELECT created_at
+         FROM messages
+         WHERE messages.channel_id = c.id AND messages.parent_message_id IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) lm ON true
+       WHERE c.type IN ('DIRECT', 'GROUP_DM')
+         AND (?::timestamptz IS NULL OR COALESCE(lm.created_at, c.created_at) >= ?::timestamptz)`,
+      [req.user.id, cutoff, cutoff],
+    );
+    const total = Number(countResult.rows[0].count);
 
     if (total === 0) {
       res.json({ directMessages: [], total, limit, offset });
@@ -61,9 +91,10 @@ directMessagesRouter.get('/', async (req, res, next) => {
          LIMIT 1
        ) lm ON true
        WHERE c.type IN ('DIRECT', 'GROUP_DM')
+         AND (?::timestamptz IS NULL OR COALESCE(lm.created_at, c.created_at) >= ?::timestamptz)
        ORDER BY COALESCE(lm.created_at, c.created_at) DESC
        LIMIT ? OFFSET ?`,
-      [req.user.id, limit, offset],
+      [req.user.id, cutoff, cutoff, limit, offset],
     );
     const channelRows = pageResult.rows;
     const channelIds = channelRows.map((c) => c.id);
@@ -109,7 +140,14 @@ directMessagesRouter.get('/', async (req, res, next) => {
   }
 });
 
-async function findExistingDirectChannel(trx, userA, userB) {
+// FEATURE_REQUEST.md entry 2: `cutoff` (null when dormancy filtering is
+// disabled for the caller) is the caller's own effective threshold, never
+// the target's — if the only existing DIRECT channel between the pair is
+// dormant per the caller's own setting, this returns null exactly as if no
+// channel existed, so the caller gets a brand-new channel with zero message
+// history. Same freshness expression (last main-feed message, falling back
+// to the channel's own created_at) GET / uses above.
+async function findExistingDirectChannel(trx, userA, userB, cutoff) {
   const row = await trx('channels as c')
     .where('c.type', 'DIRECT')
     .whereNull('c.workspace_id')
@@ -120,6 +158,19 @@ async function findExistingDirectChannel(trx, userA, userB) {
       this.select(1).from('channel_members as cm2').whereRaw('cm2.channel_id = c.id').andWhere('cm2.user_id', userB);
     })
     .andWhere(trx.raw('(select count(*) from channel_members cm3 where cm3.channel_id = c.id) = 2'))
+    .modify((qb) => {
+      if (cutoff) {
+        qb.andWhere(
+          trx.raw(
+            `COALESCE(
+               (SELECT max(created_at) FROM messages WHERE messages.channel_id = c.id AND messages.parent_message_id IS NULL),
+               c.created_at
+             ) >= ?::timestamptz`,
+            [cutoff],
+          ),
+        );
+      }
+    })
     .first('c.id');
   return row?.id ?? null;
 }
@@ -141,6 +192,8 @@ directMessagesRouter.post('/', async (req, res, next) => {
       throw new NotFoundError('User not found');
     }
 
+    const cutoff = archiveCutoff(await resolveEffectiveArchiveDays(req.user.id));
+
     const result = await db.transaction(async (trx) => {
       // Two concurrent POSTs for the same pair (e.g. both users opening
       // each other's profile from a shared roster at once) can otherwise
@@ -156,7 +209,7 @@ directMessagesRouter.post('/', async (req, res, next) => {
       const [loId, hiId] = [req.user.id, targetUserId].sort();
       await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`dm:${loId}:${hiId}`]);
 
-      const existingId = await findExistingDirectChannel(trx, req.user.id, targetUserId);
+      const existingId = await findExistingDirectChannel(trx, req.user.id, targetUserId, cutoff);
       if (existingId) {
         return { id: existingId, created: false };
       }

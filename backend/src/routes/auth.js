@@ -4,7 +4,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { appendAuditEvent, ANONYMOUS_ACTOR_ID } from '../audit/auditService.js';
 import { assertValidPassword } from '../auth/passwordPolicy.js';
-import { assertDisplayName } from '../validation.js';
+import { assertDisplayName, assertBoundedInt } from '../validation.js';
 import { signAccessToken } from '../auth/jwt.js';
 import {
   issueRefreshToken,
@@ -62,7 +62,7 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
   try {
     const user = await db('users')
       .where({ id: req.user.id })
-      .first(['id', 'username', 'display_name', 'email', 'is_system_admin']);
+      .first(['id', 'username', 'display_name', 'email', 'is_system_admin', 'dm_auto_archive_days']);
     if (!user) {
       throw new UnauthorizedError('User no longer exists');
     }
@@ -73,6 +73,12 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
         displayName: user.display_name,
         email: user.email,
         isSystemAdmin: user.is_system_admin,
+        // FEATURE_REQUEST.md entry 2: dmAutoArchiveDays is the caller's raw
+        // override (null when unset); dmAutoArchiveDefaultDays is the
+        // system default, included so the frontend can render "(default:
+        // 90)" without a second round trip.
+        dmAutoArchiveDays: user.dm_auto_archive_days,
+        dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
       },
     });
   } catch (err) {
@@ -97,7 +103,7 @@ authRouter.patch('/me/display-name', requireAuth, async (req, res, next) => {
 
     const user = await db('users')
       .where({ id: req.user.id })
-      .first(['id', 'username', 'display_name', 'email', 'is_system_admin']);
+      .first(['id', 'username', 'display_name', 'email', 'is_system_admin', 'dm_auto_archive_days']);
 
     res.json({
       user: {
@@ -106,6 +112,45 @@ authRouter.patch('/me/display-name', requireAuth, async (req, res, next) => {
         displayName: user.display_name,
         email: user.email,
         isSystemAdmin: user.is_system_admin,
+        dmAutoArchiveDays: user.dm_auto_archive_days,
+        dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 2: self-service per-user DM auto-archive
+// threshold. Same "personal preference, acts only on the caller's own row,
+// no :userId param" shape as /me/display-name above; not audited/
+// rate-limited for the identical reason that route already documents —
+// cosmetic, no state beyond the caller's own settings. 0 means "never
+// archive"; assertBoundedInt(min: 0) is what makes that a legal value
+// rather than something a length/positivity check would reject.
+authRouter.patch('/me/dm-settings', requireAuth, async (req, res, next) => {
+  try {
+    const autoArchiveDays = assertBoundedInt(
+      req.body?.autoArchiveDays,
+      { min: 0, max: config.dm.autoArchiveMaxDays },
+      'autoArchiveDays',
+    );
+
+    await db('users').where({ id: req.user.id }).update({ dm_auto_archive_days: autoArchiveDays });
+
+    const user = await db('users')
+      .where({ id: req.user.id })
+      .first(['id', 'username', 'display_name', 'email', 'is_system_admin', 'dm_auto_archive_days']);
+
+    res.json({
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        email: user.email,
+        isSystemAdmin: user.is_system_admin,
+        dmAutoArchiveDays: user.dm_auto_archive_days,
+        dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
       },
     });
   } catch (err) {
@@ -179,6 +224,8 @@ authRouter.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res,
         displayName: user.display_name,
         email: user.email,
         isSystemAdmin: user.is_system_admin,
+        dmAutoArchiveDays: user.dm_auto_archive_days,
+        dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
       },
     });
   } catch (err) {
@@ -286,6 +333,8 @@ authRouter.post('/change-password', requireAuth, changePasswordLimiter, async (r
         displayName: user.display_name,
         email: user.email,
         isSystemAdmin: user.is_system_admin,
+        dmAutoArchiveDays: user.dm_auto_archive_days,
+        dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
       },
     });
   } catch (err) {

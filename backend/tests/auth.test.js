@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { app } from '../src/index.js';
 import { db } from '../src/db.js';
+import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, authHeader } from './helpers/testUsers.js';
 import { revokeAllRefreshTokensForUser } from '../src/auth/refreshTokens.js';
@@ -401,6 +402,79 @@ describe('PATCH /api/auth/me/display-name', () => {
   });
 });
 
+// FEATURE_REQUEST.md entry 2: per-user auto-archive threshold for
+// DIRECT/GROUP_DM channels. Same "no :userId param, acts only on the
+// caller's own row, not audited/rate-limited" shape as
+// PATCH /api/auth/me/display-name above.
+describe('PATCH /api/auth/me/dm-settings', () => {
+  test("updates only the caller's own row and is reflected in a subsequent GET /auth/me", async () => {
+    const quinn = await signup('quinn');
+    const other = await signup('quinnother');
+
+    const res = await request(app)
+      .patch('/api/auth/me/dm-settings')
+      .set(authHeader(quinn.accessToken))
+      .send({ autoArchiveDays: 14 });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toMatchObject({
+      username: 'quinn',
+      dmAutoArchiveDays: 14,
+      dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
+    });
+
+    const meRes = await request(app).get('/api/auth/me').set(authHeader(quinn.accessToken));
+    expect(meRes.body.user.dmAutoArchiveDays).toBe(14);
+
+    const otherRow = await db('users').where({ id: other.userId }).first('dm_auto_archive_days');
+    expect(otherRow.dm_auto_archive_days).toBeNull();
+  });
+
+  test('accepts 0 to mean "never archive"', async () => {
+    const ralph = await signup('ralph');
+    const res = await request(app)
+      .patch('/api/auth/me/dm-settings')
+      .set(authHeader(ralph.accessToken))
+      .send({ autoArchiveDays: 0 });
+    expect(res.status).toBe(200);
+    expect(res.body.user.dmAutoArchiveDays).toBe(0);
+
+    const row = await db('users').where({ id: ralph.userId }).first('dm_auto_archive_days');
+    expect(row.dm_auto_archive_days).toBe(0);
+  });
+
+  test('rejects a negative value', async () => {
+    const sara = await signup('sara');
+    const res = await request(app)
+      .patch('/api/auth/me/dm-settings')
+      .set(authHeader(sara.accessToken))
+      .send({ autoArchiveDays: -1 });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects a non-integer value', async () => {
+    const tariq = await signup('tariq');
+    const res = await request(app)
+      .patch('/api/auth/me/dm-settings')
+      .set(authHeader(tariq.accessToken))
+      .send({ autoArchiveDays: 3.5 });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects a value beyond the configured maximum', async () => {
+    const uma = await signup('uma');
+    const res = await request(app)
+      .patch('/api/auth/me/dm-settings')
+      .set(authHeader(uma.accessToken))
+      .send({ autoArchiveDays: config.dm.autoArchiveMaxDays + 1 });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects an unauthenticated request', async () => {
+    const res = await request(app).patch('/api/auth/me/dm-settings').send({ autoArchiveDays: 30 });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('GET /api/auth/me', () => {
   test('returns the current user for a valid access token', async () => {
     const henry = await signup('henry');
@@ -412,6 +486,8 @@ describe('GET /api/auth/me', () => {
       displayName: 'henry',
       email: 'henry@example.com',
       isSystemAdmin: false,
+      dmAutoArchiveDays: null,
+      dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
     });
   });
 

@@ -8,6 +8,11 @@ import { useAuth } from '../context/AuthContext.jsx';
 // but the account holder themselves had no way to ever change it. Same
 // Sheet/placement pattern as ChangePasswordPanel.jsx — reachable from every
 // user's own "Display Name" control (WorkspaceSidebar), not admin-gated.
+//
+// FEATURE_REQUEST.md entry 2: extended with a second, independent field for
+// the per-user DM auto-archive threshold, reached from the same user-menu
+// entry point rather than a new Sheet of its own — both are the same class
+// of personal, cosmetic self-service preference.
 
 const styles = {
   field: { marginBottom: 14 },
@@ -31,6 +36,7 @@ const styles = {
     fontSize: 'var(--text-sm)',
     boxSizing: 'border-box',
   },
+  help: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginTop: 4 },
   saveButton: {
     marginTop: 6,
     minHeight: 44,
@@ -47,11 +53,21 @@ const styles = {
 };
 
 export default function DisplayNamePanel({ onClose }) {
-  const { user, setDisplayName } = useAuth();
+  const { user, setDisplayName, setDmSettings } = useAuth();
   const [name, setName] = useState(user?.displayName || '');
+  // Blank means "no override — falls back to the system default"; the
+  // backend never reports that state as anything other than null, and there
+  // is no way to clear an override back to null once one is saved (matches
+  // PATCH /api/auth/me/dm-settings, which always requires an explicit
+  // integer).
+  const initialArchiveInput = user?.dmAutoArchiveDays != null ? String(user.dmAutoArchiveDays) : '';
+  const [archiveInput, setArchiveInput] = useState(initialArchiveInput);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const nameDirty = name !== (user?.displayName || '');
+  const archiveDirty = archiveInput !== initialArchiveInput;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -59,10 +75,15 @@ export default function DisplayNamePanel({ onClose }) {
     setError(null);
     setSaved(false);
     try {
-      await setDisplayName(name);
+      if (nameDirty) {
+        await setDisplayName(name);
+      }
+      if (archiveDirty && archiveInput !== '') {
+        await setDmSettings(Number(archiveInput));
+      }
       setSaved(true);
     } catch (err) {
-      setError(err.message || 'Failed to update display name');
+      setError(err.message || 'Failed to save changes');
     } finally {
       setSaving(false);
     }
@@ -75,7 +96,7 @@ export default function DisplayNamePanel({ onClose }) {
       subtitle="This is how your name appears to others in messages, mentions, and rosters."
       onClose={onClose}
       width={380}
-      isDirty={name !== (user?.displayName || '')}
+      isDirty={nameDirty || archiveDirty}
     >
       {error && <div style={styles.error}>{error}</div>}
 
@@ -89,6 +110,26 @@ export default function DisplayNamePanel({ onClose }) {
             onChange={(e) => setName(e.target.value)}
             required
           />
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label} htmlFor="dm-auto-archive-input">
+            Auto-archive direct messages after ___ days (0 = never)
+          </label>
+          <input
+            id="dm-auto-archive-input"
+            type="number"
+            min={0}
+            step={1}
+            style={styles.input}
+            value={archiveInput}
+            placeholder={`Default: ${user?.dmAutoArchiveDefaultDays ?? 90}`}
+            onChange={(e) => setArchiveInput(e.target.value)}
+          />
+          <div style={styles.help}>
+            Direct messages and group DMs with no activity for this long quietly drop out of your
+            sidebar — they&apos;re never deleted, and a new message brings them right back.
+          </div>
         </div>
 
         <button type="submit" style={styles.saveButton} disabled={saving}>

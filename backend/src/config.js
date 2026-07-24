@@ -184,6 +184,18 @@ export const config = {
     dashboardWindowDays: Number(process.env.TASK_DASHBOARD_WINDOW_DAYS || 30),
   },
 
+  dm: {
+    // FEATURE_REQUEST.md entry 2: per-user auto-archive threshold for
+    // DIRECT/GROUP_DM channels, applied only when a caller's own
+    // users.dm_auto_archive_days is NULL (see routes/directMessages.js).
+    // Env-overridable rolling window, same precedent as
+    // tasks.dashboardWindowDays above.
+    autoArchiveDefaultDays: Number(process.env.DM_AUTO_ARCHIVE_DEFAULT_DAYS || 90),
+    // Upper bound assertBoundedInt enforces on a user's own override via
+    // PATCH /api/auth/me/dm-settings.
+    autoArchiveMaxDays: Number(process.env.DM_AUTO_ARCHIVE_MAX_DAYS || 3650),
+  },
+
   ws: {
     // Configurable for reverse-proxy deployment (PROJECT_PLAN.md Section 8,
     // Phase 3: "Make the WebSocket path configurable").

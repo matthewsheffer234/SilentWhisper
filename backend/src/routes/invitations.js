@@ -166,6 +166,10 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
         displayName: result.user.display_name,
         email: result.user.email,
         isSystemAdmin: result.user.is_system_admin,
+        // Always null for a brand-new account — dm_auto_archive_days is
+        // never set at creation, only via PATCH /auth/me/dm-settings.
+        dmAutoArchiveDays: null,
+        dmAutoArchiveDefaultDays: config.dm.autoArchiveDefaultDays,
       },
     });
   } catch (err) {

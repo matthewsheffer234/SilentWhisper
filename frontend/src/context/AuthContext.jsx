@@ -86,9 +86,16 @@ export function AuthProvider({ children }) {
     setUser(updatedUser);
   }, []);
 
+  // Same cosmetic-only, no-token-rotation shape as setDisplayName above
+  // (FEATURE_REQUEST.md entry 2).
+  const setDmSettings = useCallback(async (autoArchiveDays) => {
+    const updatedUser = await authApi.updateDmSettings(autoArchiveDays);
+    setUser(updatedUser);
+  }, []);
+
   const value = useMemo(
-    () => ({ user, status, login, logout, changePassword, setDisplayName, completeAuth }),
-    [user, status, login, logout, changePassword, setDisplayName, completeAuth],
+    () => ({ user, status, login, logout, changePassword, setDisplayName, setDmSettings, completeAuth }),
+    [user, status, login, logout, changePassword, setDisplayName, setDmSettings, completeAuth],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

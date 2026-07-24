@@ -17,6 +17,12 @@ export async function updateDisplayName(displayName) {
   return data.user;
 }
 
+// FEATURE_REQUEST.md entry 2: per-user DM auto-archive threshold.
+export async function updateDmSettings(autoArchiveDays) {
+  const data = await apiFetch('/auth/me/dm-settings', { method: 'PATCH', body: { autoArchiveDays } });
+  return data.user;
+}
+
 export async function logout() {
   await apiFetch('/auth/logout', { method: 'POST' });
   setAccessToken(null);
