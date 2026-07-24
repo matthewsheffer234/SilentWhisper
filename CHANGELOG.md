@@ -16,6 +16,14 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.3.3] — 2026-07-24
+
+**Migrations**: none. **New env vars**: none.
+
+Fixed a real bug in the Admin Analytics dashboard, reported directly by the user: with `scope` set to "Workspace" (or "User," on the Sentiment Trends tab), the picker dropdown was always empty — nothing was selectable. Root cause: `AdminAnalyticsPanel.jsx` requested `limit: 200` for its workspace and user pickers, exceeding the backend's real `MAX_PAGE_LIMIT` of `100` (`validation.js`); the resulting `400` was silently swallowed into an empty list with no visible error. Fixed by requesting `limit: 100` (the actual server ceiling) and no longer swallowing a picker-load failure silently — a real error now renders in the panel instead of a dropdown that looks empty for no visible reason.
+
+Full diff: `git diff v1.3.2..v1.3.3`.
+
 ## [1.3.2] — 2026-07-24
 
 **Migrations**: none. **New env vars**: none.

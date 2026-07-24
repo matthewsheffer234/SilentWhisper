@@ -130,15 +130,25 @@ function ScopeSelector({ allowedScopes, organizations, workspaces, value, onChan
       .catch(() => setChannels([]));
   }, [scopeType, workspaceId]);
 
+  const [usersError, setUsersError] = useState(null);
+
   useEffect(() => {
     if (scopeType !== 'user' || users.length > 0) return;
-    // Same v1 scope-selector limitation as the workspace picker below — the
-    // first 200 accounts, not paginated. A user-scoped query still works
-    // for anyone outside that set by other means later; this is a picker
-    // convenience, not the authorization boundary.
-    listAdminUsers({ limit: 200 })
+    // Same v1 scope-selector limitation as the workspace picker in the
+    // parent panel — the first MAX_PAGE_LIMIT (100) accounts, not
+    // paginated. A user-scoped query still works for anyone outside that
+    // set by other means later; this is a picker convenience, not the
+    // authorization boundary. 100 is the server's real ceiling
+    // (validation.js's MAX_PAGE_LIMIT) — requesting more 400s the whole
+    // list into a silently-empty dropdown, which is exactly the bug this
+    // comment is here to stop someone from reintroducing.
+    setUsersError(null);
+    listAdminUsers({ limit: 100 })
       .then((res) => setUsers(res.users))
-      .catch(() => setUsers([]));
+      .catch((err) => {
+        setUsers([]);
+        setUsersError(err.message || 'Failed to load users');
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeType]);
 
@@ -205,6 +215,7 @@ function ScopeSelector({ allowedScopes, organizations, workspaces, value, onChan
               <option key={u.userId} value={u.userId}>{u.displayName || u.username}</option>
             ))}
           </select>
+          {usersError && <div style={styles.error}>{usersError}</div>}
         </div>
       )}
     </div>
@@ -583,17 +594,24 @@ export default function AdminAnalyticsPanel({ onClose }) {
   const [activeTab, setActiveTab] = useState(TABS[0].key);
   const [organizations, setOrganizations] = useState([]);
   const [workspaces, setWorkspaces] = useState([]);
+  const [pickerError, setPickerError] = useState(null);
   const current = TABS.find((t) => t.key === activeTab) ?? TABS[0];
 
   useEffect(() => {
-    listOrganizations().then(setOrganizations).catch(() => setOrganizations([]));
+    listOrganizations()
+      .then(setOrganizations)
+      .catch((err) => setPickerError(err.message || 'Failed to load organizations'));
     // v1 scope-selector data source, not an exhaustive admin listing — a
     // deployment with more workspaces than this can still scope by
     // organization or channel-within-a-known-workspace; a fuller picker is
     // a reasonable, non-blocking follow-on once this dashboard sees real use.
-    listAllWorkspacesAdmin({ limit: 200 })
+    // 100 is the server's real ceiling (validation.js's MAX_PAGE_LIMIT) —
+    // requesting more 400s the whole list into a silently-empty dropdown,
+    // which is exactly the bug this comment is here to stop someone from
+    // reintroducing.
+    listAllWorkspacesAdmin({ limit: 100 })
       .then((res) => setWorkspaces(res.workspaces))
-      .catch(() => setWorkspaces([]));
+      .catch((err) => setPickerError(err.message || 'Failed to load workspaces'));
   }, []);
 
   return (
@@ -612,6 +630,7 @@ export default function AdminAnalyticsPanel({ onClose }) {
           </button>
         ))}
       </div>
+      {pickerError && <div style={styles.error}>{pickerError}</div>}
       {current.render({ organizations, workspaces })}
     </Sheet>
   );
