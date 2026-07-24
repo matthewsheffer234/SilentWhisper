@@ -16,6 +16,14 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.3.2] — 2026-07-24
+
+**Migrations**: none. **New env vars**: none.
+
+`scripts/backfill-sentiment-scores.mjs` (added in `1.3.1`) is now wired into `scripts/airgap-upgrade.sh` as a new, non-fatal Phase G — so any enclave upgrading through `v1.3.0` for the first time gets the pre-existing-message sentiment backfill automatically, instead of needing an operator to remember and run it by hand. The script itself gained a fast no-op path (skips both anchor-embedding calls entirely when there's nothing left to backfill) so it's cheap to run unconditionally on every future upgrade. See `PROJECT_PLAN.md` Section 11, "Wire the sentiment backfill into scripts/airgap-upgrade.sh" (2026-07-24), including the honest caveat that this new phase hasn't yet been exercised in a real end-to-end upgrade rehearsal.
+
+Full diff: `git diff v1.3.1..v1.3.2`.
+
 ## [1.3.1] — 2026-07-24
 
 **Migrations**: none. **New env vars**: none.

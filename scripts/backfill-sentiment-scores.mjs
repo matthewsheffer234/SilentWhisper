@@ -30,6 +30,14 @@
 // ever runs, since ES module imports are hoisted above all other top-level
 // code. Documented the hard way in this repo — see
 // scripts/seed-demo-tv-workspace.mjs's own identical comment.
+//
+// Wired into scripts/airgap-upgrade.sh's own Phase G (RUNBOOK.md's
+// "Enclave Upgrade" section) so every future upgrade re-runs this
+// automatically, not just this one session's manual fix — safe to do
+// unconditionally because it's idempotent: the count check below makes a
+// no-op run (every future upgrade, once this backfill has already caught
+// up) cheap and adapter-call-free, rather than re-embedding the same two
+// anchor phrases forever for nothing.
 
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +55,17 @@ async function main() {
     const { count: beforeCount } = await db('message_sentiment_scores').count('message_id as count').first();
     const { count: totalEmbedded } = await db('message_embeddings').count('message_id as count').first();
     console.log(`message_embeddings: ${totalEmbedded} rows. message_sentiment_scores: ${beforeCount} rows before this run.`);
+
+    const { count: pendingCount } = await db('message_embeddings as me')
+      .leftJoin('message_sentiment_scores as mss', 'mss.message_id', 'me.message_id')
+      .whereNull('mss.message_id')
+      .count('me.message_id as count')
+      .first();
+    if (Number(pendingCount) === 0) {
+      console.log('Nothing to backfill — every embedded message already has a sentiment score.');
+      return;
+    }
+    console.log(`${pendingCount} message(s) need a sentiment score.`);
 
     console.log('Embedding the positive/negative anchor phrases (two adapter calls, once each)...');
     // Sequential, not Promise.all: config.embedding.maxConcurrentRequests

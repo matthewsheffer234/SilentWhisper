@@ -329,8 +329,30 @@ phase_bring_up_new_version() {
   pass "new frontend static build present"
 }
 
+phase_data_repair() {
+  log "Phase G: post-upgrade data repair (idempotent — a no-op once already applied, safe to re-run any time)"
+
+  # backfill-sentiment-scores.mjs (v1.3.1): message_sentiment_scores is only
+  # ever populated as a side effect of an embedding_jobs row, which is only
+  # enqueued at message-creation time — an enclave upgrading past v1.3.0
+  # for the first time has real pre-existing messages that were already
+  # embedded (and their job rows long gone) before the sentiment feature
+  # existed, so nothing would otherwise ever score them. Deliberately not a
+  # hard `fail` on error: it depends on the AI provider being reachable, the
+  # same kind of transient cold-start race phase_bring_up_new_version's own
+  # AI-health check above already tolerates rather than fails on, and it
+  # touches no application-critical data — an operator can re-run it any
+  # time once the provider is confirmed healthy. Add future one-time
+  # data-repair scripts here as they're introduced, same pattern.
+  if "${COMPOSE[@]}" exec -T backend node /app/scripts/backfill-sentiment-scores.mjs; then
+    pass "post-upgrade data repair complete"
+  else
+    log "post-upgrade data repair (backfill-sentiment-scores.mjs) failed — not treated as a hard upgrade failure (see this phase's own comment in the script). Re-run manually once the AI provider is confirmed healthy: docker compose exec backend node /app/scripts/backfill-sentiment-scores.mjs"
+  fi
+}
+
 phase_audit_verify() {
-  log "Phase G: verifying audit log hash chain is still intact"
+  log "Phase H: verifying audit log hash chain is still intact"
   "${COMPOSE[@]}" exec -T backend node /app/scripts/verify-audit-log.mjs \
     || fail "audit log verification failed after upgrade"
   pass "audit log integrity verified"
@@ -360,6 +382,7 @@ main() {
   phase_migrate
   phase_grants
   phase_bring_up_new_version
+  phase_data_repair
   phase_audit_verify
   phase_write_report
 
