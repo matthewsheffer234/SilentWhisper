@@ -547,6 +547,7 @@ Reuse this token system directly rather than redefining equivalent tokens under 
 - Reuse the design tokens, component conventions, and interaction patterns from `~/wireservice-dev/frontend/src/global.css` instead of introducing new colors, fonts, spacing values, or accent colors.
 - Follow Apple HIG minimums (44pt tap targets, reduced-motion support, AA contrast, light/dark parity) for all new UI.
 - Maintain local run documentation for fully offline operation.
+- Every commit that changes `backend/`, `frontend/`, `scripts/`, or `database/migrations/` behavior updates `CHANGELOG.md` (one entry per shipped version, not per dev session) and bumps the version in the same commit — all three `package.json`s, `.env.enclave.example`'s `SILENTWHISPER_VERSION` default, and a matching `vX.Y.Z` git tag, using `CHANGELOG.md`'s own PATCH/MINOR/MAJOR rule to pick the bump. This is what makes `scripts/airgap-upgrade.sh` (and an operator deciding whether to run it) possible at all — a change that ships without it is invisible to the enclave upgrade path. Doc-only changes (this file, `RUNBOOK.md`, `FEATURE_REQUEST.md`, etc. with no accompanying code change) don't need a version bump.
 
 ## 10. Acceptance Criteria
 

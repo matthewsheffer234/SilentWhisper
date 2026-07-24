@@ -14,6 +14,8 @@ See `RUNBOOK.md`'s "Enclave Upgrade" section for the upgrade procedure itself (`
 
 Each entry lists the migrations and new env vars it introduces, so an operator can tell what an upgrade will change before running it.
 
+**Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
+
 ## [1.1.1] — 2026-07-24
 
 **Migrations**: none. **New env vars**: none.
