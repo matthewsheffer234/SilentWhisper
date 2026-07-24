@@ -60,6 +60,18 @@ REPORT_FILE="upgrade-report-$(date +%Y%m%d-%H%M%S).txt"
 BACKUP_FILE=""
 PREVIOUS_VERSION=""
 STARTED_BRINGING_UP_NEW_VERSION=0
+# Resolved once $ENV_FILE is sourced in phase_preflight (BACKEND_HOST_PORT
+# is unset until then, same as every other var this script reads from it).
+# docker-compose.yml's own backend port binding is already
+# ${BACKEND_HOST_PORT:-8101} — this script hardcoding plain :8101 regardless
+# was a latent bug found while rehearsing against an isolated stack on a
+# host that already had a real deployment bound to the default port: with
+# BACKEND_HOST_PORT remapped so the rehearsal stack could even start, every
+# curl call below would have silently queried the OTHER, real backend
+# instead of failing loudly — a false-positive/false-negative risk, not
+# just an inconvenience. BASE_URL is computed fresh (not cached) so it
+# reflects whatever $ENV_FILE actually set.
+BASE_URL=""
 
 log()    { echo "==> $*"; }
 report() { echo "$*" >> "$REPORT_FILE"; }
@@ -124,6 +136,9 @@ phase_preflight() {
   set +a
   pass "$ENV_FILE loaded"
 
+  BASE_URL="http://localhost:${BACKEND_HOST_PORT:-8101}"
+  report "Backend base URL: $BASE_URL"
+
   [ -n "$("${COMPOSE[@]}" ps postgres --status running -q)" ] \
     || fail "postgres is not running — this script upgrades an existing install, it does not create one. Use scripts/airgap-install.sh for a fresh install."
   [ -n "$("${COMPOSE[@]}" ps backend --status running -q)" ] \
@@ -131,7 +146,7 @@ phase_preflight() {
   pass "existing install is up (postgres, backend both running)"
 
   local current_health
-  current_health=$(curl -sf http://localhost:8101/health) || fail "could not reach the running backend's /health — cannot determine the current version"
+  current_health=$(curl -sf "$BASE_URL/health") || fail "could not reach the running backend's /health — cannot determine the current version"
   # Regex, not a JSON parser: deliberately avoids the docker-run-a-node-
   # container trick airgap-install.sh's json_field() uses for this one
   # value, since that trick resolves the image to check via
@@ -140,7 +155,18 @@ phase_preflight() {
   # /health response shape is simple and stable enough not to need a real
   # parser for a single flat string field.
   PREVIOUS_VERSION=$(echo "$current_health" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
-  [ -n "$PREVIOUS_VERSION" ] || fail "could not parse a version field out of the running backend's /health response — is it running a build from before GET /health reported version? Upgrade to at least 1.1.0 manually first, or see CHANGELOG.md."
+  if [ -z "$PREVIOUS_VERSION" ]; then
+    # Expected exactly once, ever: v1.0.0 predates GET /health reporting a
+    # version at all (that field shipped in 1.1.0), so the very first
+    # upgrade any real enclave ever runs will always hit this branch. Not
+    # guessed automatically — the operator has to explicitly assert what
+    # they believe is running, same "fail closed, make the operator say it
+    # out loud" posture as CONFIRM_MAJOR_UPGRADE above.
+    [ -n "${ASSUME_PREVIOUS_VERSION:-}" ] \
+      || fail "the running backend's /health has no version field. This is expected only for the very first upgrade off v1.0.0 (GET /health didn't report version until v1.1.0 — see CHANGELOG.md). If that's what's running, confirm it explicitly: re-run with ASSUME_PREVIOUS_VERSION=1.0.0. If a version field is genuinely missing on a build that should have one, something else is wrong — do not guess."
+    PREVIOUS_VERSION="$ASSUME_PREVIOUS_VERSION"
+    log "No version field in /health — proceeding with operator-confirmed ASSUME_PREVIOUS_VERSION=$PREVIOUS_VERSION"
+  fi
   report "Previous version (currently running): $PREVIOUS_VERSION"
   pass "current running version: $PREVIOUS_VERSION"
 
@@ -272,17 +298,17 @@ phase_bring_up_new_version() {
   # postgres (not listed here) is left completely alone.
   "${COMPOSE[@]}" up -d backend frontend
 
-  timeout 60 bash -c '
-    until curl -sf http://localhost:8101/health/live >/dev/null; do sleep 2; done
-  ' || fail "backend /health/live did not become reachable within 60s on the new version"
+  timeout 60 bash -c "
+    until curl -sf '$BASE_URL/health/live' >/dev/null; do sleep 2; done
+  " || fail "backend /health/live did not become reachable within 60s on the new version"
   pass "new backend liveness reachable"
 
-  timeout 90 bash -c '
-    until curl -sf http://localhost:8101/health >/dev/null; do sleep 2; done
-  ' || fail "backend /health did not become reachable within 90s on the new version"
+  timeout 90 bash -c "
+    until curl -sf '$BASE_URL/health' >/dev/null; do sleep 2; done
+  " || fail "backend /health did not become reachable within 90s on the new version"
 
   local new_health reported_version
-  new_health=$(curl -sf http://localhost:8101/health) || fail "could not re-fetch /health after bring-up"
+  new_health=$(curl -sf "$BASE_URL/health") || fail "could not re-fetch /health after bring-up"
   reported_version=$(echo "$new_health" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
   [ "$reported_version" = "$SILENTWHISPER_VERSION" ] \
     || fail "backend is up but GET /health reports version '$reported_version', not the expected '$SILENTWHISPER_VERSION' — a stale container may still be serving traffic"

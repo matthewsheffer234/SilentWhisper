@@ -14,6 +14,19 @@ See `RUNBOOK.md`'s "Enclave Upgrade" section for the upgrade procedure itself (`
 
 Each entry lists the migrations and new env vars it introduces, so an operator can tell what an upgrade will change before running it.
 
+## [1.1.1] — 2026-07-24
+
+**Migrations**: none. **New env vars**: none.
+
+Two real bugs in `scripts/airgap-upgrade.sh` found by actually rehearsing it end-to-end against an isolated throwaway stack (a real v1.0.0 install upgraded to a real v1.1.0, on the same host as a live deployment) — the "not yet rehearsed" gap `v1.1.0`'s entry and `RUNBOOK.md` both flagged honestly instead of glossing over, closed the same day:
+
+- The script hardcoded `http://localhost:8101` for every health check instead of respecting `BACKEND_HOST_PORT` (`docker-compose.yml`'s own port-remap variable). On a host already running a real deployment on the default port, a rehearsal remapping the port to avoid colliding would have had every check silently query the *other*, real instance instead of the rehearsal stack — a false-positive/false-negative risk, not just an inconvenience. Fixed: `BASE_URL` is now resolved from `BACKEND_HOST_PORT` once `.env` is loaded, and every check uses it.
+- The preflight's "read the currently-running version off `GET /health`" step has no fallback for a backend that predates the `version` field entirely — which is exactly `v1.0.0`, since that field didn't exist until `v1.1.0`. Unfixed, this would have hard-failed the very first upgrade any real enclave ever runs. Fixed: an explicit `ASSUME_PREVIOUS_VERSION` env var lets the operator confirm what's running when `/health` can't report it itself — required, not guessed, same "fail closed, make the operator say it out loud" posture `CONFIRM_MAJOR_UPGRADE` already uses.
+
+Both were found and fixed *before* being exercised for real, then the same rehearsal was re-run clean end-to-end: 22→23 migrations applied, grants re-verified, all pre-existing data (users, workspace, channel, messages, a DM, and its message) confirmed byte-for-byte unchanged by direct row-count and content comparison before/after, and the new `v1.1.0` auto-archive feature itself exercised against that pre-existing DM (backdating it past a newly-set threshold correctly excluded it from `GET /api/direct-messages`) — proof the feature works on data that predates it, not just on data created after upgrading. See `PROJECT_PLAN.md` Section 11, "Rehearsing the enclave upgrade script end-to-end" (2026-07-24), for the full walkthrough.
+
+Full diff: `git diff v1.1.0..v1.1.1`.
+
 ## [1.1.0] — 2026-07-24
 
 **Migrations**: `0023_dm_auto_archive.js` — additive (new nullable `users.dm_auto_archive_days` column). No data loss, nothing to review before upgrading.
