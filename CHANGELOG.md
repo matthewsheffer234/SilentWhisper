@@ -16,6 +16,15 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.2.0] — 2026-07-24
+
+**Migrations**: `0024_admin_analytics_index.js` — additive (new index, `idx_messages_created_at`, no column/table changes). No data loss, nothing to review before upgrading.
+**New env vars**: none (`adminAnalyticsLimiter`'s 30 req/60s ceiling is a fixed constant, not env-configurable, matching `tasks.js`'s own `MAX_TASK_DASHBOARD_WINDOW_DAYS` precedent).
+
+- Added a system-admin-only Admin Analytics dashboard (`FEATURE_REQUEST.md` entry 5, "Admin Analytics Dashboard — activity and engagement metrics"): `GET /api/admin/analytics/activity` (message/active-user counts bucketed by day or week, scoped to an organization/workspace/channel or everything a system admin administers) and `GET /api/admin/analytics/dormant-channels` (channels with no top-level message in N days, computed live from each channel's own last-activity timestamp, never a stored flag). Both are pure aggregate reads over `messages.created_at`/`channel_id`/`user_id` and `channel_members` — never `messages.content` — and structurally exclude DM/group-DM channels (`channels.workspace_id IS NOT NULL`). New `AdminAnalyticsPanel.jsx`, reachable from the Admin hub. See `PROJECT_PLAN.md` Section 11, "Admin Analytics Dashboard: activity and engagement metrics" (2026-07-24), for full detail, including a real Postgres `GROUP BY`/parameter-binding bug found and fixed during implementation.
+
+Full diff: `git diff v1.1.1..v1.2.0`.
+
 ## [1.1.1] — 2026-07-24
 
 **Migrations**: none. **New env vars**: none.

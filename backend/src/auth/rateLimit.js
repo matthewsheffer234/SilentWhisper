@@ -168,3 +168,20 @@ export const taskToggleLimiter = rateLimit({
   keyGenerator: (req) => `task-toggle:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// FEATURE_REQUEST.md entry 5 (Admin Analytics Dashboard): shared by every
+// route entries 5/6/7 add to routes/adminAnalytics.js — all aggregate SQL
+// reads of similar cost over the same tables, gated on requireSystemAdmin, so
+// a single admin-facing dashboard polling several tabs doesn't need
+// per-tab budgets. Applied at the router level (adminAnalyticsRouter.use),
+// not per-route like most limiters in this file, since every route here is
+// the same class of read.
+export const adminAnalyticsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `admin-analytics:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

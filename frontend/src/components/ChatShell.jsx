@@ -18,6 +18,7 @@ import WorkspaceDigestPanel from './WorkspaceDigestPanel.jsx';
 import ThreadSidebar from './ThreadSidebar.jsx';
 import AiSettingsPanel from './AiSettingsPanel.jsx';
 import AuditDashboard from './AuditDashboard.jsx';
+import AdminAnalyticsPanel from './AdminAnalyticsPanel.jsx';
 import ChangePasswordPanel from './ChangePasswordPanel.jsx';
 import DisplayNamePanel from './DisplayNamePanel.jsx';
 import UserManagementPanel from './UserManagementPanel.jsx';
@@ -123,6 +124,7 @@ function ChatShellInner() {
   const [threadChannelType, setThreadChannelType] = useState(null);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [auditLogOpen, setAuditLogOpen] = useState(false);
+  const [adminAnalyticsOpen, setAdminAnalyticsOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [displayNameOpen, setDisplayNameOpen] = useState(false);
   const [channelDetailsOpen, setChannelDetailsOpen] = useState(false);
@@ -1115,6 +1117,7 @@ function ChatShellInner() {
       )}
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
       {auditLogOpen && <AuditDashboard onClose={() => setAuditLogOpen(false)} />}
+      {adminAnalyticsOpen && <AdminAnalyticsPanel onClose={() => setAdminAnalyticsOpen(false)} />}
       {changePasswordOpen && <ChangePasswordPanel onClose={() => setChangePasswordOpen(false)} />}
       {displayNameOpen && <DisplayNamePanel onClose={() => setDisplayNameOpen(false)} />}
       {userManagementOpen && (
@@ -1157,6 +1160,7 @@ function ChatShellInner() {
           onOpenAuditLog={() => setAuditLogOpen(true)}
           onOpenOrgManagement={() => setOrgManagementOpen(true)}
           onOpenSystemAdmin={() => setSystemAdminOpen(true)}
+          onOpenAdminAnalytics={() => setAdminAnalyticsOpen(true)}
         />
       )}
       {workspaceSettingsTarget && (

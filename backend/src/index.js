@@ -19,6 +19,7 @@ import { searchRouter } from './routes/search.js';
 import { entitiesRouter } from './routes/entities.js';
 import { tasksRouter } from './routes/tasks.js';
 import { notificationsRouter } from './routes/notifications.js';
+import { adminAnalyticsRouter } from './routes/adminAnalytics.js';
 import { attachWebSocketServer } from './ws/server.js';
 import { startPresenceSweep, stopPresenceSweep } from './ws/presence.js';
 import { ensureDefaultSettingsSeeded } from './llm/settingsService.js';
@@ -84,6 +85,7 @@ app.use('/api', searchRouter);
 app.use('/api', entitiesRouter);
 app.use('/api', tasksRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/admin/analytics', adminAnalyticsRouter);
 
 app.use(errorHandler);
 

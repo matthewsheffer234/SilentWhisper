@@ -1,4 +1,4 @@
-import { ShieldCheck, Sparkles, ScrollText, Building2, UserCog } from 'lucide-react';
+import { ShieldCheck, Sparkles, ScrollText, Building2, UserCog, BarChart3 } from 'lucide-react';
 import Sheet from './Sheet.jsx';
 
 // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: a single,
@@ -54,6 +54,7 @@ export default function AdminPanel({
   onOpenAuditLog,
   onOpenOrgManagement,
   onOpenSystemAdmin,
+  onOpenAdminAnalytics,
 }) {
   const items = [
     ...(canManageWorkspaceUsers
@@ -93,6 +94,13 @@ export default function AdminPanel({
             title: 'Audit Log',
             description: 'Recent security-relevant events and chain integrity.',
             onSelect: onOpenAuditLog,
+          },
+          {
+            key: 'admin-analytics',
+            icon: <BarChart3 size={18} aria-hidden="true" style={styles.icon} />,
+            title: 'Admin Analytics',
+            description: 'Message activity and dormant channels — metadata only, never content.',
+            onSelect: onOpenAdminAnalytics,
           },
           {
             key: 'system-admin',
