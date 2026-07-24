@@ -214,6 +214,35 @@ export const config = {
     autoArchiveMaxDays: Number(process.env.DM_AUTO_ARCHIVE_MAX_DAYS || 3650),
   },
 
+  adminAnalytics: {
+    // Admin Analytics Dashboard, collaboration tab (FEATURE_REQUEST.md,
+    // "collaboration structure and interaction trend"): a pair sharing at
+    // or below this many channels is suppressed from the membership-overlap
+    // graph entirely (not returned with a low count) — a deliberate
+    // anti-inference control, since a single shared channel is common and
+    // not a meaningful "bridge" signal. routes/adminAnalytics.js lets a
+    // caller raise this per-request via ?minSharedChannels=.
+    minSharedChannels: Number(process.env.ADMIN_ANALYTICS_MIN_SHARED_CHANNELS || 2),
+  },
+
+  sentiment: {
+    // Admin Analytics Dashboard, sentiment tab (FEATURE_REQUEST.md,
+    // "aggregate semantic/sentiment trend"): comma-separated anchor phrases
+    // embedded once, lazily, on first use and cached in-process
+    // (search/sentimentService.js) — a per-message tone score is the
+    // difference between its embedding's cosine similarity to the positive
+    // anchor text and to the negative one, reusing the embedding
+    // search/embeddingWorker.js already computes for semantic search rather
+    // than a second LLM call. A known cheap-but-approximate proxy, not a
+    // calibrated classifier — surfaced as such in the UI, not just here.
+    positiveAnchors: process.env.SENTIMENT_POSITIVE_ANCHORS || 'thanks, great work, appreciate it, sounds good',
+    negativeAnchors: process.env.SENTIMENT_NEGATIVE_ANCHORS || 'frustrated, blocked, this is broken, not working',
+    // A bucket with fewer than this many scored messages is dropped from a
+    // sentiment-trend response entirely rather than returned as a
+    // wide-variance average one terse or sarcastic message could dominate.
+    minBucketMessages: Number(process.env.SENTIMENT_MIN_BUCKET_MESSAGES || 5),
+  },
+
   ws: {
     // Configurable for reverse-proxy deployment (PROJECT_PLAN.md Section 8,
     // Phase 3: "Make the WebSocket path configurable").

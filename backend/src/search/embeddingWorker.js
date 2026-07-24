@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { embedText, toVectorLiteral } from './embeddingService.js';
+import { computeSentimentScore } from './sentimentService.js';
 
 // Async, failure-tolerant ingestion (FEATURE_REQUEST.md entry 1): polls the
 // embedding_jobs queue table on a timer, same setInterval-sweep shape as
@@ -55,6 +56,12 @@ async function processJob(db, job) {
 
   try {
     const embedding = await embedText(db, message.content);
+    // Sentiment scoring (FEATURE_REQUEST.md's "aggregate semantic/sentiment
+    // trend" entry) reuses this same embedding — never a second
+    // embedText() call for the message itself, only for the anchor phrases
+    // the first time any message is ever processed (sentimentService.js's
+    // own module-level cache).
+    const sentimentScore = await computeSentimentScore(db, embedding);
     await db.transaction(async (trx) => {
       await trx('message_embeddings')
         .insert({
@@ -64,6 +71,10 @@ async function processJob(db, job) {
         })
         .onConflict('message_id')
         .merge(['embedding', 'model']);
+      await trx('message_sentiment_scores')
+        .insert({ message_id: job.message_id, score: sentimentScore, model: config.embedding.model })
+        .onConflict('message_id')
+        .merge(['score', 'model']);
       await trx('embedding_jobs').where({ message_id: job.message_id }).del();
     });
     status.totalProcessed += 1;

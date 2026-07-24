@@ -7,6 +7,7 @@ import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, authHeader } from './helpers/testUsers.js';
 import { runEmbeddingWorkerTick, _resetForTests } from '../src/search/embeddingWorker.js';
 import { _resetForTests as resetEmbeddingGate } from '../src/search/embeddingConcurrencyGate.js';
+import { _resetAnchorCacheForTests } from '../src/search/sentimentService.js';
 
 // FEATURE_REQUEST.md entry 1: "Failed embedding jobs should be retryable and
 // observable ... a lightweight DB-backed queue table is acceptable." Exercises
@@ -27,6 +28,7 @@ beforeEach(async () => {
   await resetDb(db);
   _resetForTests();
   resetEmbeddingGate();
+  _resetAnchorCacheForTests();
 });
 
 afterEach(() => {
@@ -64,6 +66,38 @@ test('processes a pending job: writes message_embeddings and removes the job row
   const embeddingRow = await db('message_embeddings').where({ message_id: messageId }).first();
   expect(embeddingRow).toBeDefined();
   expect(embeddingRow.model).toBe(config.embedding.model);
+});
+
+// FEATURE_REQUEST.md's "aggregate semantic/sentiment trend" entry:
+// message_sentiment_scores is written from the same embedText() call as
+// message_embeddings, never a second embedding of the message content —
+// the only additional adapter calls this can ever trigger are the two
+// anchor-phrase embeddings, and only on the very first message any test (or
+// process) ever scores, since sentimentService.js caches them afterward.
+test('writes message_sentiment_scores alongside message_embeddings, from the same embedding call', async () => {
+  const messageId = await createMessage('workersent0');
+  const positiveVec = fakeEmbedding().map((v) => v + 1);
+  const negativeVec = fakeEmbedding().map((v) => v - 1);
+  const messageVec = fakeEmbedding();
+  let fetchCallCount = 0;
+
+  jest.spyOn(global, 'fetch').mockImplementation(async (_url, opts) => {
+    fetchCallCount += 1;
+    const body = JSON.parse(opts.body);
+    if (body.prompt === config.sentiment.positiveAnchors) return makeEmbeddingResponse(positiveVec);
+    if (body.prompt === config.sentiment.negativeAnchors) return makeEmbeddingResponse(negativeVec);
+    return makeEmbeddingResponse(messageVec);
+  });
+
+  await runEmbeddingWorkerTick(db);
+
+  const sentimentRow = await db('message_sentiment_scores').where({ message_id: messageId }).first();
+  expect(sentimentRow).toBeDefined();
+  expect(sentimentRow.model).toBe(config.embedding.model);
+  expect(typeof sentimentRow.score).toBe('number');
+  // 1 call for the message's own embedding + 2 for the (cold-cache) anchors
+  // — never a second call re-embedding the message for sentiment scoring.
+  expect(fetchCallCount).toBe(3);
 });
 
 test('a provider failure leaves the job retryable (pending, attempts incremented), not deleted', async () => {
