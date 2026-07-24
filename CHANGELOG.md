@@ -16,6 +16,14 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.3.1] — 2026-07-24
+
+**Migrations**: none. **New env vars**: none.
+
+The previous release's sentiment-trend feature only scores a message as a side effect of its embedding job, and that job is only ever enqueued at message-creation time — every message that already existed before `v1.3.0` shipped had already been embedded (and its job row deleted) long before, so none of them would ever get a sentiment score without help. New `scripts/backfill-sentiment-scores.mjs` (kept in the repo — any other deployment upgrading past `v1.3.0` hits the identical gap): a set-based, safely-re-runnable SQL backfill computed directly from each message's already-stored embedding via pgvector's `<=>` operator, no re-embedding required. Run once against this environment's real database: 87 pre-existing messages backfilled. See `PROJECT_PLAN.md` Section 11, "Backfill sentiment scores for messages that predate the sentiment feature" (2026-07-24), for full detail, including a real concurrency-gate bug found and fixed while writing it.
+
+Full diff: `git diff v1.3.0..v1.3.1`.
+
 ## [1.3.0] — 2026-07-24
 
 **Migrations**: `0025_message_sentiment_scores.js` — additive (new table, no changes to existing tables). No data loss, nothing to review before upgrading.
