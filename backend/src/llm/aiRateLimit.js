@@ -55,3 +55,18 @@ export const aiDigestRateLimiter = rateLimit({
   keyGenerator: (req) => `digest:${req.user.id}`,
   handler: jsonRateLimitHandler,
 });
+
+// FEATURE_REQUEST.md entry 4, AI-generated "What we know" entity summary:
+// same reasoning/ceiling as aiProxyRateLimiter (one full generation per
+// call), kept as its own limiter/key rather than sharing aiProxyRateLimiter's
+// budget so a burst of channel summaries elsewhere can't starve entity
+// summaries or vice versa.
+export const aiEntitySummaryRateLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `entity-summary:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});

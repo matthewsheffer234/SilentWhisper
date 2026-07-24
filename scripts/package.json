@@ -1,6 +1,6 @@
 {
   "name": "silent-whisper-scripts",
-  "version": "1.3.3",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "Standalone local maintenance utilities for Silent Whisper — deliberately its own small dependency tree (see verify-audit-log.mjs), not folded into /backend.",

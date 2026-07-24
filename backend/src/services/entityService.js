@@ -1,5 +1,22 @@
+import { ValidationError, ConflictError } from '../errors.js';
+
 export const ENTITY_RE = /\[\[([^\[\]]{1,255})\]\]/g;
 export const MAX_ENTITIES_PER_MESSAGE = 20;
+
+// FEATURE_REQUEST.md entry 4: editable entity metadata. A small fixed set
+// rather than a free-text field — matching users.status/invitations.status'
+// existing "app-layer enum, no DB CHECK constraint" convention (validation.js
+// assertEnum is what actually enforces this at the API boundary).
+export const ENTITY_STATUSES = ['ACTIVE', 'DEPRECATED', 'ARCHIVED'];
+
+// FEATURE_REQUEST.md entry 4: entity_relationships.relationship_type. Fixed,
+// small, and symmetric-agnostic (the UI/route layer decides source vs.
+// target) rather than open text, so relationships stay queryable/groupable
+// rather than accumulating synonyms ("depends on" vs. "requires").
+export const RELATIONSHIP_TYPES = ['DEPENDS_ON', 'OWNED_BY', 'RELATED_TO', 'BLOCKS', 'PART_OF'];
+
+export const MAX_ALIASES = 20;
+export const MAX_ALIAS_LENGTH = 255;
 
 export function normalizeEntityName(name) {
   return String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -44,6 +61,51 @@ async function findOrCreateEntity(db, { workspaceId, canonicalName, normalizedNa
   if (inserted) return inserted;
 
   return findEntityByName(db, workspaceId, normalizedName);
+}
+
+// FEATURE_REQUEST.md entry 4: "alias normalization/collision behavior."
+// Aliases are stored normalized (matching how the aliases column is already
+// queried elsewhere in this file/entities.js — `? = ANY(aliases)` against a
+// normalized query string), deduped case/whitespace-insensitively within the
+// submitted list, and rejected outright if any normalized alias collides
+// with another entity's canonical name or alias set in the same workspace —
+// silently overwriting the collision would let two different entities
+// resolve to the same [[bracket]] text, breaking the extraction/resolve
+// paths' "exactly one entity per name per workspace" invariant.
+export async function normalizeAndValidateAliases(db, { workspaceId, entityId, aliases }) {
+  if (!Array.isArray(aliases)) {
+    throw new ValidationError('aliases must be an array');
+  }
+  if (aliases.length > MAX_ALIASES) {
+    throw new ValidationError(`aliases must have at most ${MAX_ALIASES} entries`);
+  }
+
+  const normalizedAliases = [];
+  const seen = new Set();
+  for (const raw of aliases) {
+    if (typeof raw !== 'string' || raw.trim().length === 0 || raw.length > MAX_ALIAS_LENGTH) {
+      throw new ValidationError(`each alias must be 1-${MAX_ALIAS_LENGTH} characters`);
+    }
+    const normalized = normalizeEntityName(raw);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    normalizedAliases.push(normalized);
+  }
+
+  if (normalizedAliases.length === 0) return [];
+
+  const collision = await db('entities')
+    .where('workspace_id', workspaceId)
+    .andWhere('id', '<>', entityId)
+    .andWhere(function whereCollides() {
+      this.whereIn('normalized_name', normalizedAliases).orWhereRaw('aliases && ?::varchar[]', [normalizedAliases]);
+    })
+    .first('id', 'canonical_name');
+  if (collision) {
+    throw new ConflictError(`Alias conflicts with existing entity "${collision.canonical_name}"`);
+  }
+
+  return normalizedAliases;
 }
 
 export async function linkMessageEntities(db, { content, messageId, workspaceId, createdBy }) {

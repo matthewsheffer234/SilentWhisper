@@ -21,3 +21,23 @@ export const listEntityReferences = (workspaceId, entityId, { limit, before } = 
   const qs = params.toString();
   return apiFetch(`/workspaces/${workspaceId}/entities/${entityId}/references${qs ? `?${qs}` : ''}`);
 };
+
+// FEATURE_REQUEST.md entry 4: editable entity metadata, entity_relationships,
+// and the AI-generated "What we know" summary.
+export const updateEntity = (workspaceId, entityId, patch) =>
+  apiFetch(`/workspaces/${workspaceId}/entities/${entityId}`, { method: 'PATCH', body: patch });
+
+export const createEntityRelationship = (workspaceId, entityId, { targetEntityId, relationshipType }) =>
+  apiFetch(`/workspaces/${workspaceId}/entities/${entityId}/relationships`, {
+    method: 'POST',
+    body: { targetEntityId, relationshipType },
+  });
+
+export const deleteEntityRelationship = (workspaceId, entityId, relationshipId) =>
+  apiFetch(`/workspaces/${workspaceId}/entities/${entityId}/relationships/${relationshipId}`, { method: 'DELETE' });
+
+export const getEntitySummary = (workspaceId, entityId) =>
+  apiFetch(`/workspaces/${workspaceId}/entities/${entityId}/ai/summary`);
+
+export const generateEntitySummary = (workspaceId, entityId) =>
+  apiFetch(`/workspaces/${workspaceId}/entities/${entityId}/ai/summary`, { method: 'POST' });

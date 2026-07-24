@@ -1,11 +1,20 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth/requireAuth.js';
-import { requireWorkspaceMember } from '../authz/membershipService.js';
+import { requireWorkspaceMember, getWorkspaceRole } from '../authz/membershipService.js';
 import { entitySearchLimiter } from '../auth/rateLimit.js';
-import { assertUuid, assertBoundedInt } from '../validation.js';
-import { ValidationError, NotFoundError } from '../errors.js';
-import { normalizeEntityName } from '../services/entityService.js';
+import { aiEntitySummaryRateLimiter } from '../llm/aiRateLimit.js';
+import { assertUuid, assertBoundedInt, assertShortString, assertEnum, assertHttpUrl } from '../validation.js';
+import { ValidationError, NotFoundError, ConflictError } from '../errors.js';
+import {
+  normalizeEntityName,
+  normalizeAndValidateAliases,
+  ENTITY_STATUSES,
+  RELATIONSHIP_TYPES,
+} from '../services/entityService.js';
+import { parseTasks } from '../services/taskParser.js';
+import { appendAuditEvent } from '../audit/auditService.js';
+import { generateEntitySummary } from '../services/entitySummaryService.js';
 
 export const entitiesRouter = Router();
 
@@ -16,6 +25,13 @@ const ENTITY_SEARCH_MAX_LIMIT = 8;
 const ENTITY_QUERY_MAX_LENGTH = 255;
 const ENTITY_REFERENCES_DEFAULT_LIMIT = 20;
 const ENTITY_REFERENCES_MAX_LIMIT = 50;
+const ENTITY_DESCRIPTION_MAX_LENGTH = 4000;
+const MAX_TAGS = 10;
+const MAX_TAG_LENGTH = 40;
+// Bounds how many of an entity's authorized references the AI summary and
+// the linked-action-items scan ever look at — same "bounded window, not an
+// unbounded scan" instinct as tasks.js's dashboard and workspaceDigestService.
+const ENTITY_SUMMARY_MAX_REFERENCES = 40;
 
 function serializeEntity(row) {
   return {
@@ -25,10 +41,84 @@ function serializeEntity(row) {
     normalizedName: row.normalized_name,
     aliases: row.aliases ?? [],
     description: row.description ?? null,
+    ownerId: row.owner_id ?? null,
+    ownerUsername: row.owner_username ?? null,
+    ownerDisplayName: row.owner_display_name ?? null,
+    status: row.status ?? 'ACTIVE',
+    tags: row.tags ?? [],
+    referenceUrl: row.reference_url ?? null,
     createdBy: row.created_by ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function serializeRelationship(row, fromEntityId) {
+  const outgoing = row.source_entity_id === fromEntityId;
+  return {
+    id: row.id,
+    relationshipType: row.relationship_type,
+    direction: outgoing ? 'outgoing' : 'incoming',
+    relatedEntity: {
+      id: outgoing ? row.target_entity_id : row.source_entity_id,
+      canonicalName: outgoing ? row.target_canonical_name : row.source_canonical_name,
+    },
+    createdBy: row.created_by ?? null,
+    createdAt: row.created_at,
+  };
+}
+
+function serializeSummary(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    text: row.summary_text,
+    citations: row.citations,
+    provider: row.provider,
+    promptVersion: row.prompt_version,
+    generatedBy: row.generated_by ?? null,
+    generatedAt: row.generated_at,
+  };
+}
+
+// tasks.js's own two-step pattern (a cheap SQL narrowing, then the real
+// tokenizer): here the "narrowing" is already done for us by referencesQuery
+// (channel-membership-authorized, bounded) — this just runs parseTasks()
+// over already-fetched, already-authorized rows rather than issuing a
+// second query. FEATURE_REQUEST.md entry 4: "surface... owner-tagged tasks
+// as linked action items."
+function extractLinkedActionItems(referenceRows) {
+  const items = [];
+  for (const row of referenceRows) {
+    for (const task of parseTasks(row.content)) {
+      items.push({
+        messageId: row.message_id,
+        channelId: row.channel_id,
+        channelName: row.channel_name,
+        taskIndex: task.index,
+        checked: task.checked,
+        text: task.text,
+        owner: task.owner,
+        messageCreatedAt: row.created_at,
+      });
+    }
+  }
+  return items;
+}
+
+function validateTags(tags) {
+  if (!Array.isArray(tags)) {
+    throw new ValidationError('tags must be an array');
+  }
+  if (tags.length > MAX_TAGS) {
+    throw new ValidationError(`tags must have at most ${MAX_TAGS} entries`);
+  }
+  const seen = new Set();
+  for (const tag of tags) {
+    assertShortString(tag, { maxLength: MAX_TAG_LENGTH }, 'tag');
+    seen.add(tag.trim().toLowerCase());
+  }
+  return [...seen];
 }
 
 function serializeReference(row) {
@@ -70,12 +160,45 @@ function parseReferencePagination(query) {
   return { limit, before };
 }
 
+// Left-joins the owner (if any) so every call site gets full serializable
+// detail for free — cheap (one extra indexed join on a primary key) and
+// keeps serializeEntity's owner-display fields populated everywhere this is
+// used, rather than only on the detail route.
 async function requireWorkspaceEntity(workspaceId, entityId) {
-  const entity = await db('entities').where({ id: entityId, workspace_id: workspaceId }).first();
+  const entity = await db('entities as e')
+    .leftJoin('users as owner', 'owner.id', 'e.owner_id')
+    .where('e.id', entityId)
+    .andWhere('e.workspace_id', workspaceId)
+    .first('e.*', 'owner.username as owner_username', 'owner.display_name as owner_display_name');
   if (!entity) {
     throw new NotFoundError('Entity not found');
   }
   return entity;
+}
+
+function loadRelationships(workspaceId, entityId) {
+  return db('entity_relationships as r')
+    .join('entities as s', 's.id', 'r.source_entity_id')
+    .join('entities as t', 't.id', 'r.target_entity_id')
+    .where('r.workspace_id', workspaceId)
+    .andWhere(function whereInvolvesEntity() {
+      this.where('r.source_entity_id', entityId).orWhere('r.target_entity_id', entityId);
+    })
+    .orderBy('r.created_at', 'desc')
+    .select(
+      'r.id',
+      'r.relationship_type',
+      'r.source_entity_id',
+      'r.target_entity_id',
+      'r.created_by',
+      'r.created_at',
+      's.canonical_name as source_canonical_name',
+      't.canonical_name as target_canonical_name',
+    );
+}
+
+function loadLatestSummary(entityId) {
+  return db('entity_summaries').where({ entity_id: entityId }).orderBy('generated_at', 'desc').first();
 }
 
 function referencesQuery({ workspaceId, entityId, userId }) {
@@ -179,10 +302,23 @@ entitiesRouter.get('/workspaces/:workspaceId/entities/:entityId', async (req, re
         'm.created_at',
       );
 
+    const [relationshipRows, latestSummary] = await Promise.all([
+      loadRelationships(workspaceId, entityId),
+      loadLatestSummary(entityId),
+    ]);
+
     res.json({
       ...serializeEntity(entity),
       referenceCount: Number(countRow?.reference_count ?? 0),
       recentReferences: referenceRows.map(serializeReference),
+      // Derived from the same authorized, bounded reference set already
+      // fetched above — never a second, wider query. A private-channel
+      // reference the caller can't see contributes neither a reference nor a
+      // linked action item, for the identical reason it's already absent
+      // from recentReferences.
+      linkedActionItems: extractLinkedActionItems(referenceRows),
+      relationships: relationshipRows.map((r) => serializeRelationship(r, entityId)),
+      summary: serializeSummary(latestSummary),
     });
   } catch (err) {
     next(err);
@@ -218,6 +354,282 @@ entitiesRouter.get('/workspaces/:workspaceId/entities/:entityId/references', asy
       );
 
     res.json(rows.map(serializeReference));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 4: editable entity metadata. Gated on plain
+// workspace membership, the same bar message-send/[[Entity]] extraction
+// already clears — entities are a collaborative, wiki-like artifact built
+// out of ordinary channel messages, not an admin-tier resource, so this
+// deliberately does not introduce a role-gated permission for a single
+// consumer (authz/permissions.js's own stated convention against unused
+// abstraction). Every field is independently optional in the body — only
+// keys actually present are validated/updated, so a client can patch just
+// `status` without resending the rest.
+entitiesRouter.patch('/workspaces/:workspaceId/entities/:entityId', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const entityId = assertUuid(req.params.entityId, 'entityId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceEntity(workspaceId, entityId);
+
+    const body = req.body ?? {};
+    const update = {};
+    const fieldsChanged = [];
+
+    if (body.description !== undefined) {
+      update.description =
+        body.description === null ? null : assertShortString(body.description, { maxLength: ENTITY_DESCRIPTION_MAX_LENGTH }, 'description');
+      fieldsChanged.push('description');
+    }
+    if (body.aliases !== undefined) {
+      update.aliases = await normalizeAndValidateAliases(db, { workspaceId, entityId, aliases: body.aliases });
+      fieldsChanged.push('aliases');
+    }
+    if (body.status !== undefined) {
+      update.status = assertEnum(body.status, ENTITY_STATUSES, 'status');
+      fieldsChanged.push('status');
+    }
+    if (body.tags !== undefined) {
+      update.tags = validateTags(body.tags);
+      fieldsChanged.push('tags');
+    }
+    if (body.referenceUrl !== undefined) {
+      update.reference_url = body.referenceUrl === null ? null : assertHttpUrl(body.referenceUrl, 'referenceUrl');
+      fieldsChanged.push('referenceUrl');
+    }
+    if (body.ownerId !== undefined) {
+      if (body.ownerId === null) {
+        update.owner_id = null;
+      } else {
+        const ownerId = assertUuid(body.ownerId, 'ownerId');
+        const ownerRole = await getWorkspaceRole(db, ownerId, workspaceId);
+        if (!ownerRole) {
+          throw new ValidationError('ownerId must be a member of this workspace');
+        }
+        update.owner_id = ownerId;
+      }
+      fieldsChanged.push('ownerId');
+    }
+
+    if (fieldsChanged.length === 0) {
+      throw new ValidationError('No updatable fields provided');
+    }
+
+    update.updated_at = db.fn.now();
+    await db('entities').where({ id: entityId, workspace_id: workspaceId }).update(update);
+    const updated = await requireWorkspaceEntity(workspaceId, entityId);
+
+    // Never the description/alias/tag text itself in the audit payload —
+    // matching this codebase's absolute "never log raw content" convention
+    // (payload carries lengths/counts/flags everywhere else, not the text).
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ENTITY_METADATA_UPDATED',
+      targetResource: entityId,
+      payload: {
+        workspaceId,
+        fieldsChanged,
+        status: updated.status,
+        hasOwner: Boolean(updated.owner_id),
+        tagCount: updated.tags?.length ?? 0,
+        aliasCount: updated.aliases?.length ?? 0,
+      },
+    });
+
+    res.json(serializeEntity(updated));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 4: entity_relationships. Symmetric authorization
+// with the metadata route above — any workspace member may propose a
+// relationship, matching the same "collaborative wiki, not an admin
+// resource" reasoning.
+entitiesRouter.post('/workspaces/:workspaceId/entities/:entityId/relationships', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const entityId = assertUuid(req.params.entityId, 'entityId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceEntity(workspaceId, entityId);
+
+    const targetEntityId = assertUuid(req.body?.targetEntityId, 'targetEntityId');
+    const relationshipType = assertEnum(req.body?.relationshipType, RELATIONSHIP_TYPES, 'relationshipType');
+    if (targetEntityId === entityId) {
+      throw new ValidationError('An entity cannot have a relationship with itself');
+    }
+    // 404s if targetEntityId doesn't exist or belongs to a different
+    // workspace — the same existence-hiding requireWorkspaceEntity already
+    // gives every other route.
+    const targetEntity = await requireWorkspaceEntity(workspaceId, targetEntityId);
+
+    let inserted;
+    try {
+      [inserted] = await db('entity_relationships')
+        .insert({
+          workspace_id: workspaceId,
+          source_entity_id: entityId,
+          target_entity_id: targetEntityId,
+          relationship_type: relationshipType,
+          created_by: req.user.id,
+        })
+        .returning('*');
+    } catch (err) {
+      if (err.code === '23505') {
+        throw new ConflictError('This relationship already exists');
+      }
+      throw err;
+    }
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ENTITY_RELATIONSHIP_CREATED',
+      targetResource: inserted.id,
+      payload: { workspaceId, sourceEntityId: entityId, targetEntityId, relationshipType },
+    });
+
+    res.status(201).json({
+      id: inserted.id,
+      relationshipType: inserted.relationship_type,
+      direction: 'outgoing',
+      relatedEntity: { id: targetEntity.id, canonicalName: targetEntity.canonical_name },
+      createdBy: inserted.created_by,
+      createdAt: inserted.created_at,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+entitiesRouter.delete('/workspaces/:workspaceId/entities/:entityId/relationships/:relationshipId', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const entityId = assertUuid(req.params.entityId, 'entityId');
+    const relationshipId = assertUuid(req.params.relationshipId, 'relationshipId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceEntity(workspaceId, entityId);
+
+    const relationship = await db('entity_relationships')
+      .where({ id: relationshipId, workspace_id: workspaceId })
+      .andWhere(function whereInvolvesEntity() {
+        this.where('source_entity_id', entityId).orWhere('target_entity_id', entityId);
+      })
+      .first();
+    if (!relationship) {
+      throw new NotFoundError('Relationship not found');
+    }
+
+    await db('entity_relationships').where({ id: relationshipId }).delete();
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'ENTITY_RELATIONSHIP_REMOVED',
+      targetResource: relationshipId,
+      payload: {
+        workspaceId,
+        sourceEntityId: relationship.source_entity_id,
+        targetEntityId: relationship.target_entity_id,
+        relationshipType: relationship.relationship_type,
+      },
+    });
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 4: AI-generated "What we know" summary. GET
+// returns the latest cached revision only (cheap, no LLM call) so opening an
+// entity page never triggers inference by itself; POST regenerates. Both
+// compute/read from the same authorized reference set referencesQuery
+// already restricts to channels the caller can read — a summary is never
+// built from, and never cites, a reference the requesting caller couldn't
+// otherwise see, even though the stored row itself is workspace-visible
+// once generated (matching the design's "computed only from channels the
+// caller can read" rule; the citation list is what future readers use to
+// judge whether the summary might reference something outside their own
+// access, since a summary generated by a broader-access member could still
+// name a channel a later reader can't open).
+entitiesRouter.get('/workspaces/:workspaceId/entities/:entityId/ai/summary', async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const entityId = assertUuid(req.params.entityId, 'entityId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceEntity(workspaceId, entityId);
+
+    const summary = await loadLatestSummary(entityId);
+    res.json(serializeSummary(summary));
+  } catch (err) {
+    next(err);
+  }
+});
+
+entitiesRouter.post('/workspaces/:workspaceId/entities/:entityId/ai/summary', aiEntitySummaryRateLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const entityId = assertUuid(req.params.entityId, 'entityId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    const entity = await requireWorkspaceEntity(workspaceId, entityId);
+
+    const referenceRows = await referencesQuery({ workspaceId, entityId, userId: req.user.id })
+      .orderBy('m.created_at', 'desc')
+      .limit(ENTITY_SUMMARY_MAX_REFERENCES)
+      .select('m.id as message_id', 'm.channel_id', 'c.name as channel_name', 'm.user_id', 'u.username', 'm.content', 'm.created_at');
+
+    if (referenceRows.length === 0) {
+      throw new ValidationError('No references available to summarize for this entity yet');
+    }
+
+    const controller = new AbortController();
+    res.on('close', () => controller.abort());
+
+    const result = await generateEntitySummary(db, {
+      entityName: entity.canonical_name,
+      references: referenceRows.map((r) => ({ channelName: r.channel_name, username: r.username, content: r.content })),
+      signal: controller.signal,
+    });
+
+    const citations = referenceRows.map((r) => ({
+      messageId: r.message_id,
+      channelId: r.channel_id,
+      channelName: r.channel_name,
+      createdAt: r.created_at,
+    }));
+
+    const [inserted] = await db('entity_summaries')
+      .insert({
+        entity_id: entityId,
+        summary_text: result.text,
+        citations: JSON.stringify(citations),
+        provider: result.provider,
+        prompt_version: result.promptVersion,
+        generated_by: req.user.id,
+      })
+      .returning('*');
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'AI_ENTITY_SUMMARY_REQUESTED',
+      targetResource: entityId,
+      payload: {
+        workspaceId,
+        provider: result.provider,
+        promptVersion: result.promptVersion,
+        truncatedInputLength: result.truncatedInputLength,
+        wasTruncated: result.wasTruncated,
+        referenceCount: referenceRows.length,
+      },
+    });
+
+    res.status(201).json(serializeSummary(inserted));
   } catch (err) {
     next(err);
   }

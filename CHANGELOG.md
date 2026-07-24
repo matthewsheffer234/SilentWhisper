@@ -16,6 +16,24 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.4.0] — 2026-07-24
+
+**Migrations**: `0026_entity_metadata_relationships_summaries.js` — additive (four new nullable/defaulted columns on `entities`: `owner_id`, `status`, `tags`, `reference_url`; two new tables, `entity_relationships` and `entity_summaries`). No data loss, nothing to review before upgrading.
+**New env vars**: none.
+
+Implemented `FEATURE_REQUEST.md` backlog entry 4, "Entity pages as a lightweight knowledge base" — the scope left over after entry 2 (Knowledge Explorer, still `Proposed`) covers trending/SME/citation-history: editable entity metadata, `entity_relationships`, and an AI-generated "What we know" summary.
+
+- `PATCH /api/workspaces/:workspaceId/entities/:entityId` — any workspace member can edit an entity's `description`, `aliases` (collision-checked against other entities in the same workspace), `status` (`ACTIVE`/`DEPRECATED`/`ARCHIVED`), `tags`, `ownerId` (must be a workspace member), and an optional `referenceUrl`. Audited as `ENTITY_METADATA_UPDATED` (field names and counts only, never the description/alias/tag text itself).
+- `POST`/`DELETE /api/workspaces/:workspaceId/entities/:entityId/relationships` — a fixed relationship-type vocabulary (`DEPENDS_ON`/`OWNED_BY`/`RELATED_TO`/`BLOCKS`/`PART_OF`), workspace-isolated, self-relationships and duplicates rejected. Audited as `ENTITY_RELATIONSHIP_CREATED`/`ENTITY_RELATIONSHIP_REMOVED`.
+- `GET`/`POST /api/workspaces/:workspaceId/entities/:entityId/ai/summary` — an AI-generated "What we know" summary built only from the caller's channel-membership-authorized references (the same join `referencesQuery` already restricts search/detail to), stored as a revision history (`entity_summaries`, never overwritten) with provider/prompt-version metadata and a citation list. `POST` regenerates; `GET` reads the latest cached revision with no LLM call. Rate-limited (`aiEntitySummaryRateLimiter`) and audited as `AI_ENTITY_SUMMARY_REQUESTED`.
+- `GET /api/workspaces/:workspaceId/entities/:entityId` now also returns `relationships` (bidirectional, both entities' detail responses stay in sync), `linkedActionItems` (inline Markdown checkbox tasks parsed from the same authorized, bounded reference set — no second query), and the cached `summary`.
+- Explicitly out of scope for this entry, flagged rather than silently skipped: "pinned messages" and "linked decisions," both named in the original design, have no backing feature anywhere in this codebase yet (no pinning feature; entry 3's `decision` concept is still `Proposed`) — nothing to surface until those exist.
+- Frontend: `EntityDetailsPanel.jsx` gained an inline metadata edit form, a relationships list with an entity-search-and-add control, a linked-action-items list, and a "What we know" section with a Generate/Regenerate button.
+
+See `PROJECT_PLAN.md` Section 11, "Entity pages as a lightweight knowledge base: editable metadata, entity_relationships, and AI-generated summaries" (2026-07-24), for full detail.
+
+Full diff: `git diff v1.3.3..v1.4.0`.
+
 ## [1.3.3] — 2026-07-24
 
 **Migrations**: none. **New env vars**: none.
