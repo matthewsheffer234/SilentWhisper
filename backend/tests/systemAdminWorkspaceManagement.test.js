@@ -246,4 +246,31 @@ describe('system admin who is a genuine workspace member (owns the workspace)', 
     const memberRow = await db('channel_members').where({ channel_id: chRes.body.id, user_id: admin.userId }).first();
     expect(memberRow).toBeDefined();
   });
+
+  // Reported directly by the user: an admin who is a genuine plain MEMBER
+  // somewhere (e.g. via an ordinary self-service join, long before ever
+  // exercising the structural override) used to see that workspace's
+  // channel list exactly as an ordinary member would — PUBLIC channels plus
+  // only the PRIVATE ones they'd personally joined — because
+  // GET /:workspaceId/channels reused requireWorkspaceMemberOrSystemAdmin's
+  // viaSystemAdminOverride flag, which is false whenever any genuine role
+  // exists. "System admin" must never be a narrower guarantee than "no
+  // membership at all" — fixed by checking isSystemAdminUser independently
+  // for this route's read-visibility decision.
+  test('a genuine plain MEMBER can still see every channel, including PRIVATE ones they have not joined', async () => {
+    const owner = await signup('sawmselfmember0owner');
+    const admin = await seedSystemAdmin('sawmselfmember0');
+    const { workspaceId, privateChannelId } = await createWorkspaceWithPrivateChannel(owner);
+
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/members`)
+      .set(authHeader(owner.accessToken))
+      .send({ username: admin.username, role: 'MEMBER' });
+
+    const res = await request(app).get(`/api/workspaces/${workspaceId}/channels`).set(authHeader(admin.accessToken));
+    expect(res.status).toBe(200);
+    const privateRow = res.body.channels.find((c) => c.id === privateChannelId);
+    expect(privateRow).toBeDefined();
+    expect(privateRow.isMember).toBe(false);
+  });
 });

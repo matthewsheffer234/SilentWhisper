@@ -16,6 +16,14 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.5.1] — 2026-07-25
+
+**Migrations**: none. **New env vars**: none.
+
+Fixed a real bug reported directly by the user: `GET /api/workspaces/:workspaceId/channels` decided whether a system admin saw every channel (including PRIVATE ones they hadn't joined) using `requireWorkspaceMemberOrSystemAdmin`'s `viaSystemAdminOverride` flag — which is `false` whenever the caller holds *any* genuine workspace role, by design (needed elsewhere so channel creation correctly auto-joins a genuine owner/member). Reusing that same flag for this route's read-visibility decision meant a system admin who also happened to be a plain `MEMBER` of a workspace (e.g. from an earlier self-service join) saw the same narrowed PUBLIC-plus-own-PRIVATE list an ordinary member would — strictly *less* than a non-member admin gets, which defeats the point of "system admin." Fixed by checking `isSystemAdminUser` directly for this route's visibility decision, independent of the caller's own membership status; the write-path precedence (`POST /:workspaceId/channels`'s auto-join behavior) is unchanged.
+
+Full diff: `git diff v1.5.0..v1.5.1`.
+
 ## [1.5.0] — 2026-07-25
 
 **Migrations**: none.

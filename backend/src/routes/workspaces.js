@@ -1327,13 +1327,27 @@ workspacesRouter.patch('/:workspaceId/channels/:channelId', async (req, res, nex
 // Visible channels: every PUBLIC channel in the workspace (joinable, so
 // listable even before joining) plus PRIVATE channels the user already
 // belongs to. Never lists a PRIVATE channel the user isn't a member of
-// (Section 3, Authorization Model) — unless the caller is a system admin
-// structurally managing the workspace, in which case every channel
-// (including PRIVATE ones they don't belong to) is listed, matching the
-// same "manage the structure, not the content" boundary
-// requireWorkspaceMemberOrSystemAdmin documents: this exposes that a
-// private channel exists, its name, type, and member count, never its
+// (Section 3, Authorization Model) — unless the caller is a system admin,
+// in which case every channel (including PRIVATE ones they don't belong to)
+// is listed, matching the same "manage the structure, not the content"
+// boundary requireWorkspaceMemberOrSystemAdmin documents: this exposes that
+// a private channel exists, its name, type, and member count, never its
 // messages.
+//
+// Deliberately checks isSystemAdminUser directly here rather than trusting
+// requireWorkspaceMemberOrSystemAdmin's own viaSystemAdminOverride flag:
+// that flag is false whenever the caller holds *any* genuine workspace role
+// (by design — its own doc comment explains this is required so channel
+// *creation* correctly auto-joins a genuine owner/member rather than
+// silently skipping the channel_members insert). Reusing that same flag
+// here meant a system admin who also happened to be a plain MEMBER of a
+// workspace (e.g. via a normal self-service join, before ever exercising
+// the override) saw the same narrowed PUBLIC-plus-own-PRIVATE list an
+// ordinary member would — strictly less than a non-member admin, which
+// isn't the guarantee "system admin" is supposed to be. Read-visibility and
+// write-membership-insert are different questions with different correct
+// answers to "does genuine membership override admin status," so they're
+// no longer tied to the same boolean.
 //
 // FEATURE_REQUEST.md entry 2: offset-paginated ({channels, total, limit,
 // offset}), following GET /admin/users' precedent. Also replaces the
@@ -1343,7 +1357,8 @@ workspacesRouter.patch('/:workspaceId/channels/:channelId', async (req, res, nex
 workspacesRouter.get('/:workspaceId/channels', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
-    const { viaSystemAdminOverride } = await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
+    await requireWorkspaceMemberOrSystemAdmin(db, req.user.id, workspaceId);
+    const canSeeEveryChannel = await isSystemAdminUser(db, req.user.id);
     const { limit, offset } = parseOffsetPagination(req.query);
 
     const joinMembership = function joinMembership() {
@@ -1351,10 +1366,10 @@ workspacesRouter.get('/:workspaceId/channels', async (req, res, next) => {
     };
     const visibleToCallerFilter = (builder) => {
       builder.where('c.workspace_id', workspaceId);
-      if (!viaSystemAdminOverride) {
+      if (!canSeeEveryChannel) {
         builder.andWhere((b) => b.where('c.type', 'PUBLIC').orWhereNotNull('cm.user_id'));
       }
-      // viaSystemAdminOverride: every channel in the workspace, PUBLIC or
+      // canSeeEveryChannel: every channel in the workspace, PUBLIC or
       // PRIVATE — structural visibility only, see the doc comment above.
     };
 
