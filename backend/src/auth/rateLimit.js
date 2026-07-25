@@ -169,6 +169,34 @@ export const taskToggleLimiter = rateLimit({
   handler: jsonRateLimitHandler,
 });
 
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer): trending is the first
+// entity route that aggregates across every channel the caller belongs to
+// rather than reading a single already-identified entity, making it heavier
+// than entitySearchLimiter's per-keystroke point reads — same ceiling as
+// memberSearchLimiter/entitySearchLimiter as a starting budget since it's
+// still a single indexed-join query, not an LLM call.
+export const entityTrendingLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `entity-trending:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});
+
+// Same shape and ceiling as entityTrendingLimiter — a bounded, indexed
+// GROUP BY over the same authorized reference set /references already reads.
+export const entityExpertsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `entity-experts:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});
+
 // FEATURE_REQUEST.md entry 5 (Admin Analytics Dashboard): shared by every
 // route entries 5/6/7 add to routes/adminAnalytics.js — all aggregate SQL
 // reads of similar cost over the same tables, gated on requireSystemAdmin, so

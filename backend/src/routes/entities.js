@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { db } from '../db.js';
+import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { requireWorkspaceMember, getWorkspaceRole } from '../authz/membershipService.js';
-import { entitySearchLimiter } from '../auth/rateLimit.js';
+import { entitySearchLimiter, entityTrendingLimiter, entityExpertsLimiter } from '../auth/rateLimit.js';
 import { aiEntitySummaryRateLimiter } from '../llm/aiRateLimit.js';
-import { assertUuid, assertBoundedInt, assertShortString, assertEnum, assertHttpUrl } from '../validation.js';
+import { assertUuid, assertBoundedInt, assertShortString, assertEnum, assertHttpUrl, parseOffsetPagination } from '../validation.js';
 import { ValidationError, NotFoundError, ConflictError } from '../errors.js';
 import {
   normalizeEntityName,
@@ -26,6 +27,13 @@ const ENTITY_QUERY_MAX_LENGTH = 255;
 const ENTITY_REFERENCES_DEFAULT_LIMIT = 20;
 const ENTITY_REFERENCES_MAX_LIMIT = 50;
 const ENTITY_DESCRIPTION_MAX_LENGTH = 4000;
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer). A deployment can narrow
+// the default trending window per-request; this is just a sanity cap on how
+// far back a single request may ever reach — same precedent as
+// tasks.js's MAX_TASK_DASHBOARD_WINDOW_DAYS.
+const KNOWLEDGE_EXPLORER_TRENDING_MAX_WINDOW_DAYS = 365;
+const ENTITY_EXPERTS_DEFAULT_LIMIT = 5;
+const ENTITY_EXPERTS_MAX_LIMIT = 20;
 const MAX_TAGS = 10;
 const MAX_TAG_LENGTH = 40;
 // Bounds how many of an entity's authorized references the AI summary and
@@ -121,6 +129,11 @@ function validateTags(tags) {
   return [...seen];
 }
 
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Citation History): mirrors
+// exactly how GET /api/search/semantic already embeds parentMessage on a
+// threaded-reply hit (routes/search.js) — parentMessageId already told a
+// caller *whether* a reference is a reply, this adds what the parent
+// actually said so the UI can show thread context without a second fetch.
 function serializeReference(row) {
   return {
     messageId: row.message_id,
@@ -132,6 +145,15 @@ function serializeReference(row) {
     displayName: row.display_name,
     content: row.content,
     parentMessageId: row.parent_message_id,
+    parentMessage: row.parent_message_id
+      ? {
+          id: row.parent_message_id,
+          content: row.parent_content,
+          username: row.parent_username,
+          displayName: row.parent_display_name,
+          createdAt: row.parent_created_at,
+        }
+      : null,
     createdAt: row.created_at,
   };
 }
@@ -210,9 +232,30 @@ function referencesQuery({ workspaceId, entityId, userId }) {
       this.on('cm.channel_id', '=', 'c.id').andOn('cm.user_id', '=', db.raw('?', [userId]));
     })
     .join('users as u', 'u.id', 'm.user_id')
+    .leftJoin('messages as pm', 'pm.id', 'm.parent_message_id')
+    .leftJoin('users as pu', 'pu.id', 'pm.user_id')
     .where('e.id', entityId)
     .where('e.workspace_id', workspaceId)
     .where('c.workspace_id', workspaceId);
+}
+
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Trending Entities): the
+// ungrouped version of referencesQuery's exact join shape, minus the
+// entity_id filter — an entity referenced only in a channel the caller isn't
+// a member of contributes zero rows to the eventual GROUP BY (structural
+// privacy, not a filter layered on afterward), identical reasoning to
+// referencesQuery's own channel_members join.
+function trendingEntitiesBaseQuery({ workspaceId, userId, since }) {
+  return db('message_entities as me')
+    .join('entities as e', 'e.id', 'me.entity_id')
+    .join('messages as m', 'm.id', 'me.message_id')
+    .join('channels as c', 'c.id', 'm.channel_id')
+    .join('channel_members as cm', function joinMembership() {
+      this.on('cm.channel_id', '=', 'c.id').andOn('cm.user_id', '=', db.raw('?', [userId]));
+    })
+    .where('e.workspace_id', workspaceId)
+    .where('c.workspace_id', workspaceId)
+    .where('m.created_at', '>=', since);
 }
 
 entitiesRouter.get('/workspaces/:workspaceId/entities/search', entitySearchLimiter, async (req, res, next) => {
@@ -276,6 +319,52 @@ entitiesRouter.get('/workspaces/:workspaceId/entities/resolve', entitySearchLimi
   }
 });
 
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Trending Entities). Must
+// stay defined before GET /entities/:entityId — Express matches routes in
+// definition order, and "trending" is not a UUID, so it has to be caught
+// here rather than falling into the :entityId param (matching why
+// /search and /resolve above are already defined ahead of it too).
+entitiesRouter.get('/workspaces/:workspaceId/entities/trending', entityTrendingLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+
+    const windowDays =
+      req.query.windowDays !== undefined
+        ? assertBoundedInt(req.query.windowDays, { min: 1, max: KNOWLEDGE_EXPLORER_TRENDING_MAX_WINDOW_DAYS }, 'windowDays')
+        : config.knowledgeExplorer.trendingWindowDays;
+    const { limit, offset } = parseOffsetPagination(req.query);
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+    // Privacy is structural here, not a filter bolted on afterward: the
+    // inner join to channel_members (inside trendingEntitiesBaseQuery)
+    // means an entity referenced only in a channel the caller isn't a
+    // member of contributes zero rows to this GROUP BY — it never appears
+    // with a `referenceCount: 0` placeholder that would itself leak
+    // existence, it simply isn't in the result set.
+    const rows = await trendingEntitiesBaseQuery({ workspaceId, userId: req.user.id, since })
+      .groupBy('e.id', 'e.canonical_name')
+      .orderByRaw('count(*) desc, e.id asc')
+      .limit(limit)
+      .offset(offset)
+      .select('e.id', 'e.canonical_name', db.raw('count(*)::int as reference_count'));
+
+    const totalRow = await trendingEntitiesBaseQuery({ workspaceId, userId: req.user.id, since })
+      .countDistinct('e.id as count')
+      .first();
+
+    res.json({
+      entities: rows.map((r) => ({ id: r.id, canonicalName: r.canonical_name, referenceCount: Number(r.reference_count) })),
+      total: Number(totalRow?.count ?? 0),
+      limit,
+      offset,
+      windowDays,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 entitiesRouter.get('/workspaces/:workspaceId/entities/:entityId', async (req, res, next) => {
   try {
     const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
@@ -300,6 +389,10 @@ entitiesRouter.get('/workspaces/:workspaceId/entities/:entityId', async (req, re
         'm.content',
         'm.parent_message_id',
         'm.created_at',
+        'pm.content as parent_content',
+        'pu.username as parent_username',
+        'pu.display_name as parent_display_name',
+        'pm.created_at as parent_created_at',
       );
 
     const [relationshipRows, latestSummary] = await Promise.all([
@@ -351,9 +444,50 @@ entitiesRouter.get('/workspaces/:workspaceId/entities/:entityId/references', asy
         'm.content',
         'm.parent_message_id',
         'm.created_at',
+        'pm.content as parent_content',
+        'pu.username as parent_username',
+        'pu.display_name as parent_display_name',
+        'pm.created_at as parent_created_at',
       );
 
     res.json(rows.map(serializeReference));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Subject Matter Experts).
+// Reuses referencesQuery() unmodified — the identical caller-scoped join
+// /references and /:entityId already use — just grouped by contributor
+// instead of ordered by recency. Same structural-privacy guarantee: a user
+// whose only contributions to this entity are in a channel the caller can't
+// read simply never appears as a row for that caller.
+entitiesRouter.get('/workspaces/:workspaceId/entities/:entityId/experts', entityExpertsLimiter, async (req, res, next) => {
+  try {
+    const workspaceId = assertUuid(req.params.workspaceId, 'workspaceId');
+    const entityId = assertUuid(req.params.entityId, 'entityId');
+    await requireWorkspaceMember(db, req.user.id, workspaceId);
+    await requireWorkspaceEntity(workspaceId, entityId);
+
+    const limit =
+      req.query.limit !== undefined
+        ? assertBoundedInt(req.query.limit, { min: 1, max: ENTITY_EXPERTS_MAX_LIMIT }, 'limit')
+        : ENTITY_EXPERTS_DEFAULT_LIMIT;
+
+    const rows = await referencesQuery({ workspaceId, entityId, userId: req.user.id })
+      .groupBy('u.id', 'u.username', 'u.display_name')
+      .orderByRaw('count(*) desc, u.id asc')
+      .limit(limit)
+      .select('u.id as user_id', 'u.username', 'u.display_name', db.raw('count(*)::int as reference_count'));
+
+    res.json(
+      rows.map((r) => ({
+        userId: r.user_id,
+        username: r.username,
+        displayName: r.display_name,
+        referenceCount: Number(r.reference_count),
+      })),
+    );
   } catch (err) {
     next(err);
   }

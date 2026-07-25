@@ -1374,6 +1374,91 @@ test.describe('mentions', () => {
   });
 });
 
+// FEATURE_REQUEST.md entry 2: workspace-scoped Knowledge Explorer for the
+// [[Entity]] graph.
+test.describe('Knowledge Explorer (FEATURE_REQUEST.md entry 2)', () => {
+  test('trending lists an entity, its detail shows Subject Matter Experts, and View Context navigates into the right thread', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('knowexp');
+    const root = await sendMessage(seeded.accessToken, seeded.channel.id, 'ROOT-MARKER kicking off the incident');
+    await sendMessage(seeded.accessToken, seeded.channel.id, 'REPLY-MARKER update on [[Payments Service]]', root.id);
+    await sendMessage(seeded.accessToken, seeded.channel.id, 'TOPLEVEL-MARKER also about [[Payments Service]]');
+
+    await loginViaUi(page, seeded.username, seeded.password);
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    // Entity linking happens off the message-send path on an async worker
+    // (messageSideEffectsWorker.js, MESSAGE_SIDE_EFFECTS_WORKER_INTERVAL_MS,
+    // default 1s) — a message sent just before opening the explorer isn't
+    // guaranteed to have produced its entities/message_entities rows yet.
+    // The [[Payments Service]] link already rendering in the channel feed
+    // behind this panel does NOT prove otherwise: markdown.jsx renders
+    // [[Entity]] syntax as a clickable trigger purely client-side, with no
+    // dependency on the entity actually existing server-side yet. Retries by
+    // reopening the panel, the same "real async pipeline, poll for it"
+    // instinct as the semantic-search test's retry loop above.
+    const explorerDialog = page.getByRole('dialog', { name: 'Knowledge Explorer', exact: true });
+    const entityRow = explorerDialog.getByText('Payments Service', { exact: true });
+    const deadline = Date.now() + 20_000;
+    let found = false;
+    while (Date.now() < deadline && !found) {
+      // eslint-disable-next-line no-await-in-loop
+      await page.click('button[aria-label="Knowledge Explorer — trending entities"]');
+      // eslint-disable-next-line no-await-in-loop
+      await expect(explorerDialog).toBeVisible({ timeout: 10_000 });
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await entityRow.waitFor({ timeout: 2_000 });
+        found = true;
+      } catch {
+        // eslint-disable-next-line no-await-in-loop
+        await page.click('button[aria-label="Close Knowledge Explorer"]');
+        // eslint-disable-next-line no-await-in-loop
+        await expect(explorerDialog).not.toBeVisible();
+        // eslint-disable-next-line no-await-in-loop
+        await page.waitForTimeout(1_000);
+      }
+    }
+    expect(found).toBe(true);
+    await entityRow.click();
+
+    // Clicking a trending row opens EntityDetailsPanel.jsx (the same panel
+    // clicking an inline [[Entity]] mention already opens) and closes the
+    // explorer itself.
+    await expect(explorerDialog).not.toBeVisible();
+    const entityDialog = page.getByRole('dialog', { name: 'Payments Service entity details', exact: true });
+    await expect(entityDialog).toBeVisible({ timeout: 10_000 });
+
+    // Subject Matter Experts: the seeded user authored every reference, so
+    // they're the section's sole contributor. Scoped by data-testid — the
+    // same username string is also shown per-reference further down this
+    // same panel.
+    const smeSection = entityDialog.locator('[data-testid="entity-sme-section"]');
+    await expect(smeSection).toBeVisible({ timeout: 10_000 });
+    await expect(smeSection.getByText(seeded.username, { exact: true })).toBeVisible();
+
+    // View Context on the threaded reference closes the entity panel and
+    // opens the thread rooted at its parent message.
+    const replyContent = entityDialog.getByText('REPLY-MARKER', { exact: false });
+    await expect(replyContent).toBeVisible({ timeout: 10_000 });
+    const replyRow = replyContent.locator('..');
+    await replyRow.getByRole('button', { name: 'View context' }).click();
+
+    await expect(entityDialog).not.toBeVisible();
+    await page.waitForSelector('text=Thread', { timeout: 10_000 });
+    // Scoped to the `<aside>` containing ThreadSidebar's own "Close thread"
+    // button, not a bare page-wide `text=` locator — the root message's
+    // content is already visible in the main channel feed behind the
+    // sidebar too (it's the channel's very first message), so an unscoped
+    // locator resolves ambiguously to both copies.
+    const threadSidebar = page.locator('aside').filter({ has: page.locator('button[aria-label="Close thread"]') });
+    await expect(threadSidebar.getByText('ROOT-MARKER kicking off the incident')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
 test.describe('change password', () => {
   test('wrong current password shows an inline error; the correct flow changes the password and the new one works on next login', async ({
     page,

@@ -31,6 +31,7 @@ import WorkspaceSettingsSheet from './WorkspaceSettingsSheet.jsx';
 import NotificationPanel from './NotificationPanel.jsx';
 import ChannelDetailsPanel from './ChannelDetailsPanel.jsx';
 import EntityDetailsPanel from './EntityDetailsPanel.jsx';
+import KnowledgeExplorerPanel from './KnowledgeExplorerPanel.jsx';
 import CreateWorkspaceSheet from './CreateWorkspaceSheet.jsx';
 import CreateChannelSheet from './CreateChannelSheet.jsx';
 import NewMessageSheet from './NewMessageSheet.jsx';
@@ -149,6 +150,10 @@ function ChatShellInner() {
   // 6) — opened from WorkspaceHome's "Catch Me Up" button, always scoped to
   // whichever workspace is currently selected.
   const [digestOpen, setDigestOpen] = useState(false);
+  // FEATURE_REQUEST.md entry 2: Knowledge Explorer's Trending Entities list —
+  // same cross-channel, always-scoped-to-the-selected-workspace shape as
+  // digestOpen above.
+  const [knowledgeExplorerOpen, setKnowledgeExplorerOpen] = useState(false);
   // FEATURE_REQUEST.md's "workspace home and actionable empty states" entry:
   // lifted from WorkspaceSidebar.jsx's own local state (where it lived
   // when the sheet was only ever opened from the workspace row's own
@@ -928,6 +933,35 @@ function ChatShellInner() {
     [selectedWorkspaceId],
   );
 
+  // FEATURE_REQUEST.md entry 2 (Knowledge Explorer): opens the existing
+  // EntityDetailsPanel.jsx exactly as clicking an inline [[Entity]] mention
+  // already does via handleOpenEntity above — but a Knowledge Explorer row
+  // already carries the resolved {id, canonicalName} from the trending
+  // endpoint, so there's no name to re-resolve. Closes the explorer itself
+  // so the two Sheets don't stack.
+  function handleOpenEntityFromExplorer(entity) {
+    setEntityDetails({ workspaceId: selectedWorkspaceId, entity });
+    setKnowledgeExplorerOpen(false);
+  }
+
+  // FEATURE_REQUEST.md entry 2 (Knowledge Explorer, View Context): a thin
+  // wrapper reusing handleNavigateToSearchResult's exact shape above — a
+  // threaded reference resolves to "open the thread sidebar for its root",
+  // a top-level one resolves to "switch to the channel," matching every
+  // other navigation entry point in this app rather than inventing a third
+  // shape. Also closes the entity panel itself, since its own workspace/
+  // channel is about to change out from under it.
+  function handleViewContext(ref) {
+    if (ref.workspaceId && ref.workspaceId !== selectedWorkspaceId) {
+      setSelectedWorkspaceId(ref.workspaceId);
+    }
+    selectChannel(ref.channelId);
+    if (ref.parentMessage) {
+      openThread(ref.parentMessage, ref.channelId);
+    }
+    setEntityDetails(null);
+  }
+
   // FEATURE_REQUEST.md entry 3 (Direct Messages navigation): a DM/group-DM
   // isn't in channels[] (that list is fetched per-workspace) — falls back to
   // directMessages[] so selecting one still resolves to a real channel
@@ -998,6 +1032,7 @@ function ChatShellInner() {
         onOpenAdminPanel={() => setAdminPanelOpen(true)}
         onOpenWorkspaceSettings={setWorkspaceSettingsId}
         onOpenDigest={() => setDigestOpen(true)}
+        onOpenKnowledgeExplorer={() => setKnowledgeExplorerOpen(true)}
         notificationSummary={notificationSummary}
         onOpenNotifications={() => setNotificationsOpen(true)}
         onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
@@ -1113,6 +1148,7 @@ function ChatShellInner() {
           entityId={entityDetails.entity.id}
           initialEntity={entityDetails.entity}
           onClose={() => setEntityDetails(null)}
+          onViewContext={handleViewContext}
         />
       )}
       {aiSettingsOpen && <AiSettingsPanel onClose={() => setAiSettingsOpen(false)} />}
@@ -1136,6 +1172,13 @@ function ChatShellInner() {
       )}
       {digestOpen && selectedWorkspace && (
         <WorkspaceDigestPanel workspace={selectedWorkspace} channels={channels} onClose={() => setDigestOpen(false)} />
+      )}
+      {knowledgeExplorerOpen && selectedWorkspace && (
+        <KnowledgeExplorerPanel
+          workspaceId={selectedWorkspace.id}
+          onOpenEntity={handleOpenEntityFromExplorer}
+          onClose={() => setKnowledgeExplorerOpen(false)}
+        />
       )}
       {createOrgOpen && (
         <CreateOrganizationModal onClose={() => setCreateOrgOpen(false)} onCreate={handleCreateOrganization} />

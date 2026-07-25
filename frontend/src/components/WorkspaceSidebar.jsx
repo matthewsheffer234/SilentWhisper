@@ -14,6 +14,7 @@ import {
   User,
   Users,
   Sparkles,
+  Compass,
   LogOut,
 } from 'lucide-react';
 import { UserPresenceBadge } from '../context/PresenceContext.jsx';
@@ -75,6 +76,27 @@ function DigestTrigger({ onOpenDigest }) {
       }}
     >
       <Sparkles size={18} aria-hidden="true" />
+    </button>
+  );
+}
+
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, 2026-07-20 backlog): same
+// icon-only, aria-label-carried treatment as DigestTrigger above — read-only
+// (no write access required), so it reuses shouldShowDigestTrigger's exact
+// visibility condition (currently-selected workspace, at least one channel)
+// rather than a second, identically-shaped predicate.
+function KnowledgeExplorerTrigger({ onOpenKnowledgeExplorer }) {
+  return (
+    <button
+      type="button"
+      style={styles.overflowTrigger}
+      aria-label="Knowledge Explorer — trending entities"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenKnowledgeExplorer();
+      }}
+    >
+      <Compass size={18} aria-hidden="true" />
     </button>
   );
 }
@@ -309,6 +331,7 @@ function WorkspaceSidebar({
   onOpenAdminPanel,
   onOpenWorkspaceSettings,
   onOpenDigest,
+  onOpenKnowledgeExplorer,
   notificationSummary,
   onOpenNotifications,
   onOpenCreateWorkspace,
@@ -537,7 +560,10 @@ function WorkspaceSidebar({
                     state below — unlike the settings trigger, generating a
                     digest doesn't require write access to the workspace. */}
                 {shouldShowDigestTrigger(ws.id, selectedWorkspaceId, channels.length) && (
-                  <DigestTrigger onOpenDigest={onOpenDigest} />
+                  <>
+                    <DigestTrigger onOpenDigest={onOpenDigest} />
+                    <KnowledgeExplorerTrigger onOpenKnowledgeExplorer={onOpenKnowledgeExplorer} />
+                  </>
                 )}
                 <button
                   type="button"
@@ -571,7 +597,10 @@ function WorkspaceSidebar({
                 {/* Read-only, so shown even for an archived workspace —
                     same reasoning as the active-workspace row above. */}
                 {shouldShowDigestTrigger(ws.id, selectedWorkspaceId, channels.length) && (
-                  <DigestTrigger onOpenDigest={onOpenDigest} />
+                  <>
+                    <DigestTrigger onOpenDigest={onOpenDigest} />
+                    <KnowledgeExplorerTrigger onOpenKnowledgeExplorer={onOpenKnowledgeExplorer} />
+                  </>
                 )}
                 {hasPermission(ws.role, PERMISSIONS.WORKSPACE_ARCHIVE) && (
                   <button

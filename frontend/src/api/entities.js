@@ -14,6 +14,25 @@ export const resolveEntity = (workspaceId, name) => {
 
 export const getEntity = (workspaceId, entityId) => apiFetch(`/workspaces/${workspaceId}/entities/${entityId}`);
 
+// FEATURE_REQUEST.md entry 2: Knowledge Explorer's Trending Entities list.
+export const listTrendingEntities = (workspaceId, { windowDays, limit, offset } = {}) => {
+  const params = new URLSearchParams();
+  if (windowDays) params.set('windowDays', windowDays);
+  if (limit) params.set('limit', limit);
+  if (offset) params.set('offset', offset);
+  const qs = params.toString();
+  return apiFetch(`/workspaces/${workspaceId}/entities/trending${qs ? `?${qs}` : ''}`);
+};
+
+// FEATURE_REQUEST.md entry 2: Subject Matter Experts section on an entity's
+// detail view.
+export const listEntityExperts = (workspaceId, entityId, { limit } = {}) => {
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', limit);
+  const qs = params.toString();
+  return apiFetch(`/workspaces/${workspaceId}/entities/${entityId}/experts${qs ? `?${qs}` : ''}`);
+};
+
 export const listEntityReferences = (workspaceId, entityId, { limit, before } = {}) => {
   const params = new URLSearchParams();
   if (limit) params.set('limit', limit);

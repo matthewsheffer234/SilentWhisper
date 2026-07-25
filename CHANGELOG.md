@@ -16,6 +16,24 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.5.0] — 2026-07-25
+
+**Migrations**: none.
+**New env vars**: `KNOWLEDGE_EXPLORER_TRENDING_WINDOW_DAYS` (default `30`, optional).
+
+Implemented `FEATURE_REQUEST.md` backlog entry 2, "Workspace-scoped Knowledge Explorer for the `[[Entity]]` graph" — the trending/SME/citation-history/cross-channel-navigation slice entry 4 (now shipped as "Entity pages as a lightweight knowledge base," `v1.4.0`) deliberately left out.
+
+- `GET /api/workspaces/:workspaceId/entities/trending?windowDays=&limit=&offset=` — a workspace-wide leaderboard of `[[Entity]]` mentions, reusing the existing caller-scoped `channel_members` join so an entity referenced only in a channel the caller can't read never appears (not even with a zero count).
+- `GET /api/workspaces/:workspaceId/entities/:entityId/experts?limit=` — the same join grouped by contributor instead of entity, surfacing who's actually referenced a given entity, with the identical privacy guarantee.
+- `GET /api/workspaces/:workspaceId/entities/:entityId/references` (and the entity detail response) now embed `parentMessage` on a threaded reference, mirroring `GET /api/search/semantic`'s existing shape — no second fetch needed to show thread context.
+- `EntityDetailsPanel.jsx`: descriptions now render through the same Markdown pipeline as message content; a new Subject Matter Experts section; a "View context" action on each reference that switches workspace/channel and opens the right thread.
+- New `KnowledgeExplorerPanel.jsx`, reachable via a per-workspace sidebar trigger, showing the Trending list — clicking a row opens the existing entity detail panel.
+- New `entityTrendingLimiter`/`entityExpertsLimiter` rate limiters. No new audit events (unaudited, read-only, no LLM cost — matches every other plain entity read).
+
+See `PROJECT_PLAN.md` Section 11, "Workspace-scoped Knowledge Explorer for the `[[Entity]]` graph: trending, Subject Matter Experts, citation history, and View Context" (2026-07-25), for full detail.
+
+Full diff: `git diff v1.4.0..v1.5.0`.
+
 ## [1.4.0] — 2026-07-24
 
 **Migrations**: `0026_entity_metadata_relationships_summaries.js` — additive (four new nullable/defaulted columns on `entities`: `owner_id`, `status`, `tags`, `reference_url`; two new tables, `entity_relationships` and `entity_summaries`). No data loss, nothing to review before upgrading.

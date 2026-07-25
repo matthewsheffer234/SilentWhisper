@@ -235,6 +235,39 @@ describe('entity routes', () => {
     expect(page2.body.map((r) => r.content)).toEqual(['one [[Server Alpha]]']);
   });
 
+  // FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Citation History):
+  // serializeReference's new parentMessage field, mirroring how
+  // GET /api/search/semantic already embeds it for a threaded-reply hit.
+  test('a threaded reference includes its parent message; a top-level reference has parentMessage: null', async () => {
+    const user = await signup('entitycite0');
+    const { workspace, channel } = await createWorkspaceAndChannel(user);
+    const root = await sendMessage(user, channel.id, 'kicking off discussion');
+    const replyRes = await request(app)
+      .post(`/api/channels/${channel.id}/messages`)
+      .set(authHeader(user.accessToken))
+      .send({ content: 'follow-up about [[Server Alpha]]', parentMessageId: root.body.id });
+    await runMessageSideEffectsWorkerTick(db);
+    await sendMessage(user, channel.id, 'top-level mention of [[Server Alpha]] too');
+    const entity = await db('entities').where({ workspace_id: workspace.id }).first();
+
+    const res = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/references`)
+      .set(authHeader(user.accessToken));
+    expect(res.status).toBe(200);
+
+    const reply = res.body.find((r) => r.messageId === replyRes.body.id);
+    expect(reply.parentMessageId).toBe(root.body.id);
+    expect(reply.parentMessage).toMatchObject({
+      id: root.body.id,
+      content: 'kicking off discussion',
+      username: user.username,
+    });
+
+    const topLevel = res.body.find((r) => r.content === 'top-level mention of [[Server Alpha]] too');
+    expect(topLevel.parentMessageId).toBeNull();
+    expect(topLevel.parentMessage).toBeNull();
+  });
+
   test('private-channel references are omitted for workspace members outside that channel', async () => {
     const owner = await signup('entityroute4owner');
     const bob = await signup('entityroute4bob');
@@ -283,6 +316,17 @@ async function addWorkspaceMember(owner, workspaceId, member, role = 'MEMBER') {
     .post(`/api/workspaces/${workspaceId}/members`)
     .set(authHeader(owner.accessToken))
     .send({ username: member.username, role });
+}
+
+// A workspace member must already exist (addWorkspaceMember above) before
+// they can be added to a PRIVATE channel this way — matching
+// channelDetails.test.js's own POST .../channels/:channelId/members
+// precedent.
+async function addChannelMember(owner, workspaceId, channelId, member) {
+  await request(app)
+    .post(`/api/workspaces/${workspaceId}/channels/${channelId}/members`)
+    .set(authHeader(owner.accessToken))
+    .send({ username: member.username });
 }
 
 async function createEntity(user, workspaceId, channelId, name) {
@@ -724,6 +768,184 @@ describe('entity AI summary', () => {
 
     const res = await request(app)
       .post(`/api/workspaces/${workspace.id}/entities/${entity.id}/ai/summary`)
+      .set(authHeader(outsider.accessToken));
+    expect(res.status).toBe(404);
+  });
+});
+
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Trending Entities).
+describe('entity trending', () => {
+  test('trending is ordered by reference count, and an entity referenced only in a private channel is absent (not zeroed) for a caller outside it', async () => {
+    const owner = await signup('entitytrend0owner');
+    const bob = await signup('entitytrend0bob');
+    const { workspace, channel: publicChannel } = await createWorkspaceAndChannel(owner);
+    await addWorkspaceMember(owner, workspace.id, bob);
+    await request(app).post(`/api/workspaces/${workspace.id}/channels/${publicChannel.id}/join`).set(authHeader(bob.accessToken));
+    const privateRes = await request(app)
+      .post(`/api/workspaces/${workspace.id}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'private', type: 'PRIVATE' });
+
+    await sendMessage(owner, publicChannel.id, 'one [[Public Entity]]');
+    await sendMessage(owner, publicChannel.id, 'two [[Public Entity]]');
+    await sendMessage(owner, privateRes.body.id, 'about [[Private Entity]]');
+
+    const ownerTrending = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/trending`)
+      .set(authHeader(owner.accessToken));
+    expect(ownerTrending.status).toBe(200);
+    expect(ownerTrending.body.total).toBe(2);
+    expect(ownerTrending.body.entities.map((e) => e.canonicalName)).toEqual(['Public Entity', 'Private Entity']);
+    expect(ownerTrending.body.entities.find((e) => e.canonicalName === 'Public Entity').referenceCount).toBe(2);
+
+    const bobTrending = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/trending`)
+      .set(authHeader(bob.accessToken));
+    expect(bobTrending.status).toBe(200);
+    expect(bobTrending.body.total).toBe(1);
+    expect(bobTrending.body.entities).toEqual([
+      expect.objectContaining({ canonicalName: 'Public Entity', referenceCount: 2 }),
+    ]);
+    expect(bobTrending.body.entities.some((e) => e.canonicalName === 'Private Entity')).toBe(false);
+  });
+
+  test('two workspaces can independently trend the same entity name', async () => {
+    const userA = await signup('entitytrend1a');
+    const userB = await signup('entitytrend1b');
+    const a = await createWorkspaceAndChannel(userA);
+    const b = await createWorkspaceAndChannel(userB);
+    await sendMessage(userA, a.channel.id, 'A discusses [[Server Alpha]]');
+    await sendMessage(userB, b.channel.id, 'B discusses [[Server Alpha]]');
+    await sendMessage(userB, b.channel.id, 'B discusses [[Server Alpha]] again');
+
+    const trendingA = await request(app)
+      .get(`/api/workspaces/${a.workspace.id}/entities/trending`)
+      .set(authHeader(userA.accessToken));
+    expect(trendingA.body.entities).toEqual([expect.objectContaining({ canonicalName: 'Server Alpha', referenceCount: 1 })]);
+
+    const trendingB = await request(app)
+      .get(`/api/workspaces/${b.workspace.id}/entities/trending`)
+      .set(authHeader(userB.accessToken));
+    expect(trendingB.body.entities).toEqual([expect.objectContaining({ canonicalName: 'Server Alpha', referenceCount: 2 })]);
+  });
+
+  test('respects windowDays, limit, and offset, and rejects malformed values with 400', async () => {
+    const user = await signup('entitytrend2');
+    const { workspace, channel } = await createWorkspaceAndChannel(user);
+    await sendMessage(user, channel.id, 'discussing [[Old Entity]]');
+    // Backdate the old-entity message itself so it falls outside a narrow
+    // trending window — windowDays bounds `messages.created_at`, not
+    // message_entities (which carries no timestamp of its own).
+    await db('messages')
+      .whereIn(
+        'id',
+        db('message_entities as me').join('entities as e', 'e.id', 'me.entity_id').where('e.workspace_id', workspace.id).select('me.message_id'),
+      )
+      .update({ created_at: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000) });
+    await sendMessage(user, channel.id, 'discussing [[New Entity]]');
+
+    const narrowWindow = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/trending?windowDays=1`)
+      .set(authHeader(user.accessToken));
+    expect(narrowWindow.body.entities.map((e) => e.canonicalName)).toEqual(['New Entity']);
+
+    const paged = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/trending?windowDays=365&limit=1&offset=1`)
+      .set(authHeader(user.accessToken));
+    expect(paged.status).toBe(200);
+    expect(paged.body.limit).toBe(1);
+    expect(paged.body.offset).toBe(1);
+    expect(paged.body.entities).toHaveLength(1);
+
+    const badWindow = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/trending?windowDays=9999`)
+      .set(authHeader(user.accessToken));
+    expect(badWindow.status).toBe(400);
+
+    const badOffset = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/trending?offset=-1`)
+      .set(authHeader(user.accessToken));
+    expect(badOffset.status).toBe(400);
+  });
+
+  test('a non-member gets 404, never a 403', async () => {
+    const owner = await signup('entitytrend3owner');
+    const outsider = await signup('entitytrend3out');
+    const { workspace } = await createWorkspaceAndChannel(owner);
+
+    const res = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/trending`)
+      .set(authHeader(outsider.accessToken));
+    expect(res.status).toBe(404);
+  });
+});
+
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Subject Matter Experts).
+describe('entity experts', () => {
+  test('experts are ordered by reference count, and a contributor whose only messages are in a private channel is absent for a caller outside it', async () => {
+    const owner = await signup('entityexp0owner');
+    const bob = await signup('entityexp0bob');
+    const carol = await signup('entityexp0carol');
+    const { workspace, channel: publicChannel } = await createWorkspaceAndChannel(owner);
+    await addWorkspaceMember(owner, workspace.id, bob);
+    await addWorkspaceMember(owner, workspace.id, carol);
+    await request(app).post(`/api/workspaces/${workspace.id}/channels/${publicChannel.id}/join`).set(authHeader(bob.accessToken));
+    const privateRes = await request(app)
+      .post(`/api/workspaces/${workspace.id}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'private', type: 'PRIVATE' });
+    await addChannelMember(owner, workspace.id, privateRes.body.id, carol);
+
+    await sendMessage(owner, publicChannel.id, 'owner on [[Server Alpha]]');
+    await sendMessage(bob, publicChannel.id, 'bob on [[Server Alpha]]');
+    await sendMessage(carol, privateRes.body.id, 'carol on [[Server Alpha]] privately');
+    const entity = await db('entities').where({ workspace_id: workspace.id }).first();
+
+    const ownerExperts = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/experts`)
+      .set(authHeader(owner.accessToken));
+    expect(ownerExperts.status).toBe(200);
+    expect(ownerExperts.body).toHaveLength(3);
+    expect(ownerExperts.body.map((e) => e.username).sort()).toEqual([bob.username, carol.username, owner.username].sort());
+
+    const bobExperts = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/experts`)
+      .set(authHeader(bob.accessToken));
+    expect(bobExperts.status).toBe(200);
+    expect(bobExperts.body.map((e) => e.username).sort()).toEqual([bob.username, owner.username].sort());
+    expect(bobExperts.body.some((e) => e.username === carol.username)).toBe(false);
+  });
+
+  test('respects limit and rejects a malformed limit with 400', async () => {
+    const owner = await signup('entityexp1owner');
+    const bob = await signup('entityexp1bob');
+    const { workspace, channel } = await createWorkspaceAndChannel(owner);
+    await addWorkspaceMember(owner, workspace.id, bob);
+    await request(app).post(`/api/workspaces/${workspace.id}/channels/${channel.id}/join`).set(authHeader(bob.accessToken));
+    await sendMessage(owner, channel.id, 'owner on [[Server Alpha]]');
+    await sendMessage(bob, channel.id, 'bob on [[Server Alpha]]');
+    const entity = await db('entities').where({ workspace_id: workspace.id }).first();
+
+    const limited = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/experts?limit=1`)
+      .set(authHeader(owner.accessToken));
+    expect(limited.status).toBe(200);
+    expect(limited.body).toHaveLength(1);
+
+    const badLimit = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/experts?limit=100`)
+      .set(authHeader(owner.accessToken));
+    expect(badLimit.status).toBe(400);
+  });
+
+  test('a non-member gets 404, never a 403', async () => {
+    const owner = await signup('entityexp2owner');
+    const outsider = await signup('entityexp2out');
+    const { workspace, channel } = await createWorkspaceAndChannel(owner);
+    const entity = await createEntity(owner, workspace.id, channel.id, 'Server Alpha');
+
+    const res = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/experts`)
       .set(authHeader(outsider.accessToken));
     expect(res.status).toBe(404);
   });

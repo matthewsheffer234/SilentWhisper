@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Hash, X } from 'lucide-react';
 import Sheet from './Sheet.jsx';
 import PeoplePicker from './PeoplePicker.jsx';
+import { initials } from './ChannelView.jsx';
 import {
   getEntity,
   listEntityReferences,
+  listEntityExperts,
   searchEntities,
   updateEntity,
   createEntityRelationship,
@@ -13,6 +15,8 @@ import {
 } from '../api/entities.js';
 import { searchWorkspaceMembers } from '../api/workspaces.js';
 import { renderMessageContent } from '../markdown.jsx';
+
+const ENTITY_EXPERTS_LIMIT = 5;
 
 // FEATURE_REQUEST.md entry 4: entity_relationships.relationship_type — kept
 // in sync by hand with backend/src/services/entityService.js's
@@ -210,6 +214,36 @@ const styles = {
     zIndex: 60,
   },
   pickerOption: { padding: '8px 12px', cursor: 'pointer', fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
+  smeList: { display: 'flex', flexDirection: 'column', gap: 8 },
+  smeRow: { display: 'flex', alignItems: 'center', gap: 8 },
+  smeAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'var(--surface-alt)',
+    color: 'var(--text-1)',
+    border: '1px solid var(--border)',
+    fontSize: 'var(--text-xs)',
+    fontWeight: 700,
+    flexShrink: 0,
+  },
+  smeName: { fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
+  smeUsername: { color: 'var(--text-3)' },
+  smeCount: { marginLeft: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
+  viewContextButton: {
+    minHeight: 24,
+    padding: '0 8px',
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'none',
+    color: 'var(--text-2)',
+    fontSize: 'var(--text-xs)',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
 };
 
 // Minimal entity search-and-select combobox for choosing a relationship
@@ -567,9 +601,56 @@ function EntitySummarySection({ workspaceId, entity, onUpdated }) {
   );
 }
 
-export default function EntityDetailsPanel({ workspaceId, entityId, initialEntity, onClose }) {
+// FEATURE_REQUEST.md entry 2 (Knowledge Explorer, Subject Matter Experts).
+// Exported for unit testing (no jsdom in this project's Vitest setup — see
+// ChannelView.test.jsx/PeoplePicker.test.jsx — so this pure helper is tested
+// directly rather than through a rendered component). Mirrors
+// PeoplePicker.jsx's PersonLabel logic exactly: display-name-first,
+// `@username` shown only when it differs from the display name.
+export function smeDisplayName(person) {
+  const name = person.displayName || person.username;
+  const showUsername = Boolean(person.displayName && person.displayName !== person.username);
+  return { name, showUsername };
+}
+
+// Same initials-avatar helper message rows already use — no new avatar
+// concept for this one section.
+function SmeSection({ experts }) {
+  if (experts.length === 0) {
+    return <div style={styles.muted}>No contributors identified yet.</div>;
+  }
+  return (
+    // data-testid (not visible text/aria-label) so e2e coverage can scope
+    // into this section specifically — a contributor's name here otherwise
+    // collides with the identical text already shown in the References
+    // section below, same disambiguation need OrgManagementPanel's own
+    // data-testid rows already establish a precedent for.
+    <div style={styles.smeList} data-testid="entity-sme-section">
+      {experts.map((person) => {
+        const { name, showUsername } = smeDisplayName(person);
+        return (
+          <div key={person.userId} style={styles.smeRow}>
+            <div className="sl-avatar" style={styles.smeAvatar}>
+              {initials(name)}
+            </div>
+            <span style={styles.smeName}>
+              {name}
+              {showUsername && <span style={styles.smeUsername}> @{person.username}</span>}
+            </span>
+            <span style={styles.smeCount}>
+              {person.referenceCount} reference{person.referenceCount === 1 ? '' : 's'}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function EntityDetailsPanel({ workspaceId, entityId, initialEntity, onClose, onViewContext }) {
   const [entity, setEntity] = useState(initialEntity ?? null);
   const [references, setReferences] = useState([]);
+  const [experts, setExperts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
@@ -579,11 +660,16 @@ export default function EntityDetailsPanel({ workspaceId, entityId, initialEntit
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([getEntity(workspaceId, entityId), listEntityReferences(workspaceId, entityId, { limit: 20 })])
-      .then(([details, refs]) => {
+    Promise.all([
+      getEntity(workspaceId, entityId),
+      listEntityReferences(workspaceId, entityId, { limit: 20 }),
+      listEntityExperts(workspaceId, entityId, { limit: ENTITY_EXPERTS_LIMIT }),
+    ])
+      .then(([details, refs, expertRows]) => {
         if (cancelled) return;
         setEntity(details);
         setReferences(refs);
+        setExperts(expertRows);
         setHasMore(refs.length === 20);
       })
       .catch((err) => {
@@ -622,6 +708,16 @@ export default function EntityDetailsPanel({ workspaceId, entityId, initialEntit
     setEntity(details);
   }
 
+  // FEATURE_REQUEST.md entry 2 (Knowledge Explorer, View Context): the
+  // caller (ChatShell) already knows how to switch workspace/select a
+  // channel/open a thread — this just supplies workspaceId, which
+  // serializeReference's response shape doesn't itself carry (an entity's
+  // references are already scoped to the one workspace this panel was
+  // opened for).
+  function handleViewContext(ref) {
+    onViewContext?.({ ...ref, workspaceId });
+  }
+
   const title = entity?.canonicalName ?? initialEntity?.canonicalName ?? 'Entity';
 
   return (
@@ -632,7 +728,9 @@ export default function EntityDetailsPanel({ workspaceId, entityId, initialEntit
         <>
           <div style={styles.sectionTitle}>Summary</div>
           <EditMetadataSection workspaceId={workspaceId} entity={entity} onUpdated={setEntity} />
-          <div style={styles.description}>{entity.description || 'No description yet.'}</div>
+          <div style={styles.description}>
+            {entity.description ? renderMessageContent(entity.description) : 'No description yet.'}
+          </div>
           {entity.aliases?.length > 0 && (
             <>
               <div style={styles.sectionTitle}>Aliases</div>
@@ -643,6 +741,9 @@ export default function EntityDetailsPanel({ workspaceId, entityId, initialEntit
               </div>
             </>
           )}
+
+          <div style={styles.sectionTitle}>Subject matter experts</div>
+          <SmeSection experts={experts} />
 
           <div style={styles.sectionTitle}>What we know (AI-generated)</div>
           <EntitySummarySection workspaceId={workspaceId} entity={entity} onUpdated={setEntity} />
@@ -665,6 +766,15 @@ export default function EntityDetailsPanel({ workspaceId, entityId, initialEntit
                   <span>{ref.displayName || ref.username}</span>
                   <span>·</span>
                   <span>{new Date(ref.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                  {onViewContext && (
+                    <button
+                      type="button"
+                      style={{ ...styles.viewContextButton, marginLeft: 'auto' }}
+                      onClick={() => handleViewContext(ref)}
+                    >
+                      View context
+                    </button>
+                  )}
                 </div>
                 <div style={styles.referenceContent}>{renderMessageContent(ref.content)}</div>
               </div>

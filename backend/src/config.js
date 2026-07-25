@@ -202,6 +202,14 @@ export const config = {
     dashboardWindowDays: Number(process.env.TASK_DASHBOARD_WINDOW_DAYS || 30),
   },
 
+  // FEATURE_REQUEST.md entry 2 (Knowledge Explorer): default rolling window
+  // for GET /workspaces/:workspaceId/entities/trending — same
+  // env-overridable-per-request-up-to-a-hard-cap precedent as
+  // tasks.dashboardWindowDays above.
+  knowledgeExplorer: {
+    trendingWindowDays: Number(process.env.KNOWLEDGE_EXPLORER_TRENDING_WINDOW_DAYS || 30),
+  },
+
   dm: {
     // FEATURE_REQUEST.md entry 2: per-user auto-archive threshold for
     // DIRECT/GROUP_DM channels, applied only when a caller's own
