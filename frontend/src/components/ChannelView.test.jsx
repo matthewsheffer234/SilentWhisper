@@ -1,11 +1,40 @@
 import { describe, test, expect } from 'vitest';
-import { isFirstInRun, formatReplyCount, initials } from './ChannelView.jsx';
+import { isFirstInRun, formatReplyCount, initials, detectMentionTrigger } from './ChannelView.jsx';
 
 // FEATURE_REQUEST.md entry 3 (message presentation for team scanability).
-// Only these three pure, DOM-free helpers are unit tested here — the
-// component itself renders through react-virtual/lucide-react and this
-// frontend's Vitest setup has no jsdom-style environment (same reasoning
+// Only these pure, DOM-free helpers are unit tested here — the component
+// itself renders through react-virtual/lucide-react and this frontend's
+// Vitest setup has no jsdom-style environment (same reasoning
 // ThemeContext.test.jsx documents for resolveTheme()).
+
+describe('detectMentionTrigger', () => {
+  // Also exercised by ThreadSidebar.jsx's reply composer, which imports this
+  // same function rather than forking its own copy — see ThreadSidebar.jsx.
+
+  test('detects an in-progress @mention at the caret', () => {
+    expect(detectMentionTrigger('hello @mat', 10)).toEqual({ start: 6, query: 'mat' });
+  });
+
+  test('detects an empty query right after the @', () => {
+    expect(detectMentionTrigger('hi @', 4)).toEqual({ start: 3, query: '' });
+  });
+
+  test('returns null when there is no @ before the caret', () => {
+    expect(detectMentionTrigger('hello there', 11)).toBeNull();
+  });
+
+  test('does not trigger mid-word, e.g. an email address', () => {
+    expect(detectMentionTrigger('reach me at foo@bar.com', 23)).toBeNull();
+  });
+
+  test('is anchored to the caret, ignoring a completed mention earlier in the text', () => {
+    expect(detectMentionTrigger('@alice thanks for the review, quick q', 38)).toBeNull();
+  });
+
+  test('re-triggers for a second @mention later in the same message', () => {
+    expect(detectMentionTrigger('cc @alice and @bob', 19)).toEqual({ start: 14, query: 'bob' });
+  });
+});
 
 describe('isFirstInRun', () => {
   const msg = (id, userId) => ({ id, userId });

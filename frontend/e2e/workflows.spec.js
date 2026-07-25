@@ -752,6 +752,43 @@ test.describe('@mention autocomplete', () => {
     await expect(listbox).toHaveCount(0);
     await expect(page.locator(`text=hey @${other.username}`)).toHaveCount(0);
   });
+
+  test('the same "@" autocomplete is available when replying inside a thread', async ({ page }) => {
+    const me = await seedUserWithChannel('mentionthreadme');
+    const other = await seedPlainUser('mentionthreadother');
+    await inviteToWorkspace(me.accessToken, me.workspace.id, other.username);
+    await joinChannelApi(other.accessToken, me.workspace.id, me.channel.id);
+    await sendMessage(me.accessToken, me.channel.id, 'Kicking off a thread here.');
+
+    await loginViaUi(page, me.username, me.password);
+    await selectWorkspaceRow(page, me.workspace.name);
+    await selectChannelRow(page, 'general');
+    const rootRow = page.locator('text=Kicking off a thread here.').locator('..');
+    await rootRow.locator('button:has-text("Reply in thread")').click();
+    await page.waitForSelector('text=Thread', { timeout: 10_000 });
+
+    const replyInput = page.locator('input[placeholder="Reply in thread"]');
+    await replyInput.waitFor({ timeout: 10_000 });
+    const partial = other.username.slice(0, 6);
+    const option = page.locator('[role="option"]', { hasText: other.username });
+    const listbox = page.locator('#thread-mention-suggestions');
+
+    await replyInput.fill(`@${partial}`);
+    await expect(option).toBeVisible({ timeout: 5_000 });
+    await option.click();
+    await expect(replyInput).toHaveValue(`@${other.username} `);
+    await expect(listbox).toHaveCount(0);
+
+    // Enter must insert the mention and close the dropdown without also
+    // submitting the reply — same rule as the channel composer above.
+    await replyInput.fill('');
+    await replyInput.fill(`hey @${partial}`);
+    await expect(option).toBeVisible({ timeout: 5_000 });
+    await replyInput.press('Enter');
+    await expect(replyInput).toHaveValue(`hey @${other.username} `);
+    await expect(listbox).toHaveCount(0);
+    await expect(page.locator(`.sl-row:has-text("hey @${other.username}")`)).toHaveCount(0);
+  });
 });
 
 test.describe('AI features (real Ollama inference — allow extra time)', () => {

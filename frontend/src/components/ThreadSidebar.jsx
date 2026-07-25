@@ -1,9 +1,10 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, Sparkles, ChevronDown } from 'lucide-react';
 import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
 import { extractTasks } from '../api/ai.js';
-import { isFirstInRun, initials, EditableMessageContent } from './ChannelView.jsx';
+import { searchChannelMembers } from '../api/workspaces.js';
+import { AUTOCOMPLETE_DEBOUNCE_MS, detectMentionTrigger, isFirstInRun, initials, EditableMessageContent } from './ChannelView.jsx';
 import { AI_THREAD_SCOPE, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
 
 const styles = {
@@ -135,8 +136,9 @@ const styles = {
   actionButtonMine: { color: 'var(--item-active-fg)', textDecoration: 'underline' },
   replies: { flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 },
   composer: { display: 'flex', gap: 6, padding: '12px 16px', borderTop: '1px solid var(--border)' },
+  composerInputWrap: { position: 'relative', flex: 1 },
   input: {
-    flex: 1,
+    width: '100%',
     minHeight: 40,
     padding: '8px 10px',
     borderRadius: 8,
@@ -144,7 +146,37 @@ const styles = {
     background: 'var(--surface)',
     color: 'var(--text-1)',
     fontSize: 'var(--text-sm)',
+    boxSizing: 'border-box',
   },
+  // Same up-anchored positioning as ChannelView.jsx's own suggestionDropdown
+  // — this composer is bottom-docked inside the sidebar too, so opening
+  // downward would push the list off the viewport.
+  suggestionDropdown: {
+    position: 'absolute',
+    bottom: '100%',
+    left: 0,
+    right: 0,
+    marginBottom: 6,
+    maxHeight: 220,
+    overflowY: 'auto',
+    background: 'var(--overlay-bg)',
+    boxShadow: 'var(--overlay-shadow)',
+    border: '1px solid var(--border)',
+    borderRadius: 11,
+    zIndex: 40,
+  },
+  suggestionOption: (highlighted) => ({
+    minHeight: 36,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '0 12px',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--text-1)',
+    cursor: 'pointer',
+    background: highlighted ? 'var(--item-hover)' : 'transparent',
+  }),
+  suggestionSecondary: { color: 'var(--text-3)', fontSize: 'var(--text-xs)' },
   sendButton: {
     minHeight: 40,
     padding: '0 14px',
@@ -175,8 +207,44 @@ function ThreadSidebar({
   const [draft, setDraft] = useState('');
   const [tasks, setTasks] = useState(null); // { loading, text, error, scope }
 
+  // @mention autocomplete (FEATURE_REQUEST.md), mirroring ChannelView.jsx's
+  // channel composer so the same "@" workflow is available when replying in
+  // a thread. Shares detectMentionTrigger/AUTOCOMPLETE_DEBOUNCE_MS with that
+  // file rather than forking the regex; no [[entity]] linking here since
+  // that wasn't part of this ask and would need a workspaceId this sidebar
+  // doesn't currently receive.
+  const [mention, setMention] = useState(null); // { start, query, suggestions, highlightIndex } | null
+  const composerInputRef = useRef(null);
+  const mentionDropdownRef = useRef(null);
+  const mentionDebounceRef = useRef(null);
+  const pendingCaretRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (pendingCaretRef.current !== null && composerInputRef.current) {
+      composerInputRef.current.setSelectionRange(pendingCaretRef.current, pendingCaretRef.current);
+      pendingCaretRef.current = null;
+    }
+  });
+
+  useEffect(() => () => clearTimeout(mentionDebounceRef.current), []);
+
+  // Outside-click dismiss, same pattern as ChannelView.jsx's composer — a
+  // bare onBlur would fire before a mousedown-driven suggestion click lands.
+  useEffect(() => {
+    if (!mention) return undefined;
+    function handlePointerDown(e) {
+      if (composerInputRef.current?.contains(e.target) || mentionDropdownRef.current?.contains(e.target)) {
+        return;
+      }
+      setMention(null);
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [mention]);
+
   useEffect(() => {
     setTasks(null);
+    setMention(null);
   }, [rootMessage?.id]);
 
   if (!rootMessage) return null;
@@ -186,6 +254,74 @@ function ThreadSidebar({
     if (!draft.trim()) return;
     onSendReply(draft.trim());
     setDraft('');
+  }
+
+  function handleComposerChange(e) {
+    const value = e.target.value;
+    const caretPos = e.target.selectionStart;
+    setDraft(value);
+
+    const trigger = detectMentionTrigger(value, caretPos);
+    clearTimeout(mentionDebounceRef.current);
+    if (!trigger) {
+      setMention(null);
+      return;
+    }
+    setMention((prev) => ({
+      start: trigger.start,
+      query: trigger.query,
+      suggestions: prev && prev.start === trigger.start ? prev.suggestions : [],
+      highlightIndex: -1,
+    }));
+    mentionDebounceRef.current = setTimeout(async () => {
+      try {
+        const results = await searchChannelMembers(channelId, trigger.query);
+        setMention((prev) =>
+          prev && prev.start === trigger.start && prev.query === trigger.query
+            ? { ...prev, suggestions: results, highlightIndex: results.length > 0 ? 0 : -1 }
+            : prev,
+        );
+      } catch {
+        // A failed lookup just means no suggestions right now — must never
+        // block typing or surface an error in the composer.
+        setMention((prev) => (prev && prev.start === trigger.start ? { ...prev, suggestions: [], highlightIndex: -1 } : prev));
+      }
+    }, AUTOCOMPLETE_DEBOUNCE_MS);
+  }
+
+  function acceptMentionSuggestion(username) {
+    if (!mention) return;
+    const before = draft.slice(0, mention.start);
+    const after = draft.slice(mention.start + 1 + mention.query.length);
+    const insertion = `@${username} `;
+    pendingCaretRef.current = before.length + insertion.length;
+    setDraft(`${before}${insertion}${after}`);
+    setMention(null);
+  }
+
+  function handleComposerKeyDown(e) {
+    if (mention && mention.suggestions.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMention((prev) => {
+          const delta = e.key === 'ArrowDown' ? 1 : -1;
+          const next = (prev.highlightIndex + delta + prev.suggestions.length) % prev.suggestions.length;
+          return { ...prev, highlightIndex: next };
+        });
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        // preventDefault is what stops Enter from also submitting the form.
+        e.preventDefault();
+        const chosen = mention.suggestions[mention.highlightIndex] ?? mention.suggestions[0];
+        if (chosen) acceptMentionSuggestion(chosen.username);
+        return;
+      }
+    }
+    if (e.key === 'Escape' && mention) {
+      e.preventDefault();
+      setMention(null);
+    }
   }
 
   async function handleExtractTasks() {
@@ -352,13 +488,50 @@ function ThreadSidebar({
         })}
       </div>
       <form style={styles.composer} onSubmit={handleSubmit}>
-        <input
-          style={styles.input}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Reply in thread"
-          maxLength={10000}
-        />
+        <div style={styles.composerInputWrap}>
+          <input
+            ref={composerInputRef}
+            style={styles.input}
+            value={draft}
+            onChange={handleComposerChange}
+            onKeyDown={handleComposerKeyDown}
+            placeholder="Reply in thread"
+            maxLength={10000}
+            role="combobox"
+            aria-expanded={Boolean(mention && mention.suggestions.length > 0)}
+            aria-controls="thread-mention-suggestions"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              mention && mention.highlightIndex >= 0
+                ? `thread-mention-option-${mention.suggestions[mention.highlightIndex].id}`
+                : undefined
+            }
+          />
+          {mention && mention.suggestions.length > 0 && (
+            <div
+              ref={mentionDropdownRef}
+              id="thread-mention-suggestions"
+              role="listbox"
+              aria-label="Mention suggestions"
+              style={styles.suggestionDropdown}
+            >
+              {mention.suggestions.map((s, index) => (
+                <div
+                  key={s.id}
+                  id={`thread-mention-option-${s.id}`}
+                  role="option"
+                  aria-selected={index === mention.highlightIndex}
+                  style={styles.suggestionOption(index === mention.highlightIndex)}
+                  onMouseEnter={() => setMention((prev) => (prev ? { ...prev, highlightIndex: index } : prev))}
+                  onClick={() => acceptMentionSuggestion(s.username)}
+                >
+                  <span>{s.displayName || s.username}</span>
+                  <span style={styles.suggestionSecondary}>@{s.username}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <button type="submit" style={styles.sendButton} disabled={!draft.trim()}>Reply</button>
       </form>
     </aside>

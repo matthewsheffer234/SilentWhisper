@@ -11,7 +11,21 @@ import { renderMessageContent } from '../markdown.jsx';
 import { AI_SUMMARY_LIMIT, AI_SUMMARY_SCOPE, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
 
 // FEATURE_REQUEST.md's @mention autocomplete entry.
-const AUTOCOMPLETE_DEBOUNCE_MS = 200;
+export const AUTOCOMPLETE_DEBOUNCE_MS = 200;
+
+// Scans backward from the caret for an in-progress "@token". Distinct from
+// markdown.jsx's rendering-side mention regex (which matches a *completed*
+// mention for display) — this matches a partial word still being typed, and
+// is anchored to the caret rather than scanning the whole string. Exported
+// so ThreadSidebar.jsx's reply composer can drive the same @mention
+// autocomplete as this file's channel composer, rather than a forked copy.
+export function detectMentionTrigger(text, caretPos) {
+  let i = caretPos - 1;
+  while (i >= 0 && /[a-zA-Z0-9_.-]/.test(text[i])) i -= 1;
+  if (i < 0 || text[i] !== '@') return null;
+  if (i > 0 && /\S/.test(text[i - 1])) return null; // must start a word, e.g. not "email@x"
+  return { start: i, query: text.slice(i + 1, caretPos) };
+}
 
 // FEATURE_REQUEST.md entry 3 (message presentation for team scanability).
 // Pure, DOM-free so they're unit-testable the same way ThemeContext.jsx's
@@ -710,18 +724,6 @@ function ChannelView({
     if (!draft.trim()) return;
     onSend(draft.trim());
     setDraft('');
-  }
-
-  // Scans backward from the caret for an in-progress "@token". Distinct from
-  // markdown.jsx's rendering-side mention regex (which matches a *completed*
-  // mention for display) — this matches a partial word still being typed,
-  // and is anchored to the caret rather than scanning the whole string.
-  function detectMentionTrigger(text, caretPos) {
-    let i = caretPos - 1;
-    while (i >= 0 && /[a-zA-Z0-9_.-]/.test(text[i])) i -= 1;
-    if (i < 0 || text[i] !== '@') return null;
-    if (i > 0 && /\S/.test(text[i - 1])) return null; // must start a word, e.g. not "email@x"
-    return { start: i, query: text.slice(i + 1, caretPos) };
   }
 
   function detectEntityTrigger(text, caretPos) {

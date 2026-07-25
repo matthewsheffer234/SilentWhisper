@@ -16,6 +16,16 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.8.0] — 2026-07-25
+
+**Migrations**: none. **New env vars**: none.
+
+Thread replies now get the same `@mention` autocomplete the channel composer already had — typing `@` plus a partial username in `ThreadSidebar.jsx`'s reply box now shows matching channel-member suggestions, with the same arrow-key/Enter/Tab/Escape/mouse-click behavior. Previously the thread reply input was a bare controlled `<input>` with none of `ChannelView.jsx`'s mention machinery, so the dropdown simply never appeared there.
+
+`ChannelView.jsx`'s `detectMentionTrigger()` and `AUTOCOMPLETE_DEBOUNCE_MS` are now exported and reused by `ThreadSidebar.jsx` rather than forked, so the two composers can't drift on what counts as "typing a mention." `ThreadSidebar.jsx` reuses the existing channel-scoped `GET /channels/:channelId/members` lookup (via `searchChannelMembers`) with the `channelId` prop it already receives — no backend change needed. Scoped to `@mentions` only; the `[[entity]]` linking autocomplete stays channel-composer-only, since it needs a `workspaceId` this sidebar doesn't currently receive and wasn't part of this request.
+
+Full diff: `git diff v1.7.1..v1.8.0`.
+
 ## [1.7.1] — 2026-07-25
 
 **Migrations**: none. **New env vars**: none.
