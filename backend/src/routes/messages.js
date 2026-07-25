@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { db } from '../db.js';
+import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { requireChannelMember, requireWorkspaceNotArchived } from '../authz/membershipService.js';
 import {
   assertUuid,
   assertBoundedInt,
   assertBoolean,
+  assertMessageContent,
   parsePagination,
   MAX_USERNAME_LENGTH,
   MAX_MESSAGE_LENGTH,
@@ -16,9 +18,9 @@ import { setTaskChecked } from '../services/taskParser.js';
 import { enqueueEmbeddingJob } from '../search/embeddingQueue.js';
 import { broadcastToRoom } from '../ws/connectionRegistry.js';
 import { isMessageRateLimited } from '../ws/rateLimiter.js';
-import { memberSearchLimiter, taskToggleLimiter } from '../auth/rateLimit.js';
+import { memberSearchLimiter, taskToggleLimiter, messageEditLimiter } from '../auth/rateLimit.js';
 import { appendAuditEvent } from '../audit/auditService.js';
-import { RateLimitedError, ValidationError, NotFoundError } from '../errors.js';
+import { RateLimitedError, ValidationError, ForbiddenError, NotFoundError } from '../errors.js';
 
 export const messagesRouter = Router();
 
@@ -62,6 +64,7 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
         'messages.content',
         'messages.parent_message_id',
         'messages.created_at',
+        'messages.edited_at',
         // Replies never have their own children (flat one-level threading,
         // 0004_communication_and_content.js), so this is always 0 when
         // fetching a thread's own replies — no branching needed between the
@@ -81,6 +84,7 @@ messagesRouter.get('/channels/:channelId/messages', async (req, res, next) => {
         content: r.content,
         parentMessageId: r.parent_message_id,
         createdAt: r.created_at,
+        editedAt: r.edited_at,
         replyCount: Number(r.reply_count),
       })),
     );
@@ -310,3 +314,156 @@ messagesRouter.patch(
     }
   },
 );
+
+// FEATURE_REQUEST.md entry 3: editing a sent message, with a permanent,
+// auditable revision history. Author-only — no manager/owner override.
+// Unlike the task-toggle route above (deliberately any channel member,
+// since a task can be assigned to someone else), rewriting someone else's
+// actual words has no such justification and no existing precedent grants
+// one; a moderator/redaction capability is a separate, future concern, not
+// folded in here. Also unlike task-toggle, only within a fixed window of
+// the message's original send time (config.messages.editWindowMinutes,
+// env-overridable, default 15) — editing again does not extend the window,
+// since it's measured from created_at, not from the most recent edit.
+messagesRouter.patch('/channels/:channelId/messages/:messageId', messageEditLimiter, async (req, res, next) => {
+  try {
+    const channelId = assertUuid(req.params.channelId, 'channelId');
+    const messageId = assertUuid(req.params.messageId, 'messageId');
+    const channel = await requireChannelMember(db, req.user.id, channelId);
+    await requireWorkspaceNotArchived(db, channel.workspace_id);
+    const content = assertMessageContent(req.body?.content);
+
+    // Row-locked so two concurrent edits of the same message can't both
+    // read stale content and silently drop one edit's history row — same
+    // instinct as the task-toggle route's own lock above.
+    const { updated, previousContentLength } = await db.transaction(async (trx) => {
+      const message = await trx('messages')
+        .where({ id: messageId })
+        .forUpdate()
+        .first('id', 'channel_id', 'user_id', 'content', 'parent_message_id', 'created_at');
+      // Existence-hiding: a missing message and a real message in a
+      // different channel 404 identically (same cross-workspace-channel-
+      // injection-fix pattern as task-toggle above).
+      if (!message || message.channel_id !== channelId) {
+        throw new NotFoundError('Message not found');
+      }
+      if (message.user_id !== req.user.id) {
+        // The caller already legitimately sees this message via the
+        // channel-membership check above — hiding its existence with a 404
+        // here would be wrong; existence-hiding is for callers who aren't
+        // authorized to see the resource at all, not for an authorized
+        // viewer who simply isn't allowed to change it.
+        throw new ForbiddenError('Only the author can edit this message');
+      }
+      const windowMs = config.messages.editWindowMinutes * 60 * 1000;
+      if (Date.now() - new Date(message.created_at).getTime() > windowMs) {
+        throw new ValidationError(`Messages can only be edited within ${config.messages.editWindowMinutes} minutes of sending`);
+      }
+
+      // Captures the message exactly as it was before this edit — the
+      // first such row for a given message is therefore the message
+      // exactly as originally sent. No UPDATE/DELETE grant exists on this
+      // table (migration 0027): a historical snapshot must never change
+      // once written.
+      await trx('message_edits').insert({ message_id: messageId, content: message.content, edited_by: req.user.id });
+
+      const [row] = await trx('messages')
+        .where({ id: messageId })
+        .update({ content, edited_at: trx.fn.now() })
+        .returning(['id', 'channel_id', 'user_id', 'content', 'parent_message_id', 'created_at', 'edited_at']);
+      const author = await trx('users').where({ id: message.user_id }).first('username', 'display_name');
+
+      return {
+        previousContentLength: message.content.length,
+        updated: {
+          id: row.id,
+          channelId: row.channel_id,
+          userId: row.user_id,
+          username: author.username,
+          displayName: author.display_name,
+          content: row.content,
+          parentMessageId: row.parent_message_id,
+          createdAt: row.created_at,
+          editedAt: row.edited_at,
+        },
+      };
+    });
+
+    broadcastToRoom(channelId, { type: 'message_updated', message: updated });
+
+    await appendAuditEvent(db, {
+      actorId: req.user.id,
+      actorIp: req.ip,
+      actionType: 'MESSAGE_EDITED',
+      targetResource: messageId,
+      // Lengths only, never the old or new text (Section 6) — matching
+      // this codebase's absolute "never log raw content" convention.
+      payload: { channelId, contentLengthBefore: previousContentLength, contentLengthAfter: updated.content.length },
+    });
+
+    // Derived-data side effects, decided explicitly (same instinct as the
+    // task-toggle route's own comment) — but unlike a checkbox toggle, a
+    // real content edit CAN add or remove a [[Entity]] token or an
+    // @mention, so both need to actually re-run here, not be left alone:
+    // - Embeddings: re-enqueue so semantic search/sentiment reflect the
+    //   edited text, identical mechanism to task-toggle.
+    await enqueueEmbeddingJob(db, messageId);
+    // - Entity links: re-enqueued the same way message creation does.
+    //   linkMessageEntities (services/entityService.js) now reconciles
+    //   message_entities against the freshly-extracted set rather than
+    //   only appending, so a token removed by this edit is actually
+    //   cleared, not left stale.
+    // - Mentions/notifications: re-enqueued the same way too. A newly
+    //   added @mention gets a real notification, the same legitimate
+    //   expectation as if it had been there from the start;
+    //   mention_notifications' existing per-(recipient,message) uniqueness
+    //   constraint means a mention present before and after the edit is
+    //   never re-notified. A mention *removed* by the edit is deliberately
+    //   left exactly as it was — there is no "un-notify" mechanism
+    //   anywhere in this codebase, and the person genuinely was mentioned
+    //   in a message that existed with that text at some point.
+    await enqueueMessageSideEffectJobs(db, { messageId, workspaceId: channel.workspace_id });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// FEATURE_REQUEST.md entry 3: the revision history behind the "(edited)"
+// tag. Gated the same as reading the message itself (channel membership) —
+// a member who can already see the current content isn't being shown
+// anything new by seeing what it used to say, so this is deliberately not
+// admin-only. Newest-first (most recent prior version first), matching
+// this app's general "most recent first" convention for history/activity
+// lists elsewhere.
+messagesRouter.get('/channels/:channelId/messages/:messageId/edits', async (req, res, next) => {
+  try {
+    const channelId = assertUuid(req.params.channelId, 'channelId');
+    const messageId = assertUuid(req.params.messageId, 'messageId');
+    await requireChannelMember(db, req.user.id, channelId);
+
+    const message = await db('messages').where({ id: messageId }).first('id', 'channel_id');
+    if (!message || message.channel_id !== channelId) {
+      throw new NotFoundError('Message not found');
+    }
+
+    const rows = await db('message_edits as me')
+      .leftJoin('users as u', 'u.id', 'me.edited_by')
+      .where('me.message_id', messageId)
+      .orderBy('me.edited_at', 'desc')
+      .select('me.id', 'me.content', 'me.edited_at', 'u.username', 'u.display_name');
+
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        content: r.content,
+        editedAt: r.edited_at,
+        username: r.username,
+        displayName: r.display_name,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+});

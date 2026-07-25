@@ -639,6 +639,61 @@ test.describe('message presentation: channels vs. direct messages', () => {
   });
 });
 
+// FEATURE_REQUEST.md entry 3: editing a sent message, with a permanent,
+// auditable revision history.
+test.describe('message editing (FEATURE_REQUEST.md entry 3)', () => {
+  test('editing a sent message updates its content, shows an "(edited)" tag, and the tag expands to reveal the original version', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('msgedit');
+    await loginViaUi(page, seeded.username, seeded.password);
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    await page.fill('input[placeholder^="Message #"]', 'original wording');
+    await page.click('button:has-text("Send")');
+    await expect(page.locator('text=original wording')).toBeVisible({ timeout: 10_000 });
+
+    const messageRow = page.locator('.sl-bubble-theirs', { hasText: 'original wording' });
+    await messageRow.locator('button:has-text("Edit")').click();
+
+    // Unscoped from here on, deliberately: the row's own hasText filter
+    // above stops matching the instant its rendered content is replaced by
+    // the edit form (a controlled <textarea>'s value is not part of its
+    // own textContent, which is what hasText matches against), and only
+    // one message is ever mid-edit at a time in this test.
+    await page.locator('textarea').fill('corrected wording');
+    await page.locator('button:has-text("Save")').click();
+
+    await expect(page.locator('text=corrected wording')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=original wording')).not.toBeVisible();
+
+    const editedRow = page.locator('.sl-bubble-theirs', { hasText: 'corrected wording' });
+    const editedTag = editedRow.locator('button:has-text("(edited)")');
+    await expect(editedTag).toBeVisible();
+    await editedTag.click();
+    await expect(editedRow.locator('text=original wording')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('a channel member who is not the author never sees an Edit action on that message', async ({ page }) => {
+    const sender = await seedUserWithChannel('msgeditsender');
+    const recipient = await seedPlainUser('msgeditrecipient');
+    await inviteToWorkspace(sender.accessToken, sender.workspace.id, recipient.username);
+    await sendMessage(sender.accessToken, sender.channel.id, 'a message from the sender');
+
+    await loginViaUi(page, recipient.username, recipient.password);
+    await selectWorkspaceRow(page, sender.workspace.name);
+    const channelRow = page.locator('div.sl-row', { hasText: sender.channel.name });
+    await channelRow.locator('button:has-text("Join")').click();
+    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+
+    const messageRow = page.locator('.sl-bubble-theirs', { hasText: 'a message from the sender' });
+    await expect(messageRow).toBeVisible({ timeout: 10_000 });
+    await expect(messageRow.locator('button:has-text("Edit")')).toHaveCount(0);
+  });
+});
+
 test.describe('@mention autocomplete', () => {
   test('typing "@" plus a partial username shows matching suggestions; Enter and a mouse click both insert the full mention and close the dropdown; Escape dismisses without altering the draft or submitting; a non-matching partial shows no suggestions', async ({
     page,

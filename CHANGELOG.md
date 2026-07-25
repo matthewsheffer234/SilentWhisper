@@ -16,6 +16,22 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.6.0] — 2026-07-25
+
+**Migrations**: `0027_message_edits.js` — additive (new nullable `messages.edited_at` column; new `message_edits` table, insert-only — no `UPDATE`/`DELETE` grant, ever). No data loss, nothing to review before upgrading.
+**New env vars**: `MESSAGE_EDIT_WINDOW_MINUTES` (default `15`, optional).
+
+Implemented `FEATURE_REQUEST.md` backlog entry 3, "Editing a sent message, with a permanent, auditable revision history."
+
+- `PATCH /api/channels/:channelId/messages/:messageId` — author-only (no manager/owner override), editable within a fixed window of the message's original send time (measured from `created_at`, not reset by a prior edit). Every edit inserts the pre-edit content into `message_edits` before overwriting `messages.content` — the first such row for a message is therefore exactly what was originally sent. Broadcasts the existing `message_updated` WS event (no new event type); audited as `MESSAGE_EDITED` with lengths only, never the old or new text.
+- `linkMessageEntities` (`services/entityService.js`) now reconciles `message_entities` against the freshly-extracted `[[Entity]]` set on every run instead of only appending — a real correctness fix, not edit-specific: without it, an edit that removed an entity mention would leave a stale reference counting toward that entity's trending/SME/reference numbers forever. Re-triggering the existing entity-link and mention-notification side-effect jobs on edit reuses their established idempotent `onConflict(...).ignore()` semantics unmodified — a mention present before and after an edit is never double-notified; a newly added one gets a real notification.
+- `GET /api/channels/:channelId/messages/:messageId/edits` — the revision history behind the "(edited)" tag, gated the same as reading the message itself (channel membership), not admin-only.
+- Frontend: a new `EditableMessageContent` component (shared by `ChannelView.jsx`'s main feed and `ThreadSidebar.jsx`'s root/reply rows) adds an inline "Edit" action on the caller's own messages, an "(edited)" tag that expands to show prior versions, and no client-side mirroring of the server's edit-window check — the window is enforced server-side only, with the server's own error surfaced inline on a rejected edit.
+
+See `PROJECT_PLAN.md` Section 11, "Editing a sent message, with a permanent, auditable revision history" (2026-07-25), for full detail.
+
+Full diff: `git diff v1.5.1..v1.6.0`.
+
 ## [1.5.1] — 2026-07-25
 
 **Migrations**: none. **New env vars**: none.

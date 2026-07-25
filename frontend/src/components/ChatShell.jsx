@@ -9,6 +9,7 @@ import * as notificationsApi from '../api/notifications.js';
 import * as directMessagesApi from '../api/directMessages.js';
 import * as entitiesApi from '../api/entities.js';
 import * as tasksApi from '../api/tasks.js';
+import * as messagesApi from '../api/messages.js';
 import { parseTaskLines } from '../markdown.jsx';
 import { PERMISSIONS, hasPermission, hasAnyWorkspaceAdminAccess, hasOrgManagementAccess } from '../authz/permissions.js';
 import WorkspaceSidebar from './WorkspaceSidebar.jsx';
@@ -791,6 +792,22 @@ function ChatShellInner() {
     [selectedChannelId, reconcileUpdatedMessage, reconcileWorkspaceTaskMessage],
   );
 
+  // FEATURE_REQUEST.md entry 3 (message editing). Unlike handleToggleTask
+  // above, no optimistic-override/rollback dance is needed — the edit form
+  // itself already has its own "Saving…" state (EditableMessageContent,
+  // ChannelView.jsx), and a failed edit's rejection is left to propagate so
+  // that form's own catch can show the server's error inline, the same
+  // pattern EntityDetailsPanel.jsx's EditMetadataSection already
+  // establishes for an inline edit form.
+  const handleEditMessage = useCallback(
+    async (messageId, content) => {
+      const updated = await messagesApi.editMessage(selectedChannelId, messageId, content);
+      reconcileUpdatedMessage(updated);
+      reconcileWorkspaceTaskMessage(updated);
+    },
+    [selectedChannelId, reconcileUpdatedMessage, reconcileWorkspaceTaskMessage],
+  );
+
   // The dashboard-originated equivalent: a task row already carries its own
   // channelId (routes/tasks.js's response shape), unlike ChannelView/
   // ThreadSidebar, which always operate on whatever's currently selected.
@@ -1090,12 +1107,14 @@ function ChatShellInner() {
           onOpenThread={openThread}
           onToggleTask={handleToggleTask}
           taskOverrides={taskOverrides}
+          onEditMessage={handleEditMessage}
           onOpenDetails={handleOpenChannelDetails}
           workspaceId={selectedDirectMessage ? null : selectedWorkspaceId}
           onOpenEntity={selectedDirectMessage ? undefined : handleOpenEntity}
         />
       )}
       <ThreadSidebar
+        channelId={selectedChannelId}
         rootMessage={threadRoot}
         replies={threadReplies}
         currentUser={user}
@@ -1105,6 +1124,7 @@ function ChatShellInner() {
         onOpenEntity={threadChannelType === 'DIRECT' || threadChannelType === 'GROUP_DM' ? undefined : handleOpenEntity}
         onToggleTask={handleToggleTask}
         taskOverrides={taskOverrides}
+        onEditMessage={handleEditMessage}
       />
       {createWorkspaceOpen && (
         <CreateWorkspaceSheet

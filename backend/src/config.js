@@ -210,6 +210,17 @@ export const config = {
     trendingWindowDays: Number(process.env.KNOWLEDGE_EXPLORER_TRENDING_WINDOW_DAYS || 30),
   },
 
+  // FEATURE_REQUEST.md entry 3 (message editing): a fixed window from a
+  // message's original created_at, not from its most recent edit — editing
+  // repeatedly does not extend how long a message stays editable.
+  // Env-overridable, matching every other window in this file; no request-
+  // level override (unlike dashboardWindowDays/trendingWindowDays) since
+  // there's no legitimate reason a caller would ever want to narrow or
+  // widen their own edit window per-request.
+  messages: {
+    editWindowMinutes: Number(process.env.MESSAGE_EDIT_WINDOW_MINUTES || 15),
+  },
+
   dm: {
     // FEATURE_REQUEST.md entry 2: per-user auto-archive threshold for
     // DIRECT/GROUP_DM channels, applied only when a caller's own

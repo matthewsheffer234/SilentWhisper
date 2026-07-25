@@ -6,6 +6,7 @@ import Menu from './Menu.jsx';
 import { summarizeChannel } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
 import { searchEntities } from '../api/entities.js';
+import { getMessageEditHistory } from '../api/messages.js';
 import { renderMessageContent } from '../markdown.jsx';
 import { AI_SUMMARY_LIMIT, AI_SUMMARY_SCOPE, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
 
@@ -252,6 +253,206 @@ const styles = {
   empty: { color: 'var(--text-3)', fontSize: 'var(--text-sm)', padding: '20px 0' },
 };
 
+// FEATURE_REQUEST.md entry 3 (message editing): styling shared by
+// EditableMessageContent below, used identically in ChannelView's own
+// MessageRow and ThreadSidebar.jsx's root/reply rows.
+const editStyles = {
+  metaRow: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 },
+  actionButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--brg)',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 0,
+  },
+  actionButtonMine: { color: 'var(--item-active-fg)', textDecoration: 'underline' },
+  form: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 220 },
+  textarea: {
+    width: '100%',
+    minHeight: 60,
+    padding: '8px 10px',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    background: 'var(--surface-alt)',
+    color: 'var(--text-1)',
+    fontSize: 'var(--text-sm)',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box',
+    resize: 'vertical',
+  },
+  formActions: { display: 'flex', gap: 8 },
+  saveButton: {
+    minHeight: 30,
+    padding: '0 12px',
+    borderRadius: 6,
+    border: 'none',
+    background: 'var(--brg)',
+    color: '#fff',
+    fontWeight: 600,
+    fontSize: 'var(--text-xs)',
+    cursor: 'pointer',
+  },
+  cancelButton: {
+    minHeight: 30,
+    padding: '0 12px',
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'none',
+    color: 'var(--text-1)',
+    fontSize: 'var(--text-xs)',
+    cursor: 'pointer',
+  },
+  error: { color: '#c0392b', fontSize: 'var(--text-xs)' },
+  historyPanel: {
+    marginTop: 6,
+    padding: '8px 10px',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    background: 'var(--surface-alt)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    maxWidth: 340,
+  },
+  historyMuted: { color: 'var(--text-3)', fontSize: 'var(--text-xs)' },
+  historyRevision: { display: 'flex', flexDirection: 'column', gap: 2 },
+  historyTimestamp: { fontSize: 'var(--text-xs)', color: 'var(--text-3)' },
+  historyContent: { fontSize: 'var(--text-sm)', color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+};
+
+// FEATURE_REQUEST.md entry 3: the editable body + "(edited)" tag + inline
+// history viewer shared by every place a message renders its own content —
+// ChannelView's own MessageRow below, and ThreadSidebar.jsx's root/reply
+// rows (which would otherwise duplicate this in three places). `canEdit` is
+// the caller's own author/pending check — this component only owns the
+// edit-form/history UI, not the authorization decision of whether to offer
+// it (the server is the real enforcer either way, including the edit-
+// window check this component deliberately doesn't try to mirror
+// client-side — see FEATURE_REQUEST.md entry 3's own design note on this).
+export function EditableMessageContent({
+  message: m,
+  channelId,
+  canEdit,
+  onEditMessage,
+  onEntityClick,
+  onToggleTask,
+  taskOverrides,
+  variant,
+  contentStyle,
+  actionButtonStyle,
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(m.content);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState(null);
+  const [historyError, setHistoryError] = useState(null);
+
+  function startEditing() {
+    setDraft(m.content);
+    setError(null);
+    setEditing(true);
+  }
+
+  async function handleSaveEdit(e) {
+    e.preventDefault();
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onEditMessage(m.id, trimmed);
+      setEditing(false);
+    } catch (err) {
+      setError(err.message || 'Failed to save edit');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleToggleHistory() {
+    if (historyOpen) {
+      setHistoryOpen(false);
+      return;
+    }
+    setHistoryOpen(true);
+    if (history === null) {
+      try {
+        const rows = await getMessageEditHistory(channelId, m.id);
+        setHistory(rows);
+      } catch (err) {
+        setHistoryError(err.message || 'Failed to load edit history');
+      }
+    }
+  }
+
+  if (editing) {
+    return (
+      <form style={editStyles.form} onSubmit={handleSaveEdit}>
+        {/* eslint-disable-next-line jsx-a11y/no-autofocus -- opening this
+            form is itself the user's explicit "I want to edit now" action,
+            same as EntityDetailsPanel.jsx's inline edit form. */}
+        <textarea
+          style={editStyles.textarea}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          maxLength={10000}
+          autoFocus
+          aria-label={`Edit message`}
+        />
+        <div style={editStyles.formActions}>
+          <button type="submit" style={editStyles.saveButton} disabled={saving || !draft.trim()}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button type="button" style={editStyles.cancelButton} onClick={() => setEditing(false)} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+        {error && <div style={editStyles.error}>{error}</div>}
+      </form>
+    );
+  }
+
+  return (
+    <>
+      <div style={contentStyle}>{renderMessageContent(m.content, { variant, onEntityClick, onToggleTask, messageId: m.id, taskOverrides })}</div>
+      {(canEdit || m.editedAt) && (
+        <div style={editStyles.metaRow}>
+          {canEdit && (
+            <button type="button" style={actionButtonStyle} onClick={startEditing}>
+              Edit
+            </button>
+          )}
+          {m.editedAt && (
+            <button type="button" style={actionButtonStyle} onClick={handleToggleHistory} aria-expanded={historyOpen}>
+              (edited)
+            </button>
+          )}
+        </div>
+      )}
+      {historyOpen && (
+        <div style={editStyles.historyPanel}>
+          {historyError && <div style={editStyles.error}>{historyError}</div>}
+          {history === null && !historyError && <div style={editStyles.historyMuted}>Loading…</div>}
+          {history?.length === 0 && <div style={editStyles.historyMuted}>No earlier versions.</div>}
+          {history?.map((rev) => (
+            <div key={rev.id} style={editStyles.historyRevision}>
+              <div style={editStyles.historyTimestamp}>
+                {new Date(rev.editedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+              </div>
+              <div style={editStyles.historyContent}>{rev.content}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 // Finding 7, docs/reviews/security-performance-review-2026-07-20.md: one
 // virtualized row's rendering, including the markdown-tokenizing
 // renderMessageContent() call, extracted into its own React.memo'd
@@ -280,6 +481,9 @@ const MessageRow = memo(function MessageRow({
   onOpenEntity,
   onToggleTask,
   taskOverrides,
+  channelId,
+  isMine,
+  onEditMessage,
 }) {
   return (
     <div
@@ -319,15 +523,18 @@ const MessageRow = memo(function MessageRow({
           <UserPresenceBadge userId={m.userId} variant={useMineStyle ? 'onMine' : undefined} />
           <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
         </div>
-        <div style={styles.messageContent}>
-          {renderMessageContent(m.content, {
-            variant: useMineStyle ? 'mine' : undefined,
-            onEntityClick: onOpenEntity,
-            onToggleTask: m.pending ? undefined : onToggleTask,
-            messageId: m.id,
-            taskOverrides,
-          })}
-        </div>
+        <EditableMessageContent
+          message={m}
+          channelId={channelId}
+          canEdit={isMine && !m.pending}
+          onEditMessage={onEditMessage}
+          onEntityClick={onOpenEntity}
+          onToggleTask={m.pending ? undefined : onToggleTask}
+          taskOverrides={taskOverrides}
+          variant={useMineStyle ? 'mine' : undefined}
+          contentStyle={styles.messageContent}
+          actionButtonStyle={{ ...styles.replyButton, ...(useMineStyle ? styles.replyButtonMine : {}) }}
+        />
         {!m.parentMessageId && !m.pending && (
           <button
             type="button"
@@ -361,6 +568,7 @@ function ChannelView({
   onOpenEntity,
   onToggleTask,
   taskOverrides,
+  onEditMessage,
   workspaceId,
   mainContentId,
 }) {
@@ -752,8 +960,10 @@ function ChannelView({
             // render every message with the same "theirs" visual treatment
             // regardless of sender (FEATURE_REQUEST.md entry 3's resolved
             // alignment call). `isMine` itself is still needed above for
-            // things unrelated to color/alignment (none currently), so it's
-            // kept as a separate variable rather than folded away.
+            // things unrelated to color/alignment — gating the Edit action
+            // to the message's own author (FEATURE_REQUEST.md entry 3,
+            // message editing) — so it's kept as a separate variable rather
+            // than folded away.
             const useMineStyle = isDirectConversation && isMine;
             // Consecutive-message grouping: tighten the gap *after* this row
             // when the next message in the (already chronologically ordered)
@@ -782,6 +992,9 @@ function ChannelView({
                 onOpenEntity={onOpenEntity}
                 onToggleTask={onToggleTask}
                 taskOverrides={taskOverrides}
+                channelId={channel.id}
+                isMine={isMine}
+                onEditMessage={onEditMessage}
               />
             );
           })}

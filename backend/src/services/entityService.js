@@ -108,11 +108,25 @@ export async function normalizeAndValidateAliases(db, { workspaceId, entityId, a
   return normalizedAliases;
 }
 
+// FEATURE_REQUEST.md entry 3 (message editing): reconciles message_entities
+// against the freshly-extracted set rather than only ever appending —
+// correct both at creation (nothing existing to remove, so the reconcile
+// deletes zero rows) and on a later edit, where a [[Entity]] token can
+// genuinely be removed and a stale reference would otherwise linger
+// forever, incorrectly counting toward that entity's
+// referenceCount/trending/SME attribution. Always reconciles rather than
+// only doing so when called for an edit specifically — message_id is the
+// leading column of message_entities' own composite primary key, so the
+// delete is a cheap indexed no-op on the common creation-with-no-entities
+// path, not worth a second job_type/call-site distinction to avoid.
 export async function linkMessageEntities(db, { content, messageId, workspaceId, createdBy }) {
   if (!workspaceId) return [];
 
   const extracted = extractEntityNames(content);
-  if (extracted.length === 0) return [];
+  if (extracted.length === 0) {
+    await db('message_entities').where({ message_id: messageId }).del();
+    return [];
+  }
 
   const resolved = [];
   for (const entity of extracted) {
@@ -121,8 +135,13 @@ export async function linkMessageEntities(db, { content, messageId, workspaceId,
     if (row) resolved.push(row);
   }
 
-  if (resolved.length === 0) return [];
+  if (resolved.length === 0) {
+    await db('message_entities').where({ message_id: messageId }).del();
+    return [];
+  }
 
+  const resolvedIds = resolved.map((entity) => entity.id);
+  await db('message_entities').where({ message_id: messageId }).whereNotIn('entity_id', resolvedIds).del();
   await db('message_entities')
     .insert(resolved.map((entity) => ({ message_id: messageId, entity_id: entity.id })))
     .onConflict(['message_id', 'entity_id'])

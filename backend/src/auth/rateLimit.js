@@ -169,6 +169,20 @@ export const taskToggleLimiter = rateLimit({
   handler: jsonRateLimitHandler,
 });
 
+// FEATURE_REQUEST.md entry 3 (message editing) — same shape and ceiling as
+// taskToggleLimiter directly above: a content-mutation route with no
+// mandatory-by-CLAUDE.md category of its own, sized for "a few corrections
+// in a row," never real per-keystroke volume.
+export const messageEditLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  keyGenerator: (req) => `message-edit:${req.user.id}`,
+  handler: jsonRateLimitHandler,
+});
+
 // FEATURE_REQUEST.md entry 2 (Knowledge Explorer): trending is the first
 // entity route that aggregates across every channel the caller belongs to
 // rather than reading a single already-identified entity, making it heavier

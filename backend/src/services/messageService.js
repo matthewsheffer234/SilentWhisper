@@ -39,5 +39,10 @@ export async function createMessage(db, { channelId, userId, username, displayNa
     content: message.content,
     parentMessageId: message.parent_message_id,
     createdAt: message.created_at,
+    // Always present (never undefined) so every consumer of a message
+    // shape — frontend display state, WS reconciliation — can rely on the
+    // field existing rather than treating "missing" and "null" as the same
+    // thing (FEATURE_REQUEST.md entry 3: message editing).
+    editedAt: null,
   };
 }

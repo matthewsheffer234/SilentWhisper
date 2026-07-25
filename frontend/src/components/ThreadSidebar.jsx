@@ -3,8 +3,7 @@ import { X, Sparkles, ChevronDown } from 'lucide-react';
 import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
 import { extractTasks } from '../api/ai.js';
-import { renderMessageContent } from '../markdown.jsx';
-import { isFirstInRun, initials } from './ChannelView.jsx';
+import { isFirstInRun, initials, EditableMessageContent } from './ChannelView.jsx';
 import { AI_THREAD_SCOPE, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
 
 const styles = {
@@ -119,6 +118,21 @@ const styles = {
   bubbleMetaMine: { color: 'var(--item-active-fg)' },
   bubbleAuthor: { fontWeight: 700, fontSize: 'var(--text-sm)', color: 'var(--text-1)' },
   bubbleContent: { fontSize: 'var(--text-sm)', marginTop: 2, whiteSpace: 'pre-wrap' },
+  // FEATURE_REQUEST.md entry 3 (message editing): same treatment as
+  // ChannelView.jsx's own replyButton/replyButtonMine pair, for the
+  // Edit/"(edited)" actions EditableMessageContent renders.
+  actionButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--brg)',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 0,
+    marginTop: 2,
+  },
+  actionButtonMine: { color: 'var(--item-active-fg)', textDecoration: 'underline' },
   replies: { flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 },
   composer: { display: 'flex', gap: 6, padding: '12px 16px', borderTop: '1px solid var(--border)' },
   input: {
@@ -146,6 +160,7 @@ const styles = {
 // Finding 7, docs/reviews/security-performance-review-2026-07-20.md:
 // React.memo, no `presence` prop (see UserPresenceBadge above).
 function ThreadSidebar({
+  channelId,
   rootMessage,
   replies,
   currentUser,
@@ -155,6 +170,7 @@ function ThreadSidebar({
   onOpenEntity,
   onToggleTask,
   taskOverrides,
+  onEditMessage,
 }) {
   const [draft, setDraft] = useState('');
   const [tasks, setTasks] = useState(null); // { loading, text, error, scope }
@@ -271,15 +287,18 @@ function ThreadSidebar({
                   {showAuthor && <span style={styles.bubbleAuthor}>{rootMessage.displayName || rootMessage.username}</span>}
                   <UserPresenceBadge userId={rootMessage.userId} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
-                <div style={styles.bubbleContent}>
-                  {renderMessageContent(rootMessage.content, {
-                    variant: useMineStyle ? 'mine' : undefined,
-                    onEntityClick: onOpenEntity,
-                    onToggleTask,
-                    messageId: rootMessage.id,
-                    taskOverrides,
-                  })}
-                </div>
+                <EditableMessageContent
+                  message={rootMessage}
+                  channelId={channelId}
+                  canEdit={isMine && !rootMessage.pending}
+                  onEditMessage={onEditMessage}
+                  onEntityClick={onOpenEntity}
+                  onToggleTask={onToggleTask}
+                  taskOverrides={taskOverrides}
+                  variant={useMineStyle ? 'mine' : undefined}
+                  contentStyle={styles.bubbleContent}
+                  actionButtonStyle={{ ...styles.actionButton, ...(useMineStyle ? styles.actionButtonMine : {}) }}
+                />
               </div>
             </div>
           );
@@ -315,15 +334,18 @@ function ThreadSidebar({
                   {showAuthor && <span style={styles.bubbleAuthor}>{r.displayName || r.username}</span>}
                   <UserPresenceBadge userId={r.userId} variant={useMineStyle ? 'onMine' : undefined} />
                 </div>
-                <div style={styles.bubbleContent}>
-                  {renderMessageContent(r.content, {
-                    variant: useMineStyle ? 'mine' : undefined,
-                    onEntityClick: onOpenEntity,
-                    onToggleTask: r.pending ? undefined : onToggleTask,
-                    messageId: r.id,
-                    taskOverrides,
-                  })}
-                </div>
+                <EditableMessageContent
+                  message={r}
+                  channelId={channelId}
+                  canEdit={isMine && !r.pending}
+                  onEditMessage={onEditMessage}
+                  onEntityClick={onOpenEntity}
+                  onToggleTask={r.pending ? undefined : onToggleTask}
+                  taskOverrides={taskOverrides}
+                  variant={useMineStyle ? 'mine' : undefined}
+                  contentStyle={styles.bubbleContent}
+                  actionButtonStyle={{ ...styles.actionButton, ...(useMineStyle ? styles.actionButtonMine : {}) }}
+                />
               </div>
             </div>
           );

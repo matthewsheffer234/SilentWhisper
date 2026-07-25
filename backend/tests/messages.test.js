@@ -5,10 +5,12 @@ import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, authHeader } from './helpers/testUsers.js';
 import { _resetForTests as resetMessageRateLimiter } from '../src/ws/rateLimiter.js';
+import { runMessageSideEffectsWorkerTick, _resetForTests as resetSideEffectsWorker } from '../src/workers/messageSideEffectsWorker.js';
 
 beforeEach(async () => {
   await resetDb(db);
   resetMessageRateLimiter();
+  resetSideEffectsWorker();
 });
 
 afterAll(async () => {
@@ -463,5 +465,304 @@ describe('task checkbox toggle (PATCH .../tasks/:taskIndex)', () => {
       .set(authHeader(owner.accessToken))
       .send({ checked: true });
     expect(res.status).toBe(409);
+  });
+});
+
+// FEATURE_REQUEST.md entry 3: editing a sent message, with a permanent,
+// auditable revision history.
+describe('message editing (PATCH /channels/:channelId/messages/:messageId)', () => {
+  async function sendMessage(owner, channelId, content = 'original content') {
+    const res = await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content });
+    return res.body.id;
+  }
+
+  test('the author can edit their own message; content/editedAt update, and the history list reflects it', async () => {
+    const owner = await signup('editowner0');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId, 'original content');
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'corrected content' });
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('corrected content');
+    expect(res.body.editedAt).toBeTruthy();
+
+    const history = await request(app).get(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken));
+    expect(history.body[0].content).toBe('corrected content');
+    expect(history.body[0].editedAt).toBeTruthy();
+  });
+
+  test('a fresh, never-edited message has editedAt: null in both the send response and the history list', async () => {
+    const owner = await signup('editowner1');
+    const channelId = await createChannel(owner);
+
+    const sendRes = await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hi' });
+    expect(sendRes.body.editedAt).toBeNull();
+
+    const history = await request(app).get(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken));
+    expect(history.body[0].editedAt).toBeNull();
+  });
+
+  test('a channel member who is not the author gets 403, not 404 — they already legitimately see this message', async () => {
+    const owner = await signup('editowner2');
+    const bob = await signup('editbob2');
+    const channelId = await createChannel(owner);
+    await db('channel_members').insert({ channel_id: channelId, user_id: bob.userId });
+    const messageId = await sendMessage(owner, channelId);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(bob.accessToken))
+      .send({ content: 'bob rewrites it' });
+    expect(res.status).toBe(403);
+
+    const unchanged = await db('messages').where({ id: messageId }).first('content');
+    expect(unchanged.content).toBe('original content');
+  });
+
+  test('a non-member of the channel gets the existing existence-hiding 404', async () => {
+    const owner = await signup('editowner3');
+    const outsider = await signup('editoutsider3');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(outsider.accessToken))
+      .send({ content: 'should not land' });
+    expect(res.status).toBe(404);
+  });
+
+  test('a channelId/messageId mismatch across channels 404s the same way, not a 400/403', async () => {
+    const owner = await signup('editowner4');
+    const channelId1 = await createChannel(owner);
+    const channelId2 = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId1);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId2}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'wrong channel' });
+    expect(res.status).toBe(404);
+  });
+
+  test('editing outside the configured time window is rejected with 400', async () => {
+    const owner = await signup('editowner5');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId);
+    await db('messages')
+      .where({ id: messageId })
+      .update({ created_at: new Date(Date.now() - (config.messages.editWindowMinutes + 1) * 60 * 1000) });
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'too late' });
+    expect(res.status).toBe(400);
+
+    const unchanged = await db('messages').where({ id: messageId }).first('content');
+    expect(unchanged.content).toBe('original content');
+  });
+
+  test('editing again does not reset the window — the anchor is created_at, and an edit never touches it', async () => {
+    const owner = await signup('editowner6');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId);
+    const original = await db('messages').where({ id: messageId }).first('created_at');
+
+    const first = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'edited once' });
+    expect(first.status).toBe(200);
+
+    const afterFirstEdit = await db('messages').where({ id: messageId }).first('created_at');
+    expect(afterFirstEdit.created_at.getTime()).toBe(original.created_at.getTime());
+
+    // Push created_at itself outside the window and confirm a further edit
+    // is rejected — proving the check is anchored to created_at (just
+    // proven unchanged by the first edit above), not silently refreshed by
+    // whichever edit most recently succeeded.
+    await db('messages')
+      .where({ id: messageId })
+      .update({ created_at: new Date(Date.now() - (config.messages.editWindowMinutes + 1) * 60 * 1000) });
+
+    const second = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'edited twice' });
+    expect(second.status).toBe(400);
+  });
+
+  test('editing in an archived workspace is rejected', async () => {
+    const owner = await signup('editowner7');
+    const wsRes = await request(app).post('/api/workspaces').set(authHeader(owner.accessToken)).send({ name: 'W' });
+    const chRes = await request(app)
+      .post(`/api/workspaces/${wsRes.body.id}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'general', type: 'PUBLIC' });
+    const channelId = chRes.body.id;
+    const messageId = await sendMessage(owner, channelId);
+
+    await db('workspaces').where({ id: wsRes.body.id }).update({ archived_at: new Date() });
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'archived edit' });
+    expect(res.status).toBe(409);
+  });
+
+  test('rejects an empty edit with 400, same validation as sending', async () => {
+    const owner = await signup('editowner8');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId);
+
+    const res = await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: '' });
+    expect(res.status).toBe(400);
+  });
+
+  test('records a MESSAGE_EDITED audit event with lengths only, never the old or new text', async () => {
+    const owner = await signup('editowner9');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId, 'short');
+
+    await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'a fair bit longer than before' });
+
+    const row = await db('audit_logs').where({ action_type: 'MESSAGE_EDITED' }).first();
+    expect(row).toBeTruthy();
+    expect(row.target_resource).toBe(messageId);
+    expect(row.payload).toEqual({ channelId, contentLengthBefore: 'short'.length, contentLengthAfter: 'a fair bit longer than before'.length });
+    expect(JSON.stringify(row.payload)).not.toContain('short');
+    expect(JSON.stringify(row.payload)).not.toContain('longer than before');
+  });
+
+  test('each edit inserts exactly one message_edits row holding the pre-edit content; rows accumulate and are never mutated', async () => {
+    const owner = await signup('editowner10');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId, 'version one');
+
+    await request(app).patch(`/api/channels/${channelId}/messages/${messageId}`).set(authHeader(owner.accessToken)).send({ content: 'version two' });
+    await request(app).patch(`/api/channels/${channelId}/messages/${messageId}`).set(authHeader(owner.accessToken)).send({ content: 'version three' });
+
+    const rows = await db('message_edits').where({ message_id: messageId }).orderBy('edited_at', 'asc');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].content).toBe('version one');
+    expect(rows[1].content).toBe('version two');
+    expect(rows[0].edited_by).toBe(owner.userId);
+
+    const current = await db('messages').where({ id: messageId }).first('content');
+    expect(current.content).toBe('version three');
+  });
+
+  test('editing to add a [[Entity]] mention links it; editing again to remove it un-links it, not leaving a stale reference', async () => {
+    const owner = await signup('editowner11');
+    const channelId = await createChannel(owner);
+    const messageId = await sendMessage(owner, channelId, 'no entities here');
+    await runMessageSideEffectsWorkerTick(db);
+    expect(await db('message_entities').where({ message_id: messageId })).toHaveLength(0);
+
+    await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'now mentioning [[Server Alpha]]' });
+    await runMessageSideEffectsWorkerTick(db);
+    const entity = await db('entities').where({ normalized_name: 'server alpha' }).first();
+    expect(entity).toBeTruthy();
+    expect(await db('message_entities').where({ message_id: messageId, entity_id: entity.id })).toHaveLength(1);
+
+    await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'no longer mentioning it' });
+    await runMessageSideEffectsWorkerTick(db);
+    expect(await db('message_entities').where({ message_id: messageId })).toHaveLength(0);
+  });
+
+  test('editing to add a @mention notifies the newly-mentioned user; a mention present before and after is not re-notified', async () => {
+    const owner = await signup('editowner12');
+    const alice = await signup('editalice12');
+    const bob = await signup('editbob12');
+    const channelId = await createChannel(owner);
+    await db('channel_members').insert([
+      { channel_id: channelId, user_id: alice.userId },
+      { channel_id: channelId, user_id: bob.userId },
+    ]);
+    const messageId = await sendMessage(owner, channelId, `already mentions @${alice.username}`);
+    await runMessageSideEffectsWorkerTick(db);
+    expect(await db('mention_notifications').where({ recipient_user_id: alice.userId, message_id: messageId })).toHaveLength(1);
+    expect(await db('mention_notifications').where({ recipient_user_id: bob.userId, message_id: messageId })).toHaveLength(0);
+
+    await request(app)
+      .patch(`/api/channels/${channelId}/messages/${messageId}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: `already mentions @${alice.username} and now also @${bob.username}` });
+    await runMessageSideEffectsWorkerTick(db);
+
+    // Alice was already notified before the edit — still exactly one row,
+    // not a second one from the re-run.
+    expect(await db('mention_notifications').where({ recipient_user_id: alice.userId, message_id: messageId })).toHaveLength(1);
+    // Bob is newly mentioned — a fresh notification.
+    expect(await db('mention_notifications').where({ recipient_user_id: bob.userId, message_id: messageId })).toHaveLength(1);
+  });
+});
+
+// FEATURE_REQUEST.md entry 3: the revision-history endpoint behind the
+// "(edited)" tag.
+describe('message edit history (GET /channels/:channelId/messages/:messageId/edits)', () => {
+  test('returns every prior revision newest-first, with the author and timestamp of each edit', async () => {
+    const owner = await signup('histowner0');
+    const channelId = await createChannel(owner);
+    const sendRes = await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'v1' });
+    const messageId = sendRes.body.id;
+    await request(app).patch(`/api/channels/${channelId}/messages/${messageId}`).set(authHeader(owner.accessToken)).send({ content: 'v2' });
+    await request(app).patch(`/api/channels/${channelId}/messages/${messageId}`).set(authHeader(owner.accessToken)).send({ content: 'v3' });
+
+    const res = await request(app).get(`/api/channels/${channelId}/messages/${messageId}/edits`).set(authHeader(owner.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.map((r) => r.content)).toEqual(['v2', 'v1']);
+    expect(res.body[0].username).toBe(owner.username);
+    expect(res.body[0].editedAt).toBeTruthy();
+  });
+
+  test('a never-edited message has an empty history', async () => {
+    const owner = await signup('histowner1');
+    const channelId = await createChannel(owner);
+    const sendRes = await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hi' });
+
+    const res = await request(app).get(`/api/channels/${channelId}/messages/${sendRes.body.id}/edits`).set(authHeader(owner.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  test('any channel member can view history, not just the author — seeing a prior version discloses nothing new', async () => {
+    const owner = await signup('histowner2');
+    const bob = await signup('histbob2');
+    const channelId = await createChannel(owner);
+    await db('channel_members').insert({ channel_id: channelId, user_id: bob.userId });
+    const sendRes = await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'v1' });
+    await request(app).patch(`/api/channels/${channelId}/messages/${sendRes.body.id}`).set(authHeader(owner.accessToken)).send({ content: 'v2' });
+
+    const res = await request(app).get(`/api/channels/${channelId}/messages/${sendRes.body.id}/edits`).set(authHeader(bob.accessToken));
+    expect(res.status).toBe(200);
+    expect(res.body.map((r) => r.content)).toEqual(['v1']);
+  });
+
+  test('a non-member gets 404', async () => {
+    const owner = await signup('histowner3');
+    const outsider = await signup('histoutsider3');
+    const channelId = await createChannel(owner);
+    const sendRes = await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hi' });
+
+    const res = await request(app).get(`/api/channels/${channelId}/messages/${sendRes.body.id}/edits`).set(authHeader(outsider.accessToken));
+    expect(res.status).toBe(404);
   });
 });
