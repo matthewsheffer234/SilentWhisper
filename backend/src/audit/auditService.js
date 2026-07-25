@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { enqueueAuditRetry } from './auditRetryQueue.js';
 
 // Fixed genesis previous-hash value for the first row ever inserted into
 // audit_logs (PROJECT_PLAN.md Section 6, Immutable Local Auditing: "The
@@ -112,6 +113,26 @@ export async function appendAuditEvent(db, event) {
 
     return inserted;
   });
+}
+
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #7 (SEC-03/
+// GOV-03). Used only by call sites where the caller can't retry the write
+// itself before its response completes (routes/ai.js's three streaming
+// routes, via runStreamingCompletion's onBeforeEnd — body bytes may already
+// be on the wire by the time this runs, so the failure can't be surfaced to
+// the client either). Falls back to a best-effort outbox insert
+// (audit/auditRetryQueue.js) rather than only logging, then re-throws the
+// original error unchanged — every existing caller's own catch-and-log
+// behavior around this call (aiService.js's onBeforeEnd handling) is
+// unaffected either way; this only changes what happens *before* that log
+// line, not whether the AI response still completes.
+export async function appendAuditEventOrEnqueueRetry(db, event) {
+  try {
+    return await appendAuditEvent(db, event);
+  } catch (err) {
+    await enqueueAuditRetry(db, event);
+    throw err;
+  }
 }
 
 // Default page size for verifyAuditChain's batched read below. Large enough

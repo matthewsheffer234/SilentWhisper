@@ -9,6 +9,7 @@ import { _resetForTests as resetConnectionRegistry } from '../src/ws/connectionR
 import { _resetForTests as resetPresence } from '../src/ws/presence.js';
 import { _resetForTests as resetWsRateLimiter } from '../src/ws/rateLimiter.js';
 import { runMessageSideEffectsWorkerTick, _resetForTests } from '../src/workers/messageSideEffectsWorker.js';
+import { enqueueMissingMessageSideEffectJobs } from '../src/services/messageSideEffectsQueue.js';
 
 // FEATURE_REQUEST.md "hot path splitting" entry: mention-notification
 // writing and [[Entity]] linking moved off the message-send path onto this
@@ -137,7 +138,7 @@ describe('job enqueueing at both send call sites', () => {
 });
 
 describe('processing a NOTIFICATION job', () => {
-  test('writes a mention_notifications row, pushes a live mention frame, and removes the job row', async () => {
+  test('writes a mention_notifications row, pushes a live mention frame, and marks the job row completed', async () => {
     const owner = await signup('msejobnotify0');
     const member = await signup('msejobnotifymember0');
     const { workspaceId, channelId } = await createChannelAsMember(owner);
@@ -169,10 +170,10 @@ describe('processing a NOTIFICATION job', () => {
     expect(notificationRow.recipient_user_id).toBe(member.userId);
 
     const job = await db('message_side_effect_jobs').where({ message_id: res.body.id, job_type: 'NOTIFICATION' }).first();
-    expect(job).toBeUndefined();
+    expect(job.status).toBe('completed');
   });
 
-  test('a message with no mentions still processes and removes the job row, with no notification row', async () => {
+  test('a message with no mentions still processes and marks the job row completed, with no notification row', async () => {
     const owner = await signup('msejobnomention0');
     const { channelId } = await createChannelAsMember(owner);
 
@@ -184,14 +185,14 @@ describe('processing a NOTIFICATION job', () => {
     await runMessageSideEffectsWorkerTick(db);
 
     const job = await db('message_side_effect_jobs').where({ message_id: res.body.id, job_type: 'NOTIFICATION' }).first();
-    expect(job).toBeUndefined();
+    expect(job.status).toBe('completed');
     const notificationRows = await db('mention_notifications').where({ message_id: res.body.id });
     expect(notificationRows).toHaveLength(0);
   });
 });
 
 describe('processing an ENTITY_LINK job', () => {
-  test('creates the entity and message link, then removes the job row', async () => {
+  test('creates the entity and message link, then marks the job row completed', async () => {
     const owner = await signup('msejobentity0');
     const { workspaceId, channelId } = await createChannelAsMember(owner);
 
@@ -213,7 +214,7 @@ describe('processing an ENTITY_LINK job', () => {
     expect(link).toBeDefined();
 
     const job = await db('message_side_effect_jobs').where({ message_id: res.body.id, job_type: 'ENTITY_LINK' }).first();
-    expect(job).toBeUndefined();
+    expect(job.status).toBe('completed');
   });
 
   test('a DIRECT message never gets an ENTITY_LINK job enqueued at all', async () => {
@@ -337,5 +338,90 @@ describe('batching', () => {
 
     const stillQueuedIds = await db('message_side_effect_jobs').where({ status: 'pending' }).pluck('message_id');
     expect(stillQueuedIds.every((id) => ids.includes(id))).toBe(true);
+  });
+});
+
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #6 (GOV-02/
+// EFF-03).
+describe('reconciliation (enqueueMissingMessageSideEffectJobs)', () => {
+  test('backfills both job types for a workspace-channel message whose rows went missing, simulating a failed enqueue', async () => {
+    const owner = await signup('msereconcile0');
+    const { channelId } = await createChannelAsMember(owner);
+    const res = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'whatever' });
+    await db('message_side_effect_jobs').where({ message_id: res.body.id }).del();
+    expect(await db('message_side_effect_jobs').where({ message_id: res.body.id })).toHaveLength(0);
+
+    await enqueueMissingMessageSideEffectJobs(db);
+
+    const jobs = await db('message_side_effect_jobs').where({ message_id: res.body.id }).orderBy('job_type');
+    expect(jobs.map((j) => j.job_type)).toEqual(['ENTITY_LINK', 'NOTIFICATION']);
+    expect(jobs.every((j) => j.status === 'pending')).toBe(true);
+  });
+
+  test('backfills only NOTIFICATION for a DIRECT message, never ENTITY_LINK', async () => {
+    const alice = await signup('msereconcile1a');
+    const bob = await signup('msereconcile1b');
+    const dm = await request(app).post('/api/direct-messages').set(authHeader(alice.accessToken)).send({ targetUserId: bob.userId });
+    const res = await request(app)
+      .post(`/api/channels/${dm.body.id}/messages`)
+      .set(authHeader(alice.accessToken))
+      .send({ content: 'hi' });
+    await db('message_side_effect_jobs').where({ message_id: res.body.id }).del();
+
+    await enqueueMissingMessageSideEffectJobs(db);
+
+    const jobs = await db('message_side_effect_jobs').where({ message_id: res.body.id });
+    expect(jobs.map((j) => j.job_type)).toEqual(['NOTIFICATION']);
+  });
+
+  test('does not re-enqueue a message whose job is already completed', async () => {
+    const owner = await signup('msereconcile2');
+    const { channelId } = await createChannelAsMember(owner);
+    const res = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'whatever' });
+    await runMessageSideEffectsWorkerTick(db); // both jobs run to completion (status='completed', not deleted)
+    const before = await db('message_side_effect_jobs').where({ message_id: res.body.id }).orderBy('job_type');
+    expect(before.every((j) => j.status === 'completed')).toBe(true);
+
+    await enqueueMissingMessageSideEffectJobs(db);
+
+    const after = await db('message_side_effect_jobs').where({ message_id: res.body.id }).orderBy('job_type');
+    expect(after).toEqual(before); // completely untouched — reconciliation only inserts rows that don't exist at all
+  });
+
+  test('does not duplicate or reset a message that is still legitimately pending', async () => {
+    const owner = await signup('msereconcile3');
+    const { channelId } = await createChannelAsMember(owner);
+    const res = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'whatever' });
+    // Freshly sent: the normal enqueue path already left both rows pending.
+
+    await enqueueMissingMessageSideEffectJobs(db);
+
+    const jobs = await db('message_side_effect_jobs').where({ message_id: res.body.id });
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every((j) => j.status === 'pending' && j.attempts === 0)).toBe(true);
+  });
+
+  test('runMessageSideEffectsWorkerTick reconciles and processes a backfilled job within the same tick', async () => {
+    const owner = await signup('msereconcile4');
+    const { workspaceId, channelId } = await createChannelAsMember(owner);
+    const res = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: 'Deploy [[Server Alpha]] today' });
+    await db('message_side_effect_jobs').where({ message_id: res.body.id }).del();
+
+    await runMessageSideEffectsWorkerTick(db);
+
+    const entity = await db('entities').where({ workspace_id: workspaceId }).first();
+    expect(entity).toBeDefined();
   });
 });

@@ -82,6 +82,14 @@ export async function resetDb(db) {
   await db('organization_members').del();
   await adminDb('users').del();
   await adminDb('audit_logs').del();
+  // No FK to users (deliberately, mirroring audit_logs' own no-FK actor_id
+  // design — docs/reviews/2026-07-25-consolidated-meta-review.md finding
+  // #7's audit_retry_outbox, migration 0028) — nothing above cascades into
+  // clearing it, unlike embedding_jobs/message_side_effect_jobs, which do
+  // cascade from the adminDb('messages').del() above via their own
+  // ON DELETE CASCADE. app_runtime_user has full CRUD here (unlike
+  // audit_logs), so the regular db connection is enough.
+  await db('audit_retry_outbox').del();
 }
 
 export async function destroyResetDbConnection() {

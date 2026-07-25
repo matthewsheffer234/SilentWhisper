@@ -26,6 +26,7 @@ import { ensureDefaultSettingsSeeded } from './llm/settingsService.js';
 import { startHealthSweep, stopHealthSweep, getHealthStatus } from './llm/healthCheck.js';
 import { startEmbeddingWorker, stopEmbeddingWorker } from './search/embeddingWorker.js';
 import { startMessageSideEffectsWorker, stopMessageSideEffectsWorker } from './workers/messageSideEffectsWorker.js';
+import { startAuditRetryWorker, stopAuditRetryWorker } from './audit/auditRetryWorker.js';
 
 const app = express();
 
@@ -119,6 +120,9 @@ function start(port = config.port) {
     // that exercise mention delivery call runMessageSideEffectsWorkerTick
     // directly instead, at whatever point in the test they need it.
     startMessageSideEffectsWorker(db);
+    // Same skip-under-test reasoning as the other two workers —
+    // tests/auditRetryWorker.test.js calls runAuditRetryWorkerTick directly.
+    startAuditRetryWorker(db);
   }
   // Fire-and-forget: seeds app_settings.llm.* rows from env defaults for
   // admin-surface visibility. Not on the request path — getEffectiveSettings
@@ -140,6 +144,7 @@ async function shutdown(server) {
   stopHealthSweep();
   stopEmbeddingWorker();
   stopMessageSideEffectsWorker();
+  stopAuditRetryWorker();
   await new Promise((resolve) => server.close(resolve));
   await db.destroy();
 }

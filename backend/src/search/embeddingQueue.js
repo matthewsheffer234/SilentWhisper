@@ -21,3 +21,32 @@ export async function enqueueEmbeddingJob(db, messageId) {
     console.error(`Failed to enqueue embedding job for message ${messageId}:`, err);
   }
 }
+
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #6 (GOV-02/
+// EFF-03): the "no retry-the-enqueue-itself path" gap the comment above
+// documents. embeddingWorker.js calls this periodically (much less often
+// than its own claim/process tick) to backfill the rare case where the
+// insert above actually failed. A message needs embedding work if and only
+// if it has neither an embedding_jobs row (still pending/processing/failed —
+// the primary worker already owns that) nor a message_embeddings row
+// (already done, and the job row was deleted on success) — this anti-join
+// is therefore the correct, unambiguous "truly never enqueued" signal, no
+// message-age window needed. Deliberately not scoped to a recent time
+// window: the query is cheap in the overwhelmingly common case where the
+// result set is empty (both LEFT JOINs resolve via each table's own primary
+// key), and unlike message_side_effect_jobs below, there's no "was this
+// already fully processed successfully" ambiguity to create a reprocessing
+// loop — message_embeddings is a genuine, permanent completion signal.
+export async function enqueueMissingEmbeddingJobs(db) {
+  await db('embedding_jobs')
+    .insert(function missingEmbeddings() {
+      this.select('m.id as message_id')
+        .from('messages as m')
+        .leftJoin('embedding_jobs as ej', 'ej.message_id', 'm.id')
+        .leftJoin('message_embeddings as me', 'me.message_id', 'm.id')
+        .whereNull('ej.message_id')
+        .whereNull('me.message_id');
+    })
+    .onConflict('message_id')
+    .ignore();
+}

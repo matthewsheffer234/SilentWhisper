@@ -277,6 +277,56 @@ describe('mention delivery (integration)', () => {
     await Promise.all([p1, p2]);
   });
 
+  // docs/reviews/2026-07-25-consolidated-meta-review.md finding #6:
+  // processNotificationJob used to loop over every mentionedUserId and push
+  // a WS 'mention' frame unconditionally, including recipients whose
+  // mention_notifications row was actually a no-op ON CONFLICT DO NOTHING
+  // (already notified for this message). Editing a message re-enqueues the
+  // NOTIFICATION job (routes/messages.js's PATCH route), so a mention
+  // present before and after an edit used to re-toast the same recipient on
+  // every edit — this proves that's fixed, using the edit path since it's
+  // the one real, existing way this job type is already known to run twice
+  // for the same message.
+  test('editing a message that keeps an existing mention does not re-push a frame to the already-notified user, only to a newly-mentioned one', async () => {
+    const owner = await signup('menteditowner0');
+    const alice = await signup('menteditalice0');
+    const bob = await signup('menteditbob0');
+    const { workspaceId, channelId } = await createChannelAsMember(owner);
+    await addMember(workspaceId, channelId, alice);
+    await addMember(workspaceId, channelId, bob);
+
+    const aliceWs = await openAndTrack();
+    sendFrame(aliceWs, { type: 'authenticate', accessToken: alice.accessToken });
+    await waitForMessage(aliceWs, (e) => e.type === 'authenticated');
+
+    const firstMentionPromise = waitForMessage(aliceWs, (e) => e.type === 'mention');
+    const res = await request(app)
+      .post(`/api/channels/${channelId}/messages`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: `hey @${alice.username}` });
+    await runMessageSideEffectsWorkerTick(db);
+    await firstMentionPromise;
+
+    const bobWs = await openAndTrack();
+    sendFrame(bobWs, { type: 'authenticate', accessToken: bob.accessToken });
+    await waitForMessage(bobWs, (e) => e.type === 'authenticated');
+
+    const secondAliceMentionPromise = waitForMessage(aliceWs, (e) => e.type === 'mention', 300);
+    const bobMentionPromise = waitForMessage(bobWs, (e) => e.type === 'mention');
+
+    await request(app)
+      .patch(`/api/channels/${channelId}/messages/${res.body.id}`)
+      .set(authHeader(owner.accessToken))
+      .send({ content: `hey @${alice.username} and @${bob.username}` });
+    await runMessageSideEffectsWorkerTick(db);
+
+    const bobMention = await bobMentionPromise;
+    expect(bobMention.channelId).toBe(channelId);
+    // Alice was already notified for this message before the edit — no
+    // second frame, even though the edit re-runs the NOTIFICATION job.
+    await expect(secondAliceMentionPromise).rejects.toThrow();
+  });
+
   test('mentioning the sender themselves does not self-notify', async () => {
     const owner = await signup('mentself0');
     const { channelId } = await createChannelAsMember(owner);

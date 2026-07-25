@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { embedText, toVectorLiteral } from './embeddingService.js';
 import { computeSentimentScore } from './sentimentService.js';
+import { enqueueMissingEmbeddingJobs } from './embeddingQueue.js';
 
 // Async, failure-tolerant ingestion (FEATURE_REQUEST.md entry 1): polls the
 // embedding_jobs queue table on a timer, same setInterval-sweep shape as
@@ -12,6 +13,13 @@ import { computeSentimentScore } from './sentimentService.js';
 let running = false;
 let sweepTimer = null;
 let status = { lastRunAt: null, lastBatchSize: 0, totalProcessed: 0, totalFailed: 0 };
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #6: throttles
+// enqueueMissingEmbeddingJobs to config.embedding.reconciliationIntervalMs
+// (default 5 minutes) rather than running it every claim/process tick
+// (default 2 seconds) — the reconciliation query itself is cheap, but there
+// is no reason to run a table-wide anti-join on every tick when the gap it
+// backfills is rare by construction.
+let lastReconciledAt = 0;
 
 // A CTE, not `WHERE id IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED)` —
 // that form is a well-known Postgres trap: an uncorrelated IN-subquery is
@@ -104,6 +112,11 @@ export async function runEmbeddingWorkerTick(db) {
   if (running) return;
   running = true;
   try {
+    const now = Date.now();
+    if (now - lastReconciledAt >= config.embedding.reconciliationIntervalMs) {
+      lastReconciledAt = now;
+      await enqueueMissingEmbeddingJobs(db);
+    }
     const jobs = await claimBatch(db, config.embedding.workerBatchSize);
     status = { ...status, lastRunAt: new Date().toISOString(), lastBatchSize: jobs.length };
     for (const job of jobs) {
@@ -146,5 +159,6 @@ export function getEmbeddingWorkerStatus() {
 export function _resetForTests() {
   running = false;
   status = { lastRunAt: null, lastBatchSize: 0, totalProcessed: 0, totalFailed: 0 };
+  lastReconciledAt = 0;
   stopEmbeddingWorker();
 }

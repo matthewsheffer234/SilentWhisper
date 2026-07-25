@@ -170,6 +170,20 @@ export const config = {
     // A job is dead-lettered (status='failed', left in place for
     // observability rather than deleted) once it has failed this many times.
     maxAttempts: Number(process.env.EMBEDDING_MAX_ATTEMPTS || 5),
+    // docs/reviews/2026-07-25-consolidated-meta-review.md finding #6
+    // (GOV-02/EFF-03): enqueueEmbeddingJob's insert is deliberately
+    // best-effort (a queue-insert failure must never fail the already-
+    // succeeded message send), which means a rare transient DB failure at
+    // that exact moment can leave a message with no embedding_jobs row and
+    // no message_embeddings row — permanently unsearchable unless something
+    // notices. embeddingWorker.js's tick calls
+    // search/embeddingQueue.js's enqueueMissingEmbeddingJobs() at this
+    // (much longer than workerIntervalMs) interval to backfill any such
+    // gap. Deliberately unbounded by message age (search/embeddingQueue.js's
+    // own doc comment explains why a time window isn't needed here) — the
+    // query is cheap because the anti-join result set is empty in the
+    // overwhelmingly common case.
+    reconciliationIntervalMs: Number(process.env.EMBEDDING_RECONCILIATION_INTERVAL_MS || 5 * 60_000),
   },
 
   messageSideEffects: {
@@ -186,6 +200,39 @@ export const config = {
     workerBatchSize: Number(process.env.MESSAGE_SIDE_EFFECTS_WORKER_BATCH_SIZE || 10),
     // Same dead-letter convention as embedding.maxAttempts.
     maxAttempts: Number(process.env.MESSAGE_SIDE_EFFECTS_MAX_ATTEMPTS || 5),
+    // Same reconciliation need as embedding.reconciliationIntervalMs above,
+    // same finding — services/messageSideEffectsQueue.js's enqueue is
+    // best-effort too. Unlike embedding_jobs, a completed
+    // message_side_effect_jobs row is marked status='completed' rather than
+    // deleted (services/messageSideEffectsWorker.js), specifically so
+    // "no row exists at all" reliably means "never enqueued" rather than
+    // being ambiguous with "already processed" — there is no output table
+    // this job type could otherwise check against (a message can
+    // legitimately finish processing with zero mentions/entities and zero
+    // rows to show for it).
+    reconciliationIntervalMs: Number(process.env.MESSAGE_SIDE_EFFECTS_RECONCILIATION_INTERVAL_MS || 5 * 60_000),
+  },
+
+  audit: {
+    // docs/reviews/2026-07-25-consolidated-meta-review.md finding #7
+    // (SEC-03/GOV-03): runStreamingCompletion's onBeforeEnd catches an
+    // appendAuditEvent failure (rare — a transient DB hiccup, since a
+    // partially-streamed AI response can't be retroactively failed to the
+    // client at that point) and used to only log it — a successful AI
+    // operation with no corresponding audit row. routes/ai.js's three
+    // streaming routes now route their audit write through
+    // audit/auditService.js's appendAuditEventOrEnqueueRetry, which
+    // best-effort persists the failed event into audit_retry_outbox
+    // (migration 0028) instead of only logging; audit/auditRetryWorker.js
+    // polls that table on this interval and replays each row through the
+    // real appendAuditEvent, same claim/retry/dead-letter shape as the
+    // embedding and message-side-effects workers.
+    retryWorkerIntervalMs: Number(process.env.AUDIT_RETRY_WORKER_INTERVAL_MS || 30_000),
+    retryWorkerBatchSize: Number(process.env.AUDIT_RETRY_WORKER_BATCH_SIZE || 10),
+    // Same dead-letter convention as embedding.maxAttempts — a row that
+    // exhausts this many attempts is left behind with status='failed' for
+    // an operator to notice rather than retried forever.
+    retryMaxAttempts: Number(process.env.AUDIT_RETRY_MAX_ATTEMPTS || 10),
   },
 
   tasks: {

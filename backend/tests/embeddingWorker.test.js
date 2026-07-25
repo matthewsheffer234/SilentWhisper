@@ -6,6 +6,7 @@ import { config } from '../src/config.js';
 import { resetDb, destroyResetDbConnection } from './helpers/resetDb.js';
 import { signup, authHeader } from './helpers/testUsers.js';
 import { runEmbeddingWorkerTick, _resetForTests } from '../src/search/embeddingWorker.js';
+import { enqueueMissingEmbeddingJobs } from '../src/search/embeddingQueue.js';
 import { _resetForTests as resetEmbeddingGate } from '../src/search/embeddingConcurrencyGate.js';
 import { _resetAnchorCacheForTests } from '../src/search/sentimentService.js';
 
@@ -151,4 +152,54 @@ test('claims at most EMBEDDING_WORKER_BATCH_SIZE pending jobs per tick', async (
 
   const embedded = await db('message_embeddings').whereIn('message_id', ids).count('* as count').first();
   expect(Number(embedded.count)).toBe(config.embedding.workerBatchSize);
+});
+
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #6 (GOV-02/
+// EFF-03).
+describe('reconciliation (enqueueMissingEmbeddingJobs)', () => {
+  test('backfills a message whose embedding_jobs row went missing, simulating a failed enqueue insert', async () => {
+    const messageId = await createMessage('workerreconcile0');
+    await db('embedding_jobs').where({ message_id: messageId }).del();
+    expect(await db('embedding_jobs').where({ message_id: messageId }).first()).toBeUndefined();
+
+    await enqueueMissingEmbeddingJobs(db);
+
+    const job = await db('embedding_jobs').where({ message_id: messageId }).first();
+    expect(job).toBeDefined();
+    expect(job.status).toBe('pending');
+  });
+
+  test('does not re-enqueue a message that was already fully processed (has a message_embeddings row)', async () => {
+    const messageId = await createMessage('workerreconcile1');
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeEmbeddingResponse(fakeEmbedding()));
+    await runEmbeddingWorkerTick(db); // fully processes it: embedding_jobs row deleted, message_embeddings created
+
+    await enqueueMissingEmbeddingJobs(db);
+
+    const job = await db('embedding_jobs').where({ message_id: messageId }).first();
+    expect(job).toBeUndefined();
+  });
+
+  test('does not duplicate or reset a message that is still legitimately pending', async () => {
+    const messageId = await createMessage('workerreconcile2');
+    // Freshly created: the normal enqueue path already left a pending row.
+
+    await enqueueMissingEmbeddingJobs(db);
+
+    const jobs = await db('embedding_jobs').where({ message_id: messageId });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].status).toBe('pending');
+    expect(jobs[0].attempts).toBe(0);
+  });
+
+  test('runEmbeddingWorkerTick reconciles and processes a backfilled job within the same tick', async () => {
+    const messageId = await createMessage('workerreconcile3');
+    await db('embedding_jobs').where({ message_id: messageId }).del();
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeEmbeddingResponse(fakeEmbedding()));
+
+    await runEmbeddingWorkerTick(db);
+
+    const embeddingRow = await db('message_embeddings').where({ message_id: messageId }).first();
+    expect(embeddingRow).toBeDefined();
+  });
 });

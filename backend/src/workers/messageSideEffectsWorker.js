@@ -3,6 +3,7 @@ import { extractMentionedUserIds } from '../services/mentionService.js';
 import { createMentionNotifications } from '../services/mentionNotificationService.js';
 import { linkMessageEntities } from '../services/entityService.js';
 import { sendToUser } from '../ws/connectionRegistry.js';
+import { enqueueMissingMessageSideEffectJobs } from '../services/messageSideEffectsQueue.js';
 
 // FEATURE_REQUEST.md "hot path splitting" entry: polls message_side_effect_jobs
 // on a timer, same setInterval-sweep + FOR UPDATE SKIP LOCKED shape as
@@ -15,6 +16,9 @@ import { sendToUser } from '../ws/connectionRegistry.js';
 let running = false;
 let sweepTimer = null;
 let status = { lastRunAt: null, lastBatchSize: 0, totalProcessed: 0, totalFailed: 0 };
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #6 — same
+// throttle reasoning as search/embeddingWorker.js's own lastReconciledAt.
+let lastReconciledAt = 0;
 
 // Composite-key version of embeddingWorker.js's claimBatch — same reasoning
 // for the CTE form over a `WHERE (message_id, job_type) IN (SELECT ...)`
@@ -93,16 +97,29 @@ async function processNotificationJob(db, row) {
     workspaceId: row.workspace_id,
     mentionedByUserId: message.userId,
   });
-  const notificationIdsByRecipient = new Map(notificationRows.map((r) => [r.recipient_user_id, r.id]));
-  for (const mentionedUserId of mentionedUserIds) {
-    sendToUser(mentionedUserId, {
+  // notificationRows only contains rows the INSERT ... ON CONFLICT DO
+  // NOTHING ... RETURNING above actually inserted (createMentionNotifications'
+  // own onConflict(...).ignore() — a conflicting row never appears in a
+  // RETURNING clause), never a recipient who was already notified for this
+  // message. Pushing to mentionedUserIds directly here — as this used to —
+  // would re-toast an already-notified recipient every time this job runs
+  // again for the same message: on a message edit that keeps an existing
+  // mention (routes/messages.js's PATCH route re-enqueues this job type
+  // unconditionally), and now also whenever enqueueMissingMessageSideEffectJobs
+  // (docs/reviews/2026-07-25-consolidated-meta-review.md finding #6) backfills
+  // a job for a message that, in fact, had already been fully processed.
+  // Looping over notificationRows instead makes both re-runs a safe no-op
+  // for anyone previously notified, while still pushing to anyone genuinely
+  // new.
+  for (const { recipient_user_id: recipientUserId, id: notificationId } of notificationRows) {
+    sendToUser(recipientUserId, {
       type: 'mention',
       message,
       channelId: message.channelId,
       workspaceId: row.workspace_id,
       mentionedBy: message.username,
       mentionedByDisplayName: message.displayName,
-      notificationId: notificationIdsByRecipient.get(mentionedUserId) ?? null,
+      notificationId,
     });
   }
 }
@@ -144,7 +161,21 @@ async function processJob(db, job) {
       // "pending" with nothing ever actually happening.
       throw new Error(`Unknown job_type: ${job.job_type}`);
     }
-    await db('message_side_effect_jobs').where({ message_id: job.message_id, job_type: job.job_type }).del();
+    // docs/reviews/2026-07-25-consolidated-meta-review.md finding #6: marked
+    // 'completed' rather than deleted, unlike embedding_jobs — see
+    // services/messageSideEffectsQueue.js's enqueueMissingMessageSideEffectJobs
+    // doc comment for why this table needs a persistent "this was enqueued"
+    // signal that survives successful processing. claimBatch's WHERE
+    // status = 'pending' means a completed row is never claimed again;
+    // idx_message_side_effect_jobs_status(status, created_at) keeps that
+    // claim query cheap as completed rows accumulate. Deliberately no
+    // retention/cleanup pass for old completed rows yet — this table is
+    // small per row and the growth rate matches message volume, which this
+    // codebase already accepts as unbounded for the messages table itself;
+    // a cleanup sweep is a reasonable fast-follow, not a blocker.
+    await db('message_side_effect_jobs')
+      .where({ message_id: job.message_id, job_type: job.job_type })
+      .update({ status: 'completed', updated_at: new Date() });
     status.totalProcessed += 1;
   } catch (err) {
     status.totalFailed += 1;
@@ -174,6 +205,11 @@ export async function runMessageSideEffectsWorkerTick(db) {
   if (running) return;
   running = true;
   try {
+    const now = Date.now();
+    if (now - lastReconciledAt >= config.messageSideEffects.reconciliationIntervalMs) {
+      lastReconciledAt = now;
+      await enqueueMissingMessageSideEffectJobs(db);
+    }
     const jobs = await claimBatch(db, config.messageSideEffects.workerBatchSize);
     status = { ...status, lastRunAt: new Date().toISOString(), lastBatchSize: jobs.length };
     for (const job of jobs) {
@@ -214,5 +250,6 @@ export function getMessageSideEffectsWorkerStatus() {
 export function _resetForTests() {
   running = false;
   status = { lastRunAt: null, lastBatchSize: 0, totalProcessed: 0, totalFailed: 0 };
+  lastReconciledAt = 0;
   stopMessageSideEffectsWorker();
 }

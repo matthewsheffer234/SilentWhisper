@@ -1,7 +1,9 @@
+import { jest } from '@jest/globals';
 import knexFactory from 'knex';
 import 'dotenv/config';
 import {
   appendAuditEvent,
+  appendAuditEventOrEnqueueRetry,
   computeRowHash,
   GENESIS_HASH,
 } from '../src/audit/auditService.js';
@@ -43,6 +45,13 @@ const adminDb = knexFactory({
 
 beforeEach(async () => {
   await adminDb('audit_logs').del();
+  // app_runtime_user has full CRUD on audit_retry_outbox (unlike audit_logs
+  // itself) — no adminDb needed to clear it between tests.
+  await db('audit_retry_outbox').del();
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -144,4 +153,69 @@ test('the runtime role cannot update or delete existing audit rows', async () =>
   ).rejects.toThrow(/permission denied/i);
 
   await expect(db('audit_logs').where({ id: row.id }).del()).rejects.toThrow(/permission denied/i);
+});
+
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #7 (SEC-03/
+// GOV-03).
+describe('appendAuditEventOrEnqueueRetry', () => {
+  test('on success, behaves exactly like appendAuditEvent and enqueues nothing', async () => {
+    const row = await appendAuditEventOrEnqueueRetry(db, {
+      actorId: '00000000-0000-0000-0000-000000000002',
+      actorIp: '127.0.0.1',
+      actionType: 'AI_SUMMARIZE_REQUESTED',
+    });
+
+    expect(row.action_type).toBe('AI_SUMMARIZE_REQUESTED');
+    const outboxRows = await db('audit_retry_outbox').select('*');
+    expect(outboxRows).toHaveLength(0);
+  });
+
+  test('on a write failure, falls back to the outbox and still rethrows the original error', async () => {
+    const event = {
+      actorId: '00000000-0000-0000-0000-000000000003',
+      actorIp: '127.0.0.1',
+      actionType: 'AI_SUMMARIZE_REQUESTED',
+      targetResource: 'some-channel-id',
+      payload: { provider: 'ollama', promptVersion: 'v1' },
+    };
+    // Simulates a transient failure inside appendAuditEvent's transaction
+    // (e.g. a dropped connection) — the specific cause doesn't matter here,
+    // only that appendAuditEvent throws and this wrapper reacts correctly.
+    // Not jest.spyOn(db, 'transaction'): knex's own `.transaction` is a
+    // read-only property on the callable knex object, so a thin wrapper
+    // that forwards every call except .transaction is used instead —
+    // enqueueAuditRetry's own `db('audit_retry_outbox').insert(...)` call
+    // still goes straight through to the real db either way.
+    const failure = new Error('simulated transient DB failure');
+    const dbWithFailingTransaction = Object.assign((...args) => db(...args), { transaction: () => Promise.reject(failure) });
+
+    await expect(appendAuditEventOrEnqueueRetry(dbWithFailingTransaction, event)).rejects.toThrow(
+      'simulated transient DB failure',
+    );
+
+    const outboxRow = await db('audit_retry_outbox').where({ actor_id: event.actorId }).first();
+    expect(outboxRow).toBeDefined();
+    expect(outboxRow.action_type).toBe('AI_SUMMARIZE_REQUESTED');
+    expect(outboxRow.target_resource).toBe('some-channel-id');
+    expect(outboxRow.payload).toEqual({ provider: 'ollama', promptVersion: 'v1' });
+    expect(outboxRow.status).toBe('pending');
+
+    // No row actually landed in audit_logs — the write genuinely failed.
+    const auditRows = await db('audit_logs').select('*');
+    expect(auditRows).toHaveLength(0);
+  });
+
+  test('when the fallback enqueue also fails (an invalid event), still rethrows the original error and leaves no outbox row', async () => {
+    // Missing actorId fails appendAuditEvent's own upfront validation (a
+    // real error path, not mocked) — and audit_retry_outbox.actor_id is
+    // NOT NULL, so enqueueAuditRetry's own insert fails too for the exact
+    // same reason. A genuinely invalid event must not silently disappear
+    // into a row nobody can ever replay.
+    await expect(
+      appendAuditEventOrEnqueueRetry(db, { actorIp: '127.0.0.1', actionType: 'AUTH_LOGIN' }),
+    ).rejects.toThrow(/actorId/);
+
+    const outboxRows = await db('audit_retry_outbox').select('*');
+    expect(outboxRows).toHaveLength(0);
+  });
 });

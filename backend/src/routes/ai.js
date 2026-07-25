@@ -3,7 +3,7 @@ import { db } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { requireChannelMember, requireSystemAdmin, requireWorkspaceMember } from '../authz/membershipService.js';
-import { appendAuditEvent } from '../audit/auditService.js';
+import { appendAuditEvent, appendAuditEventOrEnqueueRetry } from '../audit/auditService.js';
 import { assertUuid, assertBoundedInt } from '../validation.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { getEffectiveSettings, validateSettingsPatch, updateSettings } from '../llm/settingsService.js';
@@ -96,7 +96,7 @@ aiRouter.post('/channels/:channelId/ai/summarize', aiProxyRateLimiter, async (re
         // race at its root"): audited before the response ends, not after —
         // see aiService.js's onBeforeEnd doc comment for why.
         onBeforeEnd: (r) =>
-          appendAuditEvent(db, {
+          appendAuditEventOrEnqueueRetry(db, {
             actorId: req.user.id,
             actorIp: req.ip,
             actionType: 'AI_SUMMARIZE_REQUESTED',
@@ -182,7 +182,7 @@ aiRouter.post('/messages/:messageId/ai/extract-tasks', aiProxyRateLimiter, async
         // race at its root"): audited before the response ends, not after —
         // see aiService.js's onBeforeEnd doc comment for why.
         onBeforeEnd: (r) =>
-          appendAuditEvent(db, {
+          appendAuditEventOrEnqueueRetry(db, {
             actorId: req.user.id,
             actorIp: req.ip,
             actionType: 'AI_TASK_EXTRACTION_REQUESTED',
@@ -293,7 +293,7 @@ aiRouter.post('/ai/workspace-digest', aiDigestRateLimiter, async (req, res, next
         // race at its root"): audited before the response ends, not after —
         // see aiService.js's onBeforeEnd doc comment for why.
         onBeforeEnd: (r) =>
-          appendAuditEvent(db, {
+          appendAuditEventOrEnqueueRetry(db, {
             actorId: req.user.id,
             actorIp: req.ip,
             actionType: 'AI_WORKSPACE_DIGEST_REQUESTED',
