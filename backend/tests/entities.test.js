@@ -742,6 +742,53 @@ describe('entity AI summary', () => {
     expect(JSON.parse(requestInit.body).prompt).not.toContain('secret detail');
   });
 
+  test('a summary generated from a private-channel reference is hidden (not 403) from a workspace member outside that channel', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(makeJsonResponse({ response: 'Server Alpha summary citing the private channel.' }));
+    const owner = await signup('entitysum6owner');
+    const bob = await signup('entitysum6bob');
+    const { workspace, channel: publicChannel } = await createWorkspaceAndChannel(owner);
+    await addWorkspaceMember(owner, workspace.id, bob);
+    await request(app).post(`/api/workspaces/${workspace.id}/channels/${publicChannel.id}/join`).set(authHeader(bob.accessToken));
+    const privateRes = await request(app)
+      .post(`/api/workspaces/${workspace.id}/channels`)
+      .set(authHeader(owner.accessToken))
+      .send({ name: 'private', type: 'PRIVATE' });
+    // Owner can see the private channel, so generating from it is legitimate
+    // for the owner — the bug is in what a *different*, narrower-access
+    // reader gets back afterward, not in generation itself (already covered
+    // by the "never sent to the provider" test above).
+    await sendMessage(owner, privateRes.body.id, 'secret detail about [[Server Alpha]]');
+    const entity = await db('entities').where({ workspace_id: workspace.id }).first();
+
+    const genRes = await request(app)
+      .post(`/api/workspaces/${workspace.id}/entities/${entity.id}/ai/summary`)
+      .set(authHeader(owner.accessToken));
+    expect(genRes.status).toBe(201);
+    expect(genRes.body.citations[0].channelId).toBe(privateRes.body.id);
+
+    // Owner (still a private-channel member) keeps seeing it.
+    const ownerGetRes = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/ai/summary`)
+      .set(authHeader(owner.accessToken));
+    expect(ownerGetRes.body.text).toBe('Server Alpha summary citing the private channel.');
+
+    // Bob is a workspace member and can open the entity, but was never in
+    // the private channel the cached summary cites — the dedicated summary
+    // route must not return it to him.
+    const bobGetRes = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}/ai/summary`)
+      .set(authHeader(bob.accessToken));
+    expect(bobGetRes.status).toBe(200);
+    expect(bobGetRes.body).toBeNull();
+
+    // Nor should it leak through the entity detail route's embedded summary.
+    const bobDetailRes = await request(app)
+      .get(`/api/workspaces/${workspace.id}/entities/${entity.id}`)
+      .set(authHeader(bob.accessToken));
+    expect(bobDetailRes.status).toBe(200);
+    expect(bobDetailRes.body.summary).toBeNull();
+  });
+
   test('returns 503 and creates no summary or audit row when the provider is disabled', async () => {
     jest.spyOn(global, 'fetch');
     const user = await signup('entitysum4');
