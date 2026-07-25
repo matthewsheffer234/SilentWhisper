@@ -33,7 +33,7 @@ export async function generateEntitySummary(db, { entityName, references, signal
   });
 
   try {
-    await acquireSlot(settings.maxConcurrentRequests);
+    await acquireSlot(settings.maxConcurrentRequests, { signal });
   } catch {
     throw new ServiceUnavailableError('AI service is at capacity, please try again shortly');
   }

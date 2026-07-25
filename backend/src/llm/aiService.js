@@ -65,6 +65,7 @@ export async function runStreamingCompletion({ db, res, promptBuilder, promptVer
   let headersFlushed = false;
   try {
     await acquireSlot(settings.maxConcurrentRequests, {
+      signal,
       onQueued: (position) => {
         // Client-visible "queued, position N" signal (FEATURE_REQUEST.md
         // entry 2) rather than a request that silently hangs until its turn.

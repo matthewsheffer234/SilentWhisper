@@ -16,6 +16,18 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.6.2] — 2026-07-25
+
+**Migrations**: none. **New env vars**: none.
+
+Fixed the AI concurrency queue's missing cancellation path, found by the 2026-07-25 third-party review suite (`docs/reviews/2026-07-25-security-review.md` SEC-02, `docs/reviews/2026-07-25-performance-review.md` PERF-01, `docs/reviews/2026-07-25-maintainability-review.md` MAINT-01 — independently flagged by three separate reviews, ranked #2 in `docs/reviews/2026-07-25-consolidated-meta-review.md`): every AI route already builds an `AbortController` tied to `res.on('close', ...)` and threads its `signal` through to the provider adapter call, but nothing previously passed that signal into `acquireSlot()` itself — a client that disconnected while merely *queued* (never yet in-flight) stayed in the FIFO and later consumed a real generation slot once its turn came, wasting scarce CPU-only-Ollama capacity (`LLM_MAX_CONCURRENT_REQUESTS` defaults to 1) on a response nobody would ever receive.
+
+- `backend/src/llm/concurrencyGate.js`'s `acquireSlot()` now accepts an optional `signal`: an already-aborted signal rejects immediately without granting or queuing a slot, and a queued entry removes itself from the FIFO and rejects the moment its signal fires, without disturbing the order of the entries still waiting behind it.
+- `backend/src/llm/aiService.js` and `backend/src/services/entitySummaryService.js` (the two existing callers) now pass their already-available `signal` through to `acquireSlot()`.
+- New tests: `llmConcurrencyGate.test.js` covers the gate in isolation (immediate abort, queued abort, FIFO preservation around an aborted middle entry, post-grant abort as a no-op); `aiRoutes.test.js` adds a full HTTP-level test proving a disconnected-while-queued client is dequeued and never reaches `fetch()`, while the next still-connected waiter gets the freed slot in its place.
+
+Full diff: `git diff v1.6.1..v1.6.2`.
+
 ## [1.6.1] — 2026-07-25
 
 **Migrations**: none. **New env vars**: none.

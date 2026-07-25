@@ -91,3 +91,73 @@ test('release with nothing queued decrements inFlight and never goes negative', 
   release();
   expect(getInFlightCount()).toBe(0);
 });
+
+// docs/reviews/2026-07-25-consolidated-meta-review.md finding #2
+// (SEC-02/PERF-01/MAINT-01): a queued request must be removable via its
+// AbortSignal instead of sitting in the FIFO until granted a slot it'll
+// never use.
+describe('cancellation via AbortSignal', () => {
+  test('an already-aborted signal rejects immediately without granting or queuing a slot', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(acquireSlot(2, { signal: controller.signal })).rejects.toThrow('AI request aborted');
+    expect(getInFlightCount()).toBe(0);
+    expect(getQueueDepth()).toBe(0);
+  });
+
+  test('a queued request removes itself and rejects when its signal aborts, without consuming a future slot', async () => {
+    await acquireSlot(1); // occupy the only slot
+    const controller = new AbortController();
+    const queued = acquireSlot(1, { signal: controller.signal });
+    expect(getQueueDepth()).toBe(1);
+
+    controller.abort();
+    await expect(queued).rejects.toThrow('AI request aborted');
+    expect(getQueueDepth()).toBe(0);
+    expect(getInFlightCount()).toBe(1); // original holder is unaffected
+
+    release(); // nothing left queued -> the slot just frees, nobody claims it
+    expect(getInFlightCount()).toBe(0);
+  });
+
+  test('FIFO order is preserved for remaining entries when a queued entry in the middle aborts', async () => {
+    await acquireSlot(1); // slot held by the first caller
+
+    const order = [];
+    const p1 = acquireSlot(1).then(() => order.push('granted:1'));
+    const controller2 = new AbortController();
+    const p2 = acquireSlot(1, { signal: controller2.signal }).catch(() => order.push('aborted:2'));
+    const p3 = acquireSlot(1).then(() => order.push('granted:3'));
+    expect(getQueueDepth()).toBe(3);
+
+    controller2.abort();
+    await p2;
+    expect(getQueueDepth()).toBe(2);
+
+    release(); // -> p1
+    await p1;
+    release(); // -> p3
+    await p3;
+
+    expect(order).toEqual(['aborted:2', 'granted:1', 'granted:3']);
+  });
+
+  test('aborting after a queued request already received its slot is a harmless no-op', async () => {
+    await acquireSlot(1);
+    const controller = new AbortController();
+    const queued = acquireSlot(1, { signal: controller.signal });
+
+    release(); // transfers the slot to the queued entry
+    await queued;
+    expect(getInFlightCount()).toBe(1);
+    expect(getQueueDepth()).toBe(0);
+
+    expect(() => controller.abort()).not.toThrow();
+    expect(getInFlightCount()).toBe(1);
+    expect(getQueueDepth()).toBe(0);
+
+    release();
+    expect(getInFlightCount()).toBe(0);
+  });
+});

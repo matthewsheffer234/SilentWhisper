@@ -602,4 +602,66 @@ describe('AI concurrency queue', () => {
     expect(getInFlightCount()).toBe(0);
     expect(getQueueDepth()).toBe(0);
   }, 15000);
+
+  // docs/reviews/2026-07-25-consolidated-meta-review.md finding #2
+  // (SEC-02/PERF-01/MAINT-01): before this fix, a client that disconnected
+  // while merely *queued* (never yet in-flight) stayed in the FIFO and later
+  // consumed a real generation slot once its turn came — wasted capacity
+  // nobody would ever receive. Distinct from the "disconnect while
+  // in-flight" test above: this one aborts a request that has never reached
+  // fetch() at all, and proves (a) it's removed from the queue immediately,
+  // (b) the freed slot instead goes to the next still-connected waiter, and
+  // (c) fetch is never called on its behalf.
+  test('a client disconnect while still queued (never in-flight) removes it from the queue and never consumes a slot', async () => {
+    const releasers = [];
+    let fetchCallCount = 0;
+    jest.spyOn(global, 'fetch').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          fetchCallCount += 1;
+          const callIndex = fetchCallCount;
+          releasers.push(() => resolve(makeJsonResponse({ response: `summary ${callIndex}` })));
+        }),
+    );
+
+    const owner = await signup('queueowner3');
+    const workspaceId = await createWorkspace(owner);
+    const channelId = await createChannel(owner, workspaceId);
+    await request(app).post(`/api/channels/${channelId}/messages`).set(authHeader(owner.accessToken)).send({ content: 'hello' });
+
+    const firstReq = fireNow(
+      request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({}),
+    );
+    await pollUntil(() => getInFlightCount() === 1);
+
+    const secondReqObj = request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({});
+    fireNow(secondReqObj).catch(() => undefined); // never awaited for a real response — see the in-flight disconnect test above for why
+    await pollUntil(() => getQueueDepth() === 1);
+
+    const thirdReq = fireNow(
+      request(app).post(`/api/channels/${channelId}/ai/summarize`).set(authHeader(owner.accessToken)).send({}),
+    );
+    await pollUntil(() => getQueueDepth() === 2);
+
+    secondReqObj.abort();
+    await pollUntil(() => getQueueDepth() === 1);
+    expect(fetchCallCount).toBe(1); // the aborted request never reached the provider
+
+    await pollUntil(() => releasers.length === 1);
+    releasers[0](); // frees the first request's slot
+    const firstRes = await firstReq;
+    expect(firstRes.status).toBe(200);
+
+    // The freed slot must transfer to the third request, not the aborted
+    // second one — proves FIFO skips the removed entry entirely.
+    await pollUntil(() => releasers.length === 2);
+    releasers[1]();
+    const thirdRes = await thirdReq;
+    expect(thirdRes.status).toBe(200);
+    expect(thirdRes.text).toBe('summary 2');
+
+    expect(fetchCallCount).toBe(2); // still only first + third — the aborted request never called fetch
+    expect(getInFlightCount()).toBe(0);
+    expect(getQueueDepth()).toBe(0);
+  });
 });
