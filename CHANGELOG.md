@@ -16,6 +16,21 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.6.3] — 2026-07-25
+
+**Migrations**: none. **New env vars**: none.
+
+Batched `Menu.jsx` hardening fixes from the 2026-07-25 third-party review suite (ranks #3, #10 (partial), #11, #13 in `docs/reviews/2026-07-25-consolidated-meta-review.md`), grouped because all four touch the same component:
+
+- (A11Y-01, `2026-07-25-accessibility-review.md`) The menu container took focus and tracked a highlighted item internally, but nothing exposed which item was active to assistive tech. `Menu` now sets `aria-activedescendant` on the `role="menu"` container, pointing at a stable per-item `id` built from React's `useId()` (not a slugified `ariaLabel`, which can contain spaces and isn't guaranteed id-safe).
+- (A11Y-02, partial) `Menu` items now meet the 44px Apple HIG touch-target minimum (was 40px). `EntityDetailsPanel.jsx`'s shared `removeButton` style (used by the relationship-remove button) also moves from 24x24 to 44x44; its one deliberately-smaller 18x18 inline-badge override (`EntityPicker`'s selected-value chip) is untouched, since forcing that compact inline "×" to 44px would visually break a dense chip rather than meaningfully help — not the location either review actually cited.
+- (EFF-01, `2026-07-25-code-efficiency-review.md`) The keydown handler no longer rebuilds an enabled-items array with `array.reduce(...[...acc, i])` spread-copies on every keystroke.
+- (MAINT-02, `2026-07-25-maintainability-review.md`) `Menu`'s keyboard-navigation math (ArrowDown/ArrowUp/Home/End, wraparound, disabled-item skipping) is now an exported pure function (`nextHighlightedIndex`), unit-tested in `Menu.test.jsx` — this project's Vitest setup has no jsdom (see `PeoplePicker.test.jsx`'s own note), so a rendered `<Menu>` can't be driven through real keydown events; extracting the pure logic is the same workaround already established for `PeoplePicker`/`EntityDetailsPanel`.
+
+Existing Playwright e2e selectors (`[role="menuitem"]`, `aria-label`, text content) are unaffected. Full frontend unit suite (120 tests) and a production build both pass.
+
+Full diff: `git diff v1.6.2..v1.6.3`.
+
 ## [1.6.2] — 2026-07-25
 
 **Migrations**: none. **New env vars**: none.

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check } from 'lucide-react';
 
@@ -14,6 +14,32 @@ import { Check } from 'lucide-react';
 // that ancestor would get clipped the moment it needed to render outside
 // the scrolled viewport.
 //
+// Pure keyboard-navigation math, exported so it's unit-testable in
+// isolation — this project's Vitest setup has no jsdom (see
+// PeoplePicker.test.jsx's own note), so a rendered <Menu> can't be driven
+// through real keydown events; this is the same "extract the pure logic"
+// workaround already established there. Returns the next highlightedIndex
+// for ArrowDown/ArrowUp (wrapping, skipping disabled items) or Home/End
+// (jumping to the first/last enabled item); any other key is a no-op that
+// returns highlightedIndex unchanged.
+export function nextHighlightedIndex(items, highlightedIndex, key) {
+  const enabledIndices = [];
+  for (let i = 0; i < items.length; i += 1) {
+    if (!items[i].disabled) enabledIndices.push(i);
+  }
+  if (enabledIndices.length === 0) return highlightedIndex;
+
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    const currentPos = enabledIndices.indexOf(highlightedIndex);
+    const delta = key === 'ArrowDown' ? 1 : -1;
+    const nextPos = currentPos === -1 ? 0 : (currentPos + delta + enabledIndices.length) % enabledIndices.length;
+    return enabledIndices[nextPos];
+  }
+  if (key === 'Home') return enabledIndices[0];
+  if (key === 'End') return enabledIndices[enabledIndices.length - 1];
+  return highlightedIndex;
+}
+
 // items: [{ key, label, onSelect, checked?, disabled?, separatorBefore? }]
 export default function Menu({ ariaLabel, renderTrigger, items }) {
   const [open, setOpen] = useState(false);
@@ -21,6 +47,10 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
+  // ariaLabel (e.g. "Thread AI actions") isn't id-safe — whitespace isn't
+  // allowed in an HTML id — so item ids are built from useId()'s own
+  // collision-free token instead, not a slugified ariaLabel.
+  const baseId = useId();
 
   function openMenu() {
     const rect = triggerRef.current.getBoundingClientRect();
@@ -82,7 +112,6 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
   }
 
   function handleMenuKeyDown(e) {
-    const enabledIndices = items.reduce((acc, item, i) => (item.disabled ? acc : [...acc, i]), []);
     if (e.key === 'Escape') {
       e.preventDefault();
       closeMenu();
@@ -92,19 +121,9 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
       closeMenu({ returnFocus: false });
       return;
     }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
       e.preventDefault();
-      if (enabledIndices.length === 0) return;
-      const currentPos = enabledIndices.indexOf(highlightedIndex);
-      const delta = e.key === 'ArrowDown' ? 1 : -1;
-      const nextPos = currentPos === -1 ? 0 : (currentPos + delta + enabledIndices.length) % enabledIndices.length;
-      setHighlightedIndex(enabledIndices[nextPos]);
-      return;
-    }
-    if (e.key === 'Home' || e.key === 'End') {
-      e.preventDefault();
-      if (enabledIndices.length === 0) return;
-      setHighlightedIndex(e.key === 'Home' ? enabledIndices[0] : enabledIndices[enabledIndices.length - 1]);
+      setHighlightedIndex(nextHighlightedIndex(items, highlightedIndex, e.key));
       return;
     }
     if (e.key === 'Enter' || e.key === ' ') {
@@ -140,7 +159,7 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
       display: 'flex',
       alignItems: 'center',
       gap: 8,
-      minHeight: 40,
+      minHeight: 44,
       padding: '0 14px',
       fontSize: 'var(--text-sm)',
       color: disabled ? 'var(--text-4)' : 'var(--text-1)',
@@ -168,11 +187,13 @@ export default function Menu({ ariaLabel, renderTrigger, items }) {
             tabIndex={-1}
             style={styles.menu}
             onKeyDown={handleMenuKeyDown}
+            aria-activedescendant={highlightedIndex !== -1 ? `${baseId}-item-${highlightedIndex}` : undefined}
           >
             {items.map((item, index) => (
               <div key={item.key}>
                 {item.separatorBefore && <div style={styles.separator} role="separator" />}
                 <div
+                  id={`${baseId}-item-${index}`}
                   role={item.checked !== undefined ? 'menuitemcheckbox' : 'menuitem'}
                   aria-checked={item.checked !== undefined ? item.checked : undefined}
                   aria-disabled={item.disabled || undefined}
