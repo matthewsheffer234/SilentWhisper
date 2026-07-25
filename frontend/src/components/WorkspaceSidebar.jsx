@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import {
   ChevronDown,
   Settings,
@@ -21,6 +21,7 @@ import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import SearchBar from './SearchBar.jsx';
+import { fetchHealth } from '../api/client.js';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERMISSIONS, hasPermission, hasOrgManagementAccess } from '../authz/permissions.js';
 import { directMessageLabel } from '../directMessages.js';
@@ -241,6 +242,7 @@ const styles = {
     pointerEvents: 'none',
   },
   archivedBadge: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', marginLeft: 4 },
+  versionFooter: { fontSize: 'var(--text-xs)', color: 'var(--text-3)', textAlign: 'center', padding: '10px 0 6px' },
   dmRowLabel: {
     flex: 1,
     display: 'flex',
@@ -347,6 +349,19 @@ function WorkspaceSidebar({
   // inside WorkspaceSettingsSheet instead — its own overflow trigger opens
   // that sheet, not a Menu popover the way the org switcher below is.
   const [confirmLeaveOrg, setConfirmLeaveOrg] = useState(null);
+
+  // Sidebar footer version display: reads the actual running backend's
+  // version from GET /health rather than baking in whatever version the
+  // frontend was built against (api/client.js's fetchHealth doc comment
+  // explains why). Fetched once per mount; a failure just leaves the
+  // footer blank rather than showing an error state over something this
+  // minor.
+  const [appVersion, setAppVersion] = useState(null);
+  useEffect(() => {
+    fetchHealth()
+      .then((health) => setAppVersion(health.version))
+      .catch(() => {});
+  }, []);
 
   // Org-scoped (FEATURE_REQUEST.md entry 1, slice 3): filters/groups
   // client-side rather than refetching from the server on every switch, for
@@ -709,6 +724,8 @@ function WorkspaceSidebar({
           New message
         </button>
       </div>
+
+      {appVersion && <div style={styles.versionFooter}>v{appVersion}</div>}
 
       {confirmLeaveOrg && (
         <ConfirmDialog

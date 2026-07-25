@@ -16,6 +16,16 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.7.1] — 2026-07-25
+
+**Migrations**: none. **New env vars**: none.
+
+Shows the running app version in the sidebar footer. `api/client.js` adds `fetchHealth()`, a plain (non-`apiFetch`) call to `GET /health` — that route lives at the API origin's root, not under `/api`, and is already unauthenticated/CORS-enabled. `WorkspaceSidebar.jsx` fetches it once on mount and renders `v{version}` below the Direct Messages section; a fetch failure just leaves the footer blank.
+
+Deliberately reads the *live backend's* version rather than baking the frontend's own build-time version in (the two are expected to always match, since `CLAUDE.md`'s versioning rule bumps all three `package.json`s together every release, but this proves it instead of assuming it). Verified end-to-end against the real public URL, including CORS headers (`wireservice-nginx-1` already proxies `/health` alongside `/api` and `/ws`, so no nginx change was needed).
+
+Full diff: `git diff v1.7.0..v1.7.1`.
+
 ## [1.7.0] — 2026-07-25
 
 **Migrations**: `0028_audit_retry_outbox.js` — additive (new table `audit_retry_outbox`, full CRUD grant, own status/attempts/dead-letter columns — a working queue, not the audit trail itself). **New env vars**: `EMBEDDING_RECONCILIATION_INTERVAL_MS` (default `300000`), `MESSAGE_SIDE_EFFECTS_RECONCILIATION_INTERVAL_MS` (default `300000`), `AUDIT_RETRY_WORKER_INTERVAL_MS` (default `30000`), `AUDIT_RETRY_WORKER_BATCH_SIZE` (default `10`), `AUDIT_RETRY_MAX_ATTEMPTS` (default `10`) — all optional with safe defaults.

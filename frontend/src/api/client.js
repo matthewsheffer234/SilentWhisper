@@ -118,4 +118,24 @@ export async function fetchAllPages(path, itemsKey, { pageSize = 100, onPage } =
   return all;
 }
 
+// GET /health lives at the API origin's root, not under /api (backend/src/
+// index.js mounts it before any /api router) — unauthenticated and CORS-
+// enabled, unlike apiFetch's routes, so this is a plain fetch rather than
+// going through apiFetch (no Authorization header or 401-retry needed, and
+// the wrong base path besides). Exists so the UI can show the actual
+// running backend's version (WorkspaceSidebar.jsx's sidebar footer) rather
+// than baking in whatever version the frontend itself was built against —
+// the two are expected to always match in practice (CLAUDE.md's versioning
+// rule bumps all three package.jsons together every release), but reading
+// it live is what actually proves that instead of assuming it.
+const HEALTH_URL = `${API_BASE.replace(/\/api$/, '')}/health`;
+
+export async function fetchHealth() {
+  const res = await fetch(HEALTH_URL);
+  if (!res.ok) {
+    throw new Error(`Health check failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export { refreshAccessToken, API_BASE };
