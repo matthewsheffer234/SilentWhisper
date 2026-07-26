@@ -949,16 +949,20 @@ test.describe('workspace invite', () => {
     await expect(page.locator(`text=Added ${invitee.username} to the workspace`)).toBeVisible({ timeout: 10_000 });
     await page.click(`button[aria-label="Close ${admin.workspace.name} settings"]`);
 
-    // The sidebar's own admin-only settings control must not be visible to
-    // a plain member — verified by actually logging in as the invitee, not
-    // just asserting on the admin's own screen. A plain member gets no
-    // overflow trigger at all on a workspace they can't administer (the
-    // component never renders it when hasWorkspaceSettings is false).
+    // The overflow trigger itself is shown to every member, not just an
+    // admin — PROJECT_PLAN.md's "Admin workflow gap-closing, Part 3"
+    // (2026-07-23) made it unconditional once every member gained at least
+    // "Leave workspace" inside the sheet it opens (hasWorkspaceSettings
+    // was removed as dead code then). What must stay admin-only is the
+    // sheet's *content* — verified by actually logging in as the invitee
+    // and opening it, not just asserting on the admin's own screen.
     await page.click('button[aria-label="User menu"]');
     await page.click('text=Sign out');
     await loginViaUi(page, invitee.username, invitee.password);
     await expect(page.locator('aside').getByText(admin.workspace.name, { exact: true })).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator(`button[aria-label="${admin.workspace.name} settings"]`)).not.toBeVisible();
+    const inviteeDialog = await openWorkspaceSettings(page, admin.workspace.name);
+    await expect(inviteeDialog.locator('text=Leave this workspace')).toBeVisible();
+    await expect(inviteeDialog.locator('text=Invite an existing member')).toHaveCount(0);
   });
 
   // FEATURE_REQUEST.md's "unified people picker" entry changed this failure
