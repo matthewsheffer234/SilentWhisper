@@ -64,6 +64,61 @@ describe('italic', () => {
   });
 });
 
+describe('bold-italic (FEATURE_REQUEST.md entry 1, Obsidian-style formatting)', () => {
+  test('*** renders a nested <strong><em>', () => {
+    const nodes = renderMessageContent('this is ***really important*** text');
+    const [strong] = elementsOfType(nodes, 'strong');
+    const em = strong.props.children;
+    expect(em.type).toBe('em');
+    expect(em.props.children).toBe('really important');
+  });
+
+  test('___ renders a nested <strong><em> for multi-word content', () => {
+    const nodes = renderMessageContent('this is ___really important___ text');
+    const [strong] = elementsOfType(nodes, 'strong');
+    const em = strong.props.children;
+    expect(em.type).toBe('em');
+    expect(em.props.children).toBe('really important');
+  });
+
+  test('regression: ***text*** no longer produces stray leftover asterisks', () => {
+    // Before BOLD_ITALIC_STAR_RE existed, BOLD_STAR_RE's lazy "**" matched
+    // one character short of the real closing "***", leaving a stray "*"
+    // inside the <strong> plus two stray literal "*" after it.
+    const nodes = renderMessageContent('***text***');
+    expect(nodes).toHaveLength(1);
+    const [strong] = elementsOfType(nodes, 'strong');
+    const em = strong.props.children;
+    expect(em.type).toBe('em');
+    expect(em.props.children).toBe('text');
+  });
+
+  test('malformed *** with only two closing stars falls back to literal text, not a broken partial render', () => {
+    const content = '***text**';
+    const nodes = renderMessageContent(content);
+    expect(elementsOfType(nodes, 'strong')).toHaveLength(0);
+    expect(elementsOfType(nodes, 'em')).toHaveLength(0);
+    expect(nodes.join('')).toBe(content);
+  });
+
+  test('malformed *** with only one closing star falls back to literal text, not a broken partial render', () => {
+    const content = '***text*';
+    const nodes = renderMessageContent(content);
+    expect(elementsOfType(nodes, 'strong')).toHaveLength(0);
+    expect(elementsOfType(nodes, 'em')).toHaveLength(0);
+    expect(nodes.join('')).toBe(content);
+  });
+
+  test('a mention inside ***bold-italic*** text under variant: "mine" uses the on-mine contrast style', () => {
+    const nodes = renderMessageContent('***hey @bob*** check', { variant: 'mine' });
+    const [strong] = elementsOfType(nodes, 'strong');
+    const em = strong.props.children;
+    const emChildren = Array.isArray(em.props.children) ? em.props.children : [em.props.children];
+    const mentionSpan = emChildren.find((c) => typeof c === 'object' && c?.type === 'span');
+    expect(mentionSpan.props.style.color).toBe('var(--item-active-fg)');
+  });
+});
+
 describe('links', () => {
   test('markdown-syntax link renders a safe <a>', () => {
     const nodes = renderMessageContent('see [the docs](https://example.com/docs)');
@@ -184,6 +239,49 @@ describe('entities', () => {
     const [span] = elementsOfType(nodes, 'span');
     expect(span.props.style.color).toBe('var(--item-active-fg)');
     expect(span.props.style.textDecoration).toBe('underline');
+  });
+});
+
+describe('highlight (FEATURE_REQUEST.md entry 1, Obsidian-style formatting)', () => {
+  test('== renders a <mark>', () => {
+    const nodes = renderMessageContent('this is ==flagged== text');
+    const [mark] = elementsOfType(nodes, 'mark');
+    expect(mark.props.children).toBe('flagged');
+  });
+
+  test('a mention still highlights inside ==highlighted== text', () => {
+    const nodes = renderMessageContent('==hey @bob check this==');
+    const [mark] = elementsOfType(nodes, 'mark');
+    const markChildren = Array.isArray(mark.props.children) ? mark.props.children : [mark.props.children];
+    const mentionSpan = markChildren.find((c) => typeof c === 'object' && c?.type === 'span');
+    expect(mentionSpan.props.children).toBe('@bob');
+  });
+
+  test('an entity still highlights inside ==highlighted== text', () => {
+    const nodes = renderMessageContent('==deploy [[Server Alpha]] now==');
+    const [mark] = elementsOfType(nodes, 'mark');
+    const markChildren = Array.isArray(mark.props.children) ? mark.props.children : [mark.props.children];
+    const entitySpan = markChildren.find((c) => typeof c === 'object' && c?.type === 'span');
+    expect(entitySpan.props.children).toBe('[[Server Alpha]]');
+  });
+
+  test('unclosed == falls back to literal text rather than consuming the rest of the message', () => {
+    const content = 'this ==is not closed and keeps going';
+    const nodes = renderMessageContent(content);
+    expect(elementsOfType(nodes, 'mark')).toHaveLength(0);
+    expect(nodes.join('')).toBe(content);
+  });
+
+  test('default background outside "mine"', () => {
+    const nodes = renderMessageContent('==note==');
+    const [mark] = elementsOfType(nodes, 'mark');
+    expect(mark.props.style.background).toBe('var(--brg-dim)');
+  });
+
+  test('on-mine background under variant: "mine" (no separate accent hue, per global.css)', () => {
+    const nodes = renderMessageContent('==note==', { variant: 'mine' });
+    const [mark] = elementsOfType(nodes, 'mark');
+    expect(mark.props.style.background).toBe('rgba(255,255,255,0.25)');
   });
 });
 

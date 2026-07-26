@@ -16,6 +16,16 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.11.0] — 2026-07-26
+
+**Migrations**: none. **New env vars**: none.
+
+Messages now support Obsidian-style bold-italic (`***text***`/`___text___`, rendering `<strong><em>`) and highlight (`==text==`, rendering `<mark>`) markdown, closing the last gap between this app's formatting and Obsidian's own inline-emphasis notation (bold and italic on their own already matched exactly). Fixes `FEATURE_REQUEST.md` entry 1 — `***text***` previously rendered visibly broken (a stray leading `*` inside the bold, two stray trailing `*` after it), since the existing bold pass matched one character short of a real triple-star close; `==text==` previously did nothing at all. Both new tokens compose with `@mention`/`[[Entity]]` highlighting one level deep, matching how bold/italic already do. Also fixed, found while implementing the above: two now-malformed variants (`***text**`, `***text*`) previously fell through to the plain bold/italic passes and produced the same class of broken partial render — both now correctly fall back to fully literal text.
+
+No backend change: `assertMessageContent` already permitted `*`/`_`/`=` with no character-class restriction, and embedding already worked on raw content.
+
+Full diff: `git diff v1.10.0..v1.11.0`.
+
 ## [1.10.0] — 2026-07-26
 
 **Migrations**: none. **New env vars**: none.

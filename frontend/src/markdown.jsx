@@ -14,12 +14,13 @@
 // Passes run in a fixed order, each only re-scanning the plain-text
 // segments left over from the one before it: links first (a URL's own text
 // must never be re-scanned for bold/italic/entity/mention syntax inside it),
-// then bold, then italic, then entity tags, then mentions. This mirrors this
-// app's other "silently resolve to nothing" instinct (mentions already do this for a
-// non-existent username): malformed/unclosed syntax or an unsafe link
-// scheme simply falls back to literal text for that token rather than
-// erroring or consuming the rest of the message hunting for a closer that
-// isn't there.
+// then bold-italic (must precede plain bold/italic — see BOLD_ITALIC_STAR_RE's
+// own comment), then bold, then italic, then highlight, then entity tags,
+// then mentions. This mirrors this app's other "silently resolve to nothing"
+// instinct (mentions already do this for a non-existent username):
+// malformed/unclosed syntax or an unsafe link scheme simply falls back to
+// literal text for that token rather than erroring or consuming the rest of
+// the message hunting for a closer that isn't there.
 
 // The URL group deliberately allows `)` inside it (not `[^\s)]+`) — a URL
 // can legitimately contain its own parens (a Wikipedia-style
@@ -33,7 +34,27 @@
 // rather than "javascript:alert(1" plus a dangling ")".
 const MD_LINK_RE = /\[([^\]\n]+)\]\(([^\s]+)\)/g;
 const AUTOLINK_RE = /\bhttps?:\/\/[^\s<>"')\]]+/g;
-const BOLD_STAR_RE = /\*\*([^\n]+?)\*\*/g;
+// Bold-italic must be tokenized *before* plain bold/italic (see
+// applyInlinePasses' pass order below) — BOLD_STAR_RE's lazy `**` would
+// otherwise match the first two `*`s of a `***text***` run and land one
+// character short of the real closing `***`, leaving stray asterisks behind
+// instead of a clean nested <strong><em>. Same `(?<!\w)`/`(?!\w)` guard as
+// the underscore bold/italic pair below, for the same reason (obsidian-style
+// FEATURE_REQUEST.md entry).
+const BOLD_ITALIC_STAR_RE = /\*\*\*([^\n]+?)\*\*\*/g;
+const BOLD_ITALIC_UNDERSCORE_RE = /(?<!\w)___([^\n]+?)___(?!\w)/g;
+// `(?<!\*)`/`(?!\*)` around the whole delimiter pair (in addition to the
+// bold-italic pass above already handling well-formed `***text***`) stop a
+// malformed/mismatched triple-star run — `***text**` (three open, two
+// close), `***text*` (three open, one close) — from being picked up here as
+// a false "bold" or "italic" match once the bold-italic pass above has
+// already failed to find a valid closing `***` for it. Without this, e.g.
+// `***text**`'s leftover text still contains a `**...**`-shaped substring
+// one character in (`**text**` minus the outer stray `*`), which this regex
+// would otherwise happily match — producing a broken partial render (a
+// stray literal `*` sitting next to a real `<strong>`) instead of falling
+// back to fully literal text, the exact failure mode this entry fixes.
+const BOLD_STAR_RE = /(?<!\*)\*\*(?!\*)([^\n]+?)\*\*(?!\*)/g;
 // `__` and `_` need a word-boundary guard that `**`/`*` don't: asterisks
 // essentially never appear inside a normal identifier, but underscores are
 // everywhere in this app's own likely chat content — snake_case names,
@@ -43,8 +64,14 @@ const BOLD_STAR_RE = /\*\*([^\n]+?)\*\*/g;
 // require a non-word character (or start/end of string) immediately
 // outside the delimiter pair, same idea CommonMark itself uses for `_`.
 const BOLD_UNDERSCORE_RE = /(?<!\w)__([^\n]+?)__(?!\w)/g;
-const ITALIC_STAR_RE = /\*([^\n*]+?)\*/g;
+// Same `(?<!\*)`/`(?!\*)` reasoning as BOLD_STAR_RE above, for the same
+// leftover-triple-star malformed cases.
+const ITALIC_STAR_RE = /(?<!\*)\*(?!\*)([^\n*]+?)\*(?!\*)/g;
 const ITALIC_UNDERSCORE_RE = /(?<!\w)_([^\n_]+?)_(?!\w)/g;
+// Obsidian-style highlight (FEATURE_REQUEST.md entry 1). `[^\n=]` excludes
+// `=` from the captured content so `===text===` (or any run of more than two
+// `=`) doesn't get captured with leftover `=` characters inside it.
+const MARK_RE = /==([^\n=]+?)==/g;
 const ENTITY_RE = /\[\[([^\[\]]{1,255})\]\]/g;
 // Same shape/length bound as the backend's mention regex (mentionService.js)
 // — a purely visual highlight, not a re-validation of who was actually
@@ -142,6 +169,18 @@ const styles = {
   },
   link: { color: 'var(--brg)', textDecoration: 'underline' },
   linkOnMine: { color: 'var(--item-active-fg)', textDecoration: 'underline', fontWeight: 700 },
+  // Obsidian-style `==highlight==` (FEATURE_REQUEST.md entry 1). Deliberately
+  // not a new accent hue (global.css's own header comment forbids that) —
+  // `--brg-dim` is the same translucent brand-color tint `SearchBar.jsx`/
+  // `NotificationPanel.jsx` already use for a background wash, distinct from
+  // entity's solid `--surface-alt` fill and mention's bold colored text. On a
+  // "mine" bubble, `--brg-dim` (a tint of the *bubble's own* fill color)
+  // would have no contrast against it, so markOnMine washes with translucent
+  // white instead — the same white `--item-active-fg` already establishes as
+  // this bubble's contrast color, just partially transparent as a
+  // background rather than opaque as text.
+  mark: { background: 'var(--brg-dim)', borderRadius: 3, padding: '0 3px' },
+  markOnMine: { background: 'rgba(255,255,255,0.25)', borderRadius: 3, padding: '0 3px' },
   // FEATURE_REQUEST.md entry 3, item 5: checkbox hit target 44×44px minimum
   // — same literal precedent as ChannelView.jsx's detailsButton
   // (minWidth/minHeight: 44), not a new convention. The visible glyph is
@@ -306,6 +345,29 @@ function italicToNode([, content], nextKey, highlightOptions) {
   return <em key={nextKey()}>{processHighlightsWithin(content, nextKey, highlightOptions)}</em>;
 }
 
+// `***text***`/`___text___` (FEATURE_REQUEST.md entry 1). One level of
+// nesting — <strong> wrapping <em> — matching how deeply bold/italic
+// themselves nest entities/mentions via processHighlightsWithin, not a
+// general recursive emphasis model.
+function boldItalicToNode([, content], nextKey, highlightOptions) {
+  return (
+    <strong key={nextKey()}>
+      <em>{processHighlightsWithin(content, nextKey, highlightOptions)}</em>
+    </strong>
+  );
+}
+
+// `==text==` (FEATURE_REQUEST.md entry 1) — a real <mark>, the semantically
+// correct element for "highlighted for reference," gets the same nested
+// entity/mention pass bold/italic get, for the same reason.
+function markToNode([, content], nextKey, highlightOptions, markStyle) {
+  return (
+    <mark key={nextKey()} style={markStyle}>
+      {processHighlightsWithin(content, nextKey, highlightOptions)}
+    </mark>
+  );
+}
+
 // The outer (?<!\w)/(?!\w) guard on BOLD_UNDERSCORE_RE/ITALIC_UNDERSCORE_RE
 // only rejects delimiters directly touching a word character *outside* the
 // pair (catches snake_case: "my_file_name" never even starts a match, since
@@ -340,13 +402,16 @@ function italicUnderscoreToNode(match, nextKey, highlightOptions) {
 // one level — "so [[Entity]] links, @mentions, bold/italic inside a task
 // description keep working," FEATURE_REQUEST.md entry 3) without
 // duplicating the pass order.
-function applyInlinePasses(nodes, nextKey, { linkStyle, highlightOptions, entityStyle, mentionStyle, onEntityClick }) {
+function applyInlinePasses(nodes, nextKey, { linkStyle, highlightOptions, entityStyle, mentionStyle, markStyle, onEntityClick }) {
   let result = applyPass(nodes, MD_LINK_RE, (m, nk) => mdLinkToNode(m, nk, linkStyle), nextKey);
   result = applyPass(result, AUTOLINK_RE, (m, nk) => autolinkToNode(m, nk, linkStyle), nextKey);
+  result = applyPass(result, BOLD_ITALIC_STAR_RE, (m, nk) => boldItalicToNode(m, nk, highlightOptions), nextKey);
+  result = applyPass(result, BOLD_ITALIC_UNDERSCORE_RE, (m, nk) => boldItalicToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, BOLD_STAR_RE, (m, nk) => boldToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, BOLD_UNDERSCORE_RE, (m, nk) => boldUnderscoreToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, ITALIC_STAR_RE, (m, nk) => italicToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, ITALIC_UNDERSCORE_RE, (m, nk) => italicUnderscoreToNode(m, nk, highlightOptions), nextKey);
+  result = applyPass(result, MARK_RE, (m, nk) => markToNode(m, nk, highlightOptions, markStyle), nextKey);
   result = applyPass(result, ENTITY_RE, (m, nk) => entityToNode(m, nk, entityStyle, onEntityClick), nextKey);
   result = applyPass(result, MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
   return result;
@@ -473,8 +538,9 @@ export function renderMessageContent(content, { variant, onEntityClick, onToggle
   const mentionStyle = variant === 'mine' ? styles.mentionOnMine : styles.mention;
   const entityStyle = variant === 'mine' ? styles.entityOnMine : styles.entity;
   const linkStyle = variant === 'mine' ? styles.linkOnMine : styles.link;
+  const markStyle = variant === 'mine' ? styles.markOnMine : styles.mark;
   const highlightOptions = { mentionStyle, entityStyle, onEntityClick };
-  const inlineOptions = { linkStyle, highlightOptions, entityStyle, mentionStyle, onEntityClick };
+  const inlineOptions = { linkStyle, highlightOptions, entityStyle, mentionStyle, markStyle, onEntityClick };
 
   let nodes = applyTaskPass(content, nextKey, { onToggleTask, messageId, taskOverrides, inlineOptions });
   nodes = applyInlinePasses(nodes, nextKey, inlineOptions);
