@@ -104,7 +104,10 @@ invitationsRouter.post('/:token/accept', signupIpLimiter, async (req, res, next)
         if (!workspace || workspace.archived_at) return { kind: 'invalid' };
       }
 
-      const existing = await trx('users').where({ username }).orWhere({ email }).first();
+      const existing = await trx('users')
+        .whereRaw('lower(username) = lower(?)', [username])
+        .orWhere({ email })
+        .first();
       if (existing) {
         return { kind: 'conflict' };
       }

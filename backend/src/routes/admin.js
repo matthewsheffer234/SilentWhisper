@@ -52,7 +52,10 @@ adminRouter.post('/users', adminUserCreateLimiter, async (req, res, next) => {
     const requestedOrgId =
       req.body?.organizationId !== undefined ? assertUuid(req.body.organizationId, 'organizationId') : null;
 
-    const existing = await db('users').where({ username }).orWhere({ email }).first();
+    const existing = await db('users')
+      .whereRaw('lower(username) = lower(?)', [username])
+      .orWhere({ email })
+      .first();
     if (existing) {
       // Same generic, non-enumerating message as signup's/the retired
       // workspace-scoped route's duplicate check.

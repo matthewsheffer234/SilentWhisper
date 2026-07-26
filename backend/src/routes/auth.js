@@ -165,7 +165,7 @@ authRouter.post('/login', loginIpLimiter, loginUsernameLimiter, async (req, res,
       throw new ValidationError('username and password are required');
     }
 
-    const user = await db('users').where({ username }).first();
+    const user = await db('users').whereRaw('lower(username) = lower(?)', [username]).first();
     if (!user) {
       await appendAuditEvent(db, {
         actorId: ANONYMOUS_ACTOR_ID,

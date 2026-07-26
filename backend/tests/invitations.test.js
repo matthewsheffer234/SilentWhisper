@@ -358,6 +358,25 @@ describe('POST /api/invitations/:token/accept', () => {
     expect(res.status).toBe(409);
   });
 
+  // FEATURE_REQUEST.md entry 2, "Usernames are case-sensitive at login":
+  // redemption-time uniqueness must be case-insensitive too, or a
+  // case-insensitive login lookup becomes ambiguous between two accounts
+  // differing only by case.
+  test('a username differing only in case from an existing account 409s', async () => {
+    await signup('CaseCollide0');
+    const owner = await signup('wsacceptcasecollide0');
+    const ws = await createWorkspace(owner);
+    const createRes = await request(app)
+      .post(`/api/workspaces/${ws.id}/invitations`)
+      .set(authHeader(owner.accessToken))
+      .send({});
+
+    const res = await request(app)
+      .post(`/api/invitations/${createRes.body.token}/accept`)
+      .send({ username: 'casecollide0', email: 'newemail-casecollide0@example.com', password: 'correct-horse-battery' });
+    expect(res.status).toBe(409);
+  });
+
   // Now that email is invitee-supplied rather than pre-declared on the
   // invitation row, the collision can happen on the *redeemer's own chosen
   // email* colliding with an existing account — a case that couldn't even

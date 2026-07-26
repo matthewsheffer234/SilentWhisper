@@ -16,6 +16,16 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.9.0] — 2026-07-26
+
+**Migrations**: `0029_case_insensitive_username.js` — replaces the plain `UNIQUE` constraint on `users.username` with a unique index on `lower(username)`; fails loudly (with the colliding rows logged first) if any deployment already has two accounts differing only by case. **New env vars**: none.
+
+Usernames are now case-insensitive at login: a user stored as `Erin` can log in as `erin`, `ERIN`, or any other casing. Fixes `FEATURE_REQUEST.md` entry 2 — previously the login lookup compared `username` case-sensitively, so a casing mismatch (autocapitalize, caps lock, a name typed differently than the account-creator used) looked identical to a wrong password, silently locking a legitimate user out with no indication of what went wrong.
+
+Account-creation uniqueness checks (`POST /api/admin/users`, `POST /api/invitations/:token/accept`) are now case-insensitive on username too, closing the corresponding gap: fixing only the login side would have let `Erin` and `erin` exist as two distinct rows, at which point a case-insensitive login lookup becomes ambiguous about which one signs in. Email uniqueness and display casing are unchanged.
+
+Full diff: `git diff v1.8.0..v1.9.0`.
+
 ## [1.8.0] — 2026-07-25
 
 **Migrations**: none. **New env vars**: none.

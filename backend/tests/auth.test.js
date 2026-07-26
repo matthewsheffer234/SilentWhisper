@@ -58,6 +58,16 @@ describe('POST /api/auth/login', () => {
     expect(row).toBeTruthy();
   });
 
+  // FEATURE_REQUEST.md entry 2, "Usernames are case-sensitive at login":
+  // a login candidate typed with different casing than the stored username
+  // (autocapitalize, caps lock, a name typed differently than the
+  // account-creator used) must still succeed.
+  test.each(['erin', 'ERIN', 'Erin', 'eRiN'])('logs in with %s regardless of the stored casing', async (candidate) => {
+    const res = await request(app).post('/api/auth/login').send({ username: candidate, password: 'correct-horse-battery' });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toMatchObject({ username: 'erin' });
+  });
+
   // FEATURE_REQUEST.md's "display names as the primary identity" entry:
   // displayName must reflect the stored value, not just echo username back —
   // this is the one test in the file that seeds a display name distinct from

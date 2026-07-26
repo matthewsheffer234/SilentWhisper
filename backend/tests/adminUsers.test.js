@@ -162,6 +162,24 @@ describe('POST /api/admin/users', () => {
     expect(dupUsername.body.error).toBe(dupEmail.body.error);
   });
 
+  // FEATURE_REQUEST.md entry 2, "Usernames are case-sensitive at login":
+  // creation-time uniqueness must be case-insensitive too, or a
+  // case-insensitive login lookup becomes ambiguous between two accounts
+  // differing only by case.
+  test('a username differing only in case from an existing account 409s', async () => {
+    const admin = await seedSystemAdmin('adminusers4b');
+    await request(app)
+      .post('/api/admin/users')
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'CaseUser4b', email: 'caseuser4b@example.com', password: 'correct-horse-battery' });
+
+    const res = await request(app)
+      .post('/api/admin/users')
+      .set(authHeader(admin.accessToken))
+      .send({ username: 'caseuser4b', email: 'unique4b@example.com', password: 'correct-horse-battery' });
+    expect(res.status).toBe(409);
+  });
+
   test('a password failing the policy 400s', async () => {
     const admin = await seedSystemAdmin('adminusers5');
     const res = await request(app)
