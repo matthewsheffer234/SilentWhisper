@@ -16,6 +16,16 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.10.0] — 2026-07-26
+
+**Migrations**: none. **New env vars**: none.
+
+The message composer (both the main channel view and the thread reply sidebar) is now a `<textarea>` instead of a plain single-line `<input>`, so a message can hold a real newline. Fixes `FEATURE_REQUEST.md` entry 2 — previously there was no way to compose a multi-line message at all; `<input>` rejects newline characters outright, so this needed an element change, not just a keybinding. Shift+Enter inserts a line break; bare Enter still sends, matching the old implicit-submit behavior. The composer auto-grows to fit its content (typing, pasting, accepting a suggestion), capped at roughly 6 lines before it scrolls internally. Entity/mention-suggestion dropdown behavior (Enter/Tab to accept, Escape to dismiss, arrow keys to navigate) is unchanged — that interception still takes priority over the new plain-Enter-submits rule.
+
+No backend change: message rendering already handled `\n` correctly (`white-space: pre-wrap`), and `assertMessageContent` never restricted character class.
+
+Full diff: `git diff v1.9.0..v1.10.0`.
+
 ## [1.9.0] — 2026-07-26
 
 **Migrations**: `0029_case_insensitive_username.js` — replaces the plain `UNIQUE` constraint on `users.username` with a unique index on `lower(username)`; fails loudly (with the colliding rows logged first) if any deployment already has two accounts differing only by case. **New env vars**: none.

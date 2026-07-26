@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { isFirstInRun, formatReplyCount, initials, detectMentionTrigger } from './ChannelView.jsx';
+import { isFirstInRun, formatReplyCount, initials, detectMentionTrigger, clampComposerHeight } from './ChannelView.jsx';
 
 // FEATURE_REQUEST.md entry 3 (message presentation for team scanability).
 // Only these pure, DOM-free helpers are unit tested here — the component
@@ -98,5 +98,31 @@ describe('initials', () => {
 
   test('collapses stray whitespace before splitting', () => {
     expect(initials('  Maria   Chen  ')).toBe('MC');
+  });
+});
+
+// FEATURE_REQUEST.md's Shift+Enter entry: the composer auto-grow effect
+// clamps a measured scrollHeight to a min/max range. Also exercised by
+// ThreadSidebar.jsx's reply composer, which imports this same function
+// with its own (smaller) min/max rather than forking the clamp logic.
+describe('clampComposerHeight', () => {
+  test('returns the minimum when content is shorter than one line', () => {
+    expect(clampComposerHeight(20, 44, 168)).toBe(44);
+  });
+
+  test('returns the measured height when it falls within range', () => {
+    expect(clampComposerHeight(90, 44, 168)).toBe(90);
+  });
+
+  test('caps at the maximum once content grows past it', () => {
+    expect(clampComposerHeight(400, 44, 168)).toBe(168);
+  });
+
+  test('returns the minimum exactly at the boundary', () => {
+    expect(clampComposerHeight(44, 44, 168)).toBe(44);
+  });
+
+  test('returns the maximum exactly at the boundary', () => {
+    expect(clampComposerHeight(168, 44, 168)).toBe(168);
   });
 });

@@ -386,15 +386,15 @@ test.describe('core messaging workflow', () => {
     await page.click('text=New channel');
     await page.fill('#new-channel-name', 'general');
     await page.keyboard.press('Enter');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
-    await page.fill('input[placeholder^="Message #"]', 'Hello from the e2e suite');
+    await page.fill('textarea[placeholder^="Message #"]', 'Hello from the e2e suite');
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=Hello from the e2e suite')).toBeVisible({ timeout: 10_000 });
 
     await page.click('button:has-text("Reply in thread")');
     await page.waitForSelector('text=Thread', { timeout: 10_000 });
-    await page.fill('input[placeholder="Reply in thread"]', 'A threaded reply');
+    await page.fill('textarea[placeholder="Reply in thread"]', 'A threaded reply');
     await page.click('button:text-is("Reply")');
     await expect(page.locator('text=A threaded reply')).toBeVisible({ timeout: 10_000 });
 
@@ -415,6 +415,51 @@ test.describe('core messaging workflow', () => {
   });
 });
 
+test.describe('multi-line composer (Shift+Enter)', () => {
+  // FEATURE_REQUEST.md's Shift+Enter entry: the composer became a
+  // <textarea> so a message can hold a real newline; bare Enter still
+  // sends, Shift+Enter inserts a line break instead.
+  test('Shift+Enter inserts a newline without sending; bare Enter still sends; a multi-line message renders with visible line breaks', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('shiftenter');
+    await loginViaUi(page, seeded.username, seeded.password);
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
+
+    const composer = page.locator('textarea[placeholder^="Message #"]');
+    await composer.waitFor({ timeout: 10_000 });
+
+    // Shift+Enter inserts a newline, stays focused in the composer, and
+    // does not send — the message feed gains nothing.
+    await composer.fill('first line');
+    await composer.press('Shift+Enter');
+    await composer.pressSequentially('second line');
+    await expect(composer).toHaveValue('first line\nsecond line');
+    // Checked via the message-bubble class, not a bare `text=` locator —
+    // Playwright's text engine also matches a <textarea>'s own value, so a
+    // plain `text=first line` locator would find the still-unsent composer
+    // content itself and give a false pass here.
+    await expect(page.locator('.sl-bubble-theirs', { hasText: 'first line' })).toHaveCount(0);
+    await expect(composer).toBeFocused();
+
+    // Bare Enter still sends the (now multi-line) draft, and the composer
+    // clears afterward.
+    await composer.press('Enter');
+    await expect(composer).toHaveValue('');
+
+    // The sent message renders both lines, with a real line break between
+    // them rather than them running together. Channels never use the
+    // "mine" filled-bubble treatment (see the "core messaging" grouping
+    // test) — every message in a channel is `.sl-bubble-theirs`.
+    const sentMessage = page.locator('.sl-bubble-theirs', { hasText: 'first line' });
+    await expect(sentMessage).toBeVisible({ timeout: 10_000 });
+    await expect(sentMessage.locator('text=second line')).toBeVisible();
+    const html = await sentMessage.innerHTML();
+    expect(html.indexOf('first line')).toBeLessThan(html.indexOf('second line'));
+  });
+});
+
 test.describe('markdown formatting', () => {
   // FEATURE_REQUEST.md's Basic Markdown formatting entry. The tokenizer's
   // own logic is covered by frontend/src/markdown.test.jsx's unit tests
@@ -428,10 +473,10 @@ test.describe('markdown formatting', () => {
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     await page.fill(
-      'input[placeholder^="Message #"]',
+      'textarea[placeholder^="Message #"]',
       'This is **bold**, this is *italic*, and here is [a link](https://example.com).',
     );
     await page.click('button:has-text("Send")');
@@ -448,7 +493,7 @@ test.describe('markdown formatting', () => {
     // renders as plain text instead (Section 3, LLM-Specific/user-content
     // XSS rules: a rendered `<a href>` is a live vector regardless of
     // dangerouslySetInnerHTML never being used).
-    await page.fill('input[placeholder^="Message #"]', 'click [here](javascript:alert(1)) if you dare');
+    await page.fill('textarea[placeholder^="Message #"]', 'click [here](javascript:alert(1)) if you dare');
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=click here if you dare')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('a:has-text("here")')).toHaveCount(0);
@@ -459,9 +504,9 @@ test.describe('markdown formatting', () => {
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
-    await page.fill('input[placeholder^="Message #"]', `**hey @${seeded.username} check this out**`);
+    await page.fill('textarea[placeholder^="Message #"]', `**hey @${seeded.username} check this out**`);
     await page.click('button:has-text("Send")');
 
     const strong = page.locator('strong', { hasText: `@${seeded.username}` });
@@ -489,13 +534,13 @@ test.describe('message presentation: channels vs. direct messages', () => {
     await loginViaUi(page, me.username, me.password);
     await selectWorkspaceRow(page, me.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     // Two consecutive messages from "me" (for the grouping check below).
-    await page.fill('input[placeholder^="Message #"]', 'first mine message');
+    await page.fill('textarea[placeholder^="Message #"]', 'first mine message');
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=first mine message')).toBeVisible({ timeout: 10_000 });
-    await page.fill('input[placeholder^="Message #"]', 'second mine message');
+    await page.fill('textarea[placeholder^="Message #"]', 'second mine message');
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=second mine message')).toBeVisible({ timeout: 10_000 });
 
@@ -557,14 +602,14 @@ test.describe('message presentation: channels vs. direct messages', () => {
 
     await loginViaUi(page, me.username, me.password);
     await selectChannelRow(page, other.username);
-    await page.waitForSelector(`#main input[placeholder="Message ${other.username}"]`, { timeout: 10_000 });
+    await page.waitForSelector(`#main textarea[placeholder="Message ${other.username}"]`, { timeout: 10_000 });
 
     // Two consecutive messages from "me" (for the grouping check below),
     // the second containing a mention (for the contrast check below).
-    await page.fill(`#main input[placeholder="Message ${other.username}"]`, 'first mine message');
+    await page.fill(`#main textarea[placeholder="Message ${other.username}"]`, 'first mine message');
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=first mine message')).toBeVisible({ timeout: 10_000 });
-    await page.fill(`#main input[placeholder="Message ${other.username}"]`, `hey @${other.username} second mine message`);
+    await page.fill(`#main textarea[placeholder="Message ${other.username}"]`, `hey @${other.username} second mine message`);
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=second mine message')).toBeVisible({ timeout: 10_000 });
 
@@ -649,21 +694,21 @@ test.describe('message editing (FEATURE_REQUEST.md entry 3)', () => {
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
-    await page.fill('input[placeholder^="Message #"]', 'original wording');
+    await page.fill('textarea[placeholder^="Message #"]', 'original wording');
     await page.click('button:has-text("Send")');
     await expect(page.locator('text=original wording')).toBeVisible({ timeout: 10_000 });
 
     const messageRow = page.locator('.sl-bubble-theirs', { hasText: 'original wording' });
     await messageRow.locator('button:has-text("Edit")').click();
 
-    // Unscoped from here on, deliberately: the row's own hasText filter
-    // above stops matching the instant its rendered content is replaced by
-    // the edit form (a controlled <textarea>'s value is not part of its
-    // own textContent, which is what hasText matches against), and only
-    // one message is ever mid-edit at a time in this test.
-    await page.locator('textarea').fill('corrected wording');
+    // Scoped to the edit form's own textarea via its aria-label, not a
+    // bare `page.locator('textarea')` — now that the message composer is
+    // also a <textarea> (FEATURE_REQUEST.md's Shift+Enter entry), an
+    // unscoped locator resolves to two elements (composer + edit form), a
+    // Playwright strict-mode violation.
+    await page.getByRole('textbox', { name: 'Edit message' }).fill('corrected wording');
     await page.locator('button:has-text("Save")').click();
 
     await expect(page.locator('text=corrected wording')).toBeVisible({ timeout: 10_000 });
@@ -686,7 +731,7 @@ test.describe('message editing (FEATURE_REQUEST.md entry 3)', () => {
     await selectWorkspaceRow(page, sender.workspace.name);
     const channelRow = page.locator('div.sl-row', { hasText: sender.channel.name });
     await channelRow.locator('button:has-text("Join")').click();
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     const messageRow = page.locator('.sl-bubble-theirs', { hasText: 'a message from the sender' });
     await expect(messageRow).toBeVisible({ timeout: 10_000 });
@@ -706,7 +751,7 @@ test.describe('@mention autocomplete', () => {
     await loginViaUi(page, me.username, me.password);
     await selectWorkspaceRow(page, me.workspace.name);
     await selectChannelRow(page, 'general');
-    const input = page.locator('input[placeholder^="Message #"]');
+    const input = page.locator('textarea[placeholder^="Message #"]');
     await input.waitFor({ timeout: 10_000 });
     const partial = other.username.slice(0, 6);
     const option = page.locator('[role="option"]', { hasText: other.username });
@@ -750,7 +795,12 @@ test.describe('@mention autocomplete', () => {
     await input.press('Enter');
     await expect(input).toHaveValue(`hey @${other.username} `);
     await expect(listbox).toHaveCount(0);
-    await expect(page.locator(`text=hey @${other.username}`)).toHaveCount(0);
+    // Scoped to an actual message row, not a bare `text=` locator — the
+    // composer is now a <textarea>, whose value is itself matched by
+    // Playwright's text engine (unlike <input>'s), so an unscoped `text=`
+    // locator would find the still-unsent composer content and give a
+    // false pass here.
+    await expect(page.locator('.sl-row', { hasText: `hey @${other.username}` })).toHaveCount(0);
   });
 
   test('the same "@" autocomplete is available when replying inside a thread', async ({ page }) => {
@@ -767,7 +817,7 @@ test.describe('@mention autocomplete', () => {
     await rootRow.locator('button:has-text("Reply in thread")').click();
     await page.waitForSelector('text=Thread', { timeout: 10_000 });
 
-    const replyInput = page.locator('input[placeholder="Reply in thread"]');
+    const replyInput = page.locator('textarea[placeholder="Reply in thread"]');
     await replyInput.waitFor({ timeout: 10_000 });
     const partial = other.username.slice(0, 6);
     const option = page.locator('[role="option"]', { hasText: other.username });
@@ -803,7 +853,7 @@ test.describe('AI features (real Ollama inference — allow extra time)', () => 
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     await page.click('button:has-text("Summarize")');
     await page.waitForSelector('text=Channel summary', { timeout: 5_000 });
@@ -1147,7 +1197,7 @@ test.describe('workspace home', () => {
 
     // The list is actionable, not just informational: Open really navigates.
     await channelRow.locator('button:has-text("Open")').click();
-    await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('textarea[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
   });
 
   test('a brand-new workspace with no channels shows the first-run prompt', async ({ page }) => {
@@ -1373,7 +1423,7 @@ test.describe('accessibility', () => {
     await channelRow.focus();
     await expect(channelRow).toBeFocused();
     await page.keyboard.press('Enter');
-    await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('textarea[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
   });
 
   test('a focused button shows a visible outline (keyboard focus ring)', async ({ page }) => {
@@ -1432,7 +1482,7 @@ test.describe('mentions', () => {
     // modal instead of joining the channel.
     const channelRow = page.locator('div.sl-row', { hasText: sender.channel.name });
     await channelRow.locator('button:has-text("Join")').click();
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     await sendMessage(sender.accessToken, sender.channel.id, `hey @${recipient.username} check this out`);
 
@@ -1480,7 +1530,7 @@ test.describe('Knowledge Explorer (FEATURE_REQUEST.md entry 2)', () => {
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     // Entity linking happens off the message-send path on an async worker
     // (messageSideEffectsWorker.js, MESSAGE_SIDE_EFFECTS_WORKER_INTERVAL_MS,
@@ -1689,7 +1739,7 @@ test.describe('workspace archive/unarchive', () => {
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     // FEATURE_REQUEST.md's "dedicated admin/settings area" entry: Archive
     // now lives inside the workspace row's own WorkspaceSettingsSheet,
@@ -1701,7 +1751,7 @@ test.describe('workspace archive/unarchive', () => {
 
     await expect(page.getByText('Archived', { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('text=(archived — read only)')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('input[placeholder="This workspace is archived — read only"]')).toBeVisible({
+    await expect(page.locator('textarea[placeholder="This workspace is archived — read only"]')).toBeVisible({
       timeout: 10_000,
     });
     await expect(page.locator('button:has-text("New channel")')).not.toBeVisible();
@@ -1712,7 +1762,7 @@ test.describe('workspace archive/unarchive', () => {
 
     const archivedRow = page.locator('[role="button"]', { hasText: seeded.workspace.name });
     await archivedRow.locator('button:has-text("Unarchive")').click();
-    await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('textarea[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('button:has-text("New channel")')).toBeVisible({ timeout: 10_000 });
   });
 });
@@ -2078,7 +2128,7 @@ test.describe('semantic search (real Ollama inference — allow extra time)', ()
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
 
     // Scoped to the results listbox specifically, not a bare page-wide
     // text= locator — the same message content is already visible in the
@@ -2121,7 +2171,7 @@ test.describe('semantic search (real Ollama inference — allow extra time)', ()
     // one channel exists for this seeded user).
     await expect(resultsBox).not.toBeVisible();
     await expect(searchInput).toHaveValue('');
-    await expect(page.locator('input[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('textarea[placeholder^="Message #"]')).toBeVisible({ timeout: 10_000 });
   });
 
   test('typing fewer than 2 characters shows no results popover, and Escape then clears the field', async ({ page }) => {
@@ -2356,7 +2406,7 @@ test.describe('virtual scrolling', () => {
     await loginViaUi(page, seeded.username, seeded.password);
     await selectWorkspaceRow(page, seeded.workspace.name);
     await selectChannelRow(page, 'general');
-    await page.waitForSelector('input[placeholder^="Message #"]', { timeout: 10_000 });
+    await page.waitForSelector('textarea[placeholder^="Message #"]', { timeout: 10_000 });
     await expect(page.locator(`text=history message ${TOTAL_MESSAGES - 1}`)).toBeVisible({ timeout: 10_000 });
 
     const renderedRowCount = await page.locator('[data-index]').count();
@@ -2666,7 +2716,7 @@ test.describe('direct messages (FEATURE_REQUEST.md entry 3)', () => {
     // People-based header copy: the composer placeholder is "Message
     // <name>", never "Message #<name>" — proves both that the right
     // conversation opened and that it isn't rendered as a #channel.
-    const composer = page.locator(`#main input[placeholder="Message ${friend.username}"]`);
+    const composer = page.locator(`#main textarea[placeholder="Message ${friend.username}"]`);
     await expect(composer).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#main').getByText('Direct message', { exact: true })).toBeVisible();
 
@@ -2678,7 +2728,7 @@ test.describe('direct messages (FEATURE_REQUEST.md entry 3)', () => {
     // doesn't require a workspace to be highlighted, and the message pane
     // correctly swaps between a #channel and a person-based conversation.
     await selectChannelRow(page, 'general');
-    await expect(page.locator('#main input[placeholder="Message #general"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#main textarea[placeholder="Message #general"]')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('text=hey there')).not.toBeVisible();
 
     await selectChannelRow(page, friend.username);
@@ -2696,7 +2746,7 @@ test.describe('direct messages (FEATURE_REQUEST.md entry 3)', () => {
     await page.click('text=New message');
     await pickPerson(page, 'Search people to message', friend.username, friend.username);
     await page.click('button:has-text("Start Message")');
-    await page.fill(`#main input[placeholder="Message ${friend.username}"]`, 'first message');
+    await page.fill(`#main textarea[placeholder="Message ${friend.username}"]`, 'first message');
     await page.keyboard.press('Enter');
     await expect(page.locator('text=first message')).toBeVisible({ timeout: 10_000 });
 

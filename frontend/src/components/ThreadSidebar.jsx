@@ -4,8 +4,21 @@ import { UserPresenceBadge } from '../context/PresenceContext.jsx';
 import Menu from './Menu.jsx';
 import { extractTasks } from '../api/ai.js';
 import { searchChannelMembers } from '../api/workspaces.js';
-import { AUTOCOMPLETE_DEBOUNCE_MS, detectMentionTrigger, isFirstInRun, initials, EditableMessageContent } from './ChannelView.jsx';
+import {
+  AUTOCOMPLETE_DEBOUNCE_MS,
+  detectMentionTrigger,
+  isFirstInRun,
+  initials,
+  EditableMessageContent,
+  clampComposerHeight,
+} from './ChannelView.jsx';
 import { AI_THREAD_SCOPE, formatAiActionError, formatAiQueueLabel } from '../aiPresentation.js';
+
+// Matches styles.input's minHeight: 40 below (single line); ~6 lines' worth
+// beyond that before the composer scrolls internally, same reasoning as
+// ChannelView.jsx's own composer, scaled to this sidebar's smaller input.
+const COMPOSER_MIN_HEIGHT = 40;
+const COMPOSER_MAX_HEIGHT = 150;
 
 const styles = {
   sidebar: {
@@ -147,6 +160,12 @@ const styles = {
     color: 'var(--text-1)',
     fontSize: 'var(--text-sm)',
     boxSizing: 'border-box',
+    // Auto-grow (FEATURE_REQUEST.md's Shift+Enter entry), same treatment as
+    // ChannelView.jsx's own composer — see that file's styles.input.
+    resize: 'none',
+    overflowY: 'hidden',
+    fontFamily: 'inherit',
+    lineHeight: 1.4,
   },
   // Same up-anchored positioning as ChannelView.jsx's own suggestionDropdown
   // — this composer is bottom-docked inside the sidebar too, so opening
@@ -226,6 +245,19 @@ function ThreadSidebar({
     }
   });
 
+  // Auto-grow the reply composer to fit its content — see ChannelView.jsx's
+  // own composer effect for why this runs on every draft change rather than
+  // only onChange (accepting a suggestion and clearing on submit both need
+  // it too).
+  useLayoutEffect(() => {
+    const el = composerInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = clampComposerHeight(el.scrollHeight, COMPOSER_MIN_HEIGHT, COMPOSER_MAX_HEIGHT);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > COMPOSER_MAX_HEIGHT ? 'auto' : 'hidden';
+  }, [draft]);
+
   useEffect(() => () => clearTimeout(mentionDebounceRef.current), []);
 
   // Outside-click dismiss, same pattern as ChannelView.jsx's composer — a
@@ -249,11 +281,15 @@ function ThreadSidebar({
 
   if (!rootMessage) return null;
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  function submitDraft() {
     if (!draft.trim()) return;
     onSendReply(draft.trim());
     setDraft('');
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    submitDraft();
   }
 
   function handleComposerChange(e) {
@@ -321,6 +357,14 @@ function ThreadSidebar({
     if (e.key === 'Escape' && mention) {
       e.preventDefault();
       setMention(null);
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      // Shift+Enter falls through to the textarea's own native behavior —
+      // inserting a newline at the caret — since nothing here calls
+      // preventDefault() on it.
+      e.preventDefault();
+      submitDraft();
     }
   }
 
@@ -489,8 +533,9 @@ function ThreadSidebar({
       </div>
       <form style={styles.composer} onSubmit={handleSubmit}>
         <div style={styles.composerInputWrap}>
-          <input
+          <textarea
             ref={composerInputRef}
+            rows={1}
             style={styles.input}
             value={draft}
             onChange={handleComposerChange}

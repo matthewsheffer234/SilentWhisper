@@ -13,6 +13,23 @@ import { AI_SUMMARY_LIMIT, AI_SUMMARY_SCOPE, formatAiActionError, formatAiQueueL
 // FEATURE_REQUEST.md's @mention autocomplete entry.
 export const AUTOCOMPLETE_DEBOUNCE_MS = 200;
 
+// FEATURE_REQUEST.md's Shift+Enter entry: the composer auto-grows as
+// content wraps or gains newlines, capped at roughly 6 lines' worth before
+// it scrolls internally instead of growing further. Pure and DOM-free
+// (the DOM measurement — el.scrollHeight — happens at the call site) so
+// it's unit-testable the same way isFirstInRun()/detectMentionTrigger()
+// are. Exported so ThreadSidebar.jsx's reply composer applies the same
+// clamp with its own (smaller) min/max rather than forking the logic.
+export function clampComposerHeight(scrollHeight, minHeight, maxHeight) {
+  return Math.min(Math.max(scrollHeight, minHeight), maxHeight);
+}
+
+// Matches styles.input's existing minHeight: 44 (single line); ~6 lines'
+// worth beyond that before the composer scrolls internally instead of
+// continuing to grow.
+const COMPOSER_MIN_HEIGHT = 44;
+const COMPOSER_MAX_HEIGHT = 168;
+
 // Scans backward from the caret for an in-progress "@token". Distinct from
 // markdown.jsx's rendering-side mention regex (which matches a *completed*
 // mention for display) — this matches a partial word still being typed, and
@@ -224,6 +241,15 @@ const styles = {
     boxShadow: 'var(--input-shadow)',
     fontSize: 'var(--text-base)',
     boxSizing: 'border-box',
+    // Auto-grow (FEATURE_REQUEST.md's Shift+Enter entry) sets an explicit
+    // inline height directly on the element — not user-draggable, distinct
+    // from EntityDetailsPanel.jsx's form-field textarea's resize: 'vertical'.
+    // Overflow starts hidden; the auto-grow effect switches it to 'auto'
+    // only once content exceeds the max-height cap.
+    resize: 'none',
+    overflowY: 'hidden',
+    fontFamily: 'inherit',
+    lineHeight: 1.4,
   },
   // Anchored *above* the input (bottom: 100%) rather than below it, same as
   // every other composer-adjacent popover in a bottom-docked chat input —
@@ -615,6 +641,22 @@ function ChannelView({
     }
   });
 
+  // Auto-grow the composer textarea to fit its content (FEATURE_REQUEST.md's
+  // Shift+Enter entry) — reset to 'auto' first so scrollHeight reflects a
+  // shrink (e.g. after Send clears the draft), not just growth. Runs after
+  // every draft change, covering typing (onChange), programmatic edits
+  // (accepting a mention/entity suggestion), and clearing on submit — a
+  // single source of truth rather than only reacting to onChange, which
+  // would miss the programmatic cases.
+  useLayoutEffect(() => {
+    const el = composerInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = clampComposerHeight(el.scrollHeight, COMPOSER_MIN_HEIGHT, COMPOSER_MAX_HEIGHT);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > COMPOSER_MAX_HEIGHT ? 'auto' : 'hidden';
+  }, [draft]);
+
   useEffect(
     () => () => {
       clearTimeout(mentionDebounceRef.current);
@@ -719,11 +761,15 @@ function ChannelView({
   // since the backend's summarize route is channel-generic.
   const isDirectConversation = channel.type === 'DIRECT' || channel.type === 'GROUP_DM';
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  function submitDraft() {
     if (!draft.trim()) return;
     onSend(draft.trim());
     setDraft('');
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    submitDraft();
   }
 
   function detectEntityTrigger(text, caretPos) {
@@ -853,6 +899,14 @@ function ChannelView({
       e.preventDefault();
       setMention(null);
       setEntity(null);
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      // Shift+Enter falls through to the textarea's own native behavior —
+      // inserting a newline at the caret — since nothing here calls
+      // preventDefault() on it.
+      e.preventDefault();
+      submitDraft();
     }
   }
 
@@ -1004,8 +1058,9 @@ function ChannelView({
       </div>
       <form style={styles.composer} onSubmit={handleSubmit}>
         <div style={styles.composerInputWrap}>
-          <input
+          <textarea
             ref={composerInputRef}
+            rows={1}
             style={styles.input}
             value={draft}
             onChange={handleComposerChange}
