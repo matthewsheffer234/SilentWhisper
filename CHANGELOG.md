@@ -16,6 +16,16 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.11.1] — 2026-07-27
+
+**Migrations**: none. **New env vars**: none.
+
+Fixed a real bug in `v1.11.0`'s highlight formatting, reported directly by the user testing it live: a `==highlighted==` span that also contained `**bold**`, `*italic*`, or `***bold-italic***` rendered as stray literal `==`/`**` characters instead of a highlight — the highlight didn't render at all, not just the nested emphasis. Root cause: `frontend/src/markdown.jsx`'s tokenizer pass order ran bold/italic/bold-italic *before* highlight; those passes fragment a message into an array of (string | already-tokenized element) pieces around whatever they match, and the highlight pass only ever scans one contiguous string fragment at a time (by design — see `applyPass`'s own comment). A `**bold**` run in the middle of a `==...==` span split its opening and closing `==` into two separate fragments before the highlight pass ever ran, so neither delimiter pair was recognized as anything.
+
+Fixed by moving the highlight pass ahead of bold/italic/bold-italic in `applyInlinePasses`, so a `==...==` span is recognized whole before anything inside it gets a chance to fragment it. Content inside a mark still only gets the existing entity/mention nested pass — bold/italic syntax inside a highlighted span renders as literal characters rather than nesting, the same one-level-of-nesting limit bold/italic content already has (documented via a new test rather than left implicit). Four new regression tests in `markdown.test.jsx` cover the exact failure (highlight containing each of the three emphasis forms) plus the documented nesting boundary.
+
+Full diff: `git diff v1.11.0..v1.11.1`.
+
 ## [1.11.0] — 2026-07-26
 
 **Migrations**: none. **New env vars**: none.

@@ -14,10 +14,14 @@
 // Passes run in a fixed order, each only re-scanning the plain-text
 // segments left over from the one before it: links first (a URL's own text
 // must never be re-scanned for bold/italic/entity/mention syntax inside it),
-// then bold-italic (must precede plain bold/italic — see BOLD_ITALIC_STAR_RE's
-// own comment), then bold, then italic, then highlight, then entity tags,
-// then mentions. This mirrors this app's other "silently resolve to nothing"
-// instinct (mentions already do this for a non-existent username):
+// then highlight (must precede bold/italic/bold-italic — see
+// applyInlinePasses' own comment on why: those passes fragment a string
+// around their own matches, and a `==...==` pair split across two fragments
+// can never be recognized by a later pass that only scans one fragment at a
+// time), then bold-italic (must precede plain bold/italic — see
+// BOLD_ITALIC_STAR_RE's own comment), then bold, then italic, then entity
+// tags, then mentions. This mirrors this app's other "silently resolve to
+// nothing" instinct (mentions already do this for a non-existent username):
 // malformed/unclosed syntax or an unsafe link scheme simply falls back to
 // literal text for that token rather than erroring or consuming the rest of
 // the message hunting for a closer that isn't there.
@@ -405,13 +409,24 @@ function italicUnderscoreToNode(match, nextKey, highlightOptions) {
 function applyInlinePasses(nodes, nextKey, { linkStyle, highlightOptions, entityStyle, mentionStyle, markStyle, onEntityClick }) {
   let result = applyPass(nodes, MD_LINK_RE, (m, nk) => mdLinkToNode(m, nk, linkStyle), nextKey);
   result = applyPass(result, AUTOLINK_RE, (m, nk) => autolinkToNode(m, nk, linkStyle), nextKey);
+  // Highlight runs before bold/italic/bold-italic, not after: those passes
+  // split a string into fragments around whatever they match, and MARK_RE
+  // only ever scans one contiguous string at a time (applyPass skips
+  // already-tokenized elements — see its own comment). If a `==...==` span
+  // contains a `**bold**`/`*italic*` run, running bold/italic first splits
+  // the opening and closing `==` into two separate string fragments before
+  // MARK_RE ever gets a chance to see them together, so neither the mark nor
+  // the emphasis renders — both delimiters are left as stray literal
+  // characters instead. Highlighting first avoids that; content inside a
+  // mark still only gets the entity/mention nested pass (processHighlightsWithin),
+  // same one-level-of-nesting limit bold/italic content already has.
+  result = applyPass(result, MARK_RE, (m, nk) => markToNode(m, nk, highlightOptions, markStyle), nextKey);
   result = applyPass(result, BOLD_ITALIC_STAR_RE, (m, nk) => boldItalicToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, BOLD_ITALIC_UNDERSCORE_RE, (m, nk) => boldItalicToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, BOLD_STAR_RE, (m, nk) => boldToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, BOLD_UNDERSCORE_RE, (m, nk) => boldUnderscoreToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, ITALIC_STAR_RE, (m, nk) => italicToNode(m, nk, highlightOptions), nextKey);
   result = applyPass(result, ITALIC_UNDERSCORE_RE, (m, nk) => italicUnderscoreToNode(m, nk, highlightOptions), nextKey);
-  result = applyPass(result, MARK_RE, (m, nk) => markToNode(m, nk, highlightOptions, markStyle), nextKey);
   result = applyPass(result, ENTITY_RE, (m, nk) => entityToNode(m, nk, entityStyle, onEntityClick), nextKey);
   result = applyPass(result, MENTION_RE, (m, nk) => mentionToNode(m, nk, mentionStyle), nextKey);
   return result;

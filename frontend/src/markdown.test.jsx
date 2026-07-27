@@ -283,6 +283,41 @@ describe('highlight (FEATURE_REQUEST.md entry 1, Obsidian-style formatting)', ()
     const [mark] = elementsOfType(nodes, 'mark');
     expect(mark.props.style.background).toBe('rgba(255,255,255,0.25)');
   });
+
+  // Regression: highlight must be tokenized before bold/italic/bold-italic,
+  // not after. Those passes fragment a string around their own matches, and
+  // MARK_RE only ever scans one contiguous string fragment at a time — with
+  // highlight running last, a `==...==` span containing a `**bold**`/
+  // `*italic*`/`***bold-italic***` run got its opening and closing `==`
+  // split into two different fragments before MARK_RE ever ran, so *neither*
+  // the mark nor the inner emphasis rendered: both pairs of delimiters were
+  // left as stray literal characters. Reported directly by the user testing
+  // v1.11.0's "Obsidian-style" highlighting live.
+  test('a highlighted span containing **bold** still renders as a <mark>, not stray literal == and **', () => {
+    const nodes = renderMessageContent('==this is **bold**==');
+    const marks = elementsOfType(nodes, 'mark');
+    expect(marks).toHaveLength(1);
+    expect(nodes.join('')).not.toContain('==');
+  });
+
+  test('a highlighted span containing *italic* still renders as a <mark>', () => {
+    const nodes = renderMessageContent('==this is *italic*==');
+    expect(elementsOfType(nodes, 'mark')).toHaveLength(1);
+  });
+
+  test('a highlighted span containing ***bold-italic*** still renders as a <mark>', () => {
+    const nodes = renderMessageContent('==this is ***important***==');
+    expect(elementsOfType(nodes, 'mark')).toHaveLength(1);
+  });
+
+  test('emphasis inside a mark does not itself nest (known limit, same as bold/italic content only nesting entity/mention)', () => {
+    const nodes = renderMessageContent('==this is **bold**==');
+    const [mark] = elementsOfType(nodes, 'mark');
+    // The mark renders correctly; its own content is left literal rather
+    // than a nested <strong> — documenting the current boundary rather than
+    // silently relying on it.
+    expect(mark.props.children).toBe('this is **bold**');
+  });
 });
 
 describe('variant: "mine" (iMessage-style bubble layout entry)', () => {
