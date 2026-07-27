@@ -16,6 +16,20 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.12.0] — 2026-07-27
+
+**Migrations**: none. **New env vars**: none.
+
+Implemented `FEATURE_REQUEST.md` backlog entry 2, "Consolidate the admin surface: tabbed panels instead of stacked modals, and a persistent entry point" — the fix that followed directly from a code-grounded review of System Administration UX against Apple's HIG the user asked for.
+
+- `SystemAdminPanel.jsx`'s three previously un-tabbed, continuously-scrolling domains (account creation/roster, organizations, all workspaces) are now Accounts/Organizations/Workspaces tabs, reusing `AdminAnalyticsPanel.jsx`'s existing tab bar (`TABS` array, `styles.tab(active)`/`styles.tabBar`) rather than a second, competing pattern.
+- `WorkspaceSettingsSheet.jsx` split into an exported, unwrapped `WorkspaceSettingsContent` and a thin `Sheet`-wrapped default export (unchanged for its ordinary `WorkspaceSidebar.jsx`/`ChatShell.jsx` caller). `SystemAdminPanel`'s Workspaces tab now swaps to `WorkspaceSettingsContent` in place — with a "← Back to All Workspaces" control — instead of stacking a second full `Sheet`/backdrop on top of an already-open one, closing the exact "don't present a sheet from within another sheet" gap the review found. `ConfirmDialog` opening on top of one `Sheet` (Disable Account, Archive Workspace, etc.) is unchanged — that single-level alert stacking was never the problem.
+- `WorkspaceSidebar.jsx` gains a persistent, icon-only Admin trigger next to the username, gated on the same `showAdminButton` boolean the existing user-menu "Admin" row already computes — costs a plain member nothing. The user-menu item is kept, not replaced, per the entry's own explicit transition-period recommendation.
+
+Four new e2e tests (workspace master-detail swap producing exactly one dialog, the persistent icon visible for a system admin, hidden for a capability-free member) plus two existing tests updated for the new tab clicks. Full 147-test frontend unit suite and production build pass. E2e verified against a locally-rebuilt build: 9/11 in the affected suite passed clean (the 2 failures are pre-existing and unrelated — one reproduces identically on unmodified `main` via `git stash`, the other traces to a hardcoded `"Default Organization"` test assumption that doesn't match this database's actual earliest org); a later, larger batch hit the login rate limiter (`loginIpLimiter`, 20/15min per IP) from cumulative session test volume, not a regression.
+
+Full diff: `git diff v1.11.1..v1.12.0`.
+
 ## [1.11.1] — 2026-07-27
 
 **Migrations**: none. **New env vars**: none.

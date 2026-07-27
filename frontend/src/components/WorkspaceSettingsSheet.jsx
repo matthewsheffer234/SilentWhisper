@@ -494,7 +494,19 @@ function AdminChannelManagementSection({ workspaceId }) {
   );
 }
 
-export default function WorkspaceSettingsSheet({
+// FEATURE_REQUEST.md's "Consolidate the admin surface" entry: split out of
+// the default `Sheet`-wrapped export below so `SystemAdminPanel.jsx`'s
+// Workspaces tab can render this same content in place (master-detail,
+// swapping its own tab body) instead of stacking a second full `Sheet`/
+// backdrop on top of an already-open one — the exact "don't present a sheet
+// from within another sheet" gap that entry's review found. `onClose` here
+// still means what it always meant ("this workspace's settings view is
+// done, go back to wherever the caller came from") — every section below
+// that calls it on success (transfer/leave/archive) works identically
+// whether the caller is the default export's `Sheet` `onClose` or
+// `SystemAdminPanel`'s "back to the workspace list" handler; neither this
+// component nor its sections know or care which.
+export function WorkspaceSettingsContent({
   workspace,
   onClose,
   onInviteMember,
@@ -507,11 +519,11 @@ export default function WorkspaceSettingsSheet({
   onArchiveWorkspace,
   onLeaveWorkspace,
   // FEATURE_REQUEST.md: "any system admin should be able to fully manage
-  // all workspaces." Set when this sheet is opened from SystemAdminPanel.jsx
-  // for a workspace the caller isn't a member of (workspace.role is null in
-  // that case, so hasPermission(...) alone would hide every section) —
-  // every server-side route these sections call already grants a system
-  // admin the same access via requireWorkspacePermission's own bypass
+  // all workspaces." Set when this is reached for a workspace the caller
+  // isn't a member of (workspace.role is null in that case, so
+  // hasPermission(...) alone would hide every section) — every server-side
+  // route these sections call already grants a system admin the same access
+  // via requireWorkspacePermission's own bypass
   // (backend/src/authz/membershipService.js), so this only unlocks UI that
   // the backend was already going to accept.
   isSystemAdminOverride = false,
@@ -532,14 +544,7 @@ export default function WorkspaceSettingsSheet({
   }
 
   return (
-    <Sheet
-      title="Workspace Settings"
-      ariaLabel={`${workspace.name} settings`}
-      subtitle={workspace.name}
-      onClose={onClose}
-      width={520}
-      maxHeight="86vh"
-    >
+    <>
       {canManageSettings && (
         <>
           <div style={sectionTitleStyle()}>Name</div>
@@ -654,6 +659,21 @@ export default function WorkspaceSettingsSheet({
           />
         </>
       )}
+    </>
+  );
+}
+
+// The ordinary, single-workspace entry point (WorkspaceSidebar.jsx's own
+// overflow trigger, via ChatShell.jsx) — unchanged in behavior from before
+// this file was split: still exactly one `Sheet`, same props, same width/
+// maxHeight/aria-label. `SystemAdminPanel.jsx`'s Workspaces tab uses
+// `WorkspaceSettingsContent` directly instead of this, deliberately never
+// wrapping it in a second `Sheet`.
+export default function WorkspaceSettingsSheet(props) {
+  const { workspace, onClose } = props;
+  return (
+    <Sheet title="Workspace Settings" ariaLabel={`${workspace.name} settings`} subtitle={workspace.name} onClose={onClose} width={520} maxHeight="86vh">
+      <WorkspaceSettingsContent {...props} />
     </Sheet>
   );
 }

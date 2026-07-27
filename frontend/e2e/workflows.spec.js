@@ -1996,6 +1996,11 @@ test.describe('system admin: manage organizations and existing users', () => {
     await loginViaUi(page, admin.username, admin.password);
     await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+    // FEATURE_REQUEST.md's "Consolidate the admin surface" entry: Accounts/
+    // Organizations/Workspaces are now tabs, not one continuous scroll —
+    // Accounts is the default active tab, so anything Organizations-specific
+    // needs this click first.
+    await page.click('button:has-text("Organizations")');
 
     // Scoped by data-testid (stable across the row's own edit-mode toggle),
     // not a text-based locator — once "Rename" is clicked, the org name
@@ -2055,6 +2060,7 @@ test.describe('system admin: manage organizations and existing users', () => {
     await loginViaUi(page, admin.username, admin.password);
     await openAdminPanelItem(page, 'System Admin');
     await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+    await page.click('button:has-text("Organizations")');
 
     const orgName = `Panel Created Org ${Date.now()}`;
     await page.click('button:has-text("Create organization…")');
@@ -2104,6 +2110,66 @@ test.describe('system admin: manage organizations and existing users', () => {
     await expect(roleSelect).toHaveCount(0);
     // The Default Organization membership from seeding is still there.
     await expect(userOrgsList.getByText('Default Organization')).toBeVisible();
+  });
+
+  // FEATURE_REQUEST.md's "Consolidate the admin surface" entry: "Manage" on
+  // a workspace row used to open a second, stacked WorkspaceSettingsSheet —
+  // a second full-screen dimmed backdrop over the already-open System Admin
+  // one. It now swaps the Workspaces tab's own body in place instead
+  // (master-detail, one backdrop throughout) — this is the regression test
+  // for that specific fix, not just a rendering smoke test.
+  test('managing a workspace from the Workspaces tab swaps its settings in place, never as a second stacked dialog', async ({
+    page,
+  }) => {
+    const admin = await seedUserWithChannel('wsmgmtadmin');
+    await promoteToSystemAdmin(admin.userId);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await openAdminPanelItem(page, 'System Admin');
+    await page.waitForSelector('text=System Admin', { timeout: 10_000 });
+    await page.click('button:has-text("Workspaces")');
+
+    const wsRow = page.locator('tr', { has: page.locator(`td:has-text("${admin.workspace.name}")`) });
+    await wsRow.locator('button:has-text("Manage")').click();
+
+    // The one and only dialog on the page is still "System Admin" itself —
+    // no second role="dialog" backdrop was ever opened on top of it.
+    await expect(page.getByRole('dialog')).toHaveCount(1);
+    await expect(page.locator('input[aria-label="Workspace name"]')).toBeVisible({ timeout: 10_000 });
+    const backButton = page.locator('button:has-text("← Back to All Workspaces")');
+    await expect(backButton).toBeVisible();
+
+    await backButton.click();
+    await expect(page.locator('input[aria-label="Workspace name"]')).toHaveCount(0);
+    await expect(page.locator(`td:has-text("${admin.workspace.name}")`).first()).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// FEATURE_REQUEST.md's "Consolidate the admin surface" entry: a persistent,
+// permission-gated icon-only trigger alongside the existing user-menu
+// "Admin" item (kept, not replaced, per that entry's own transition-period
+// recommendation) — both open the same AdminPanel.jsx hub. Gated on the
+// exact same showAdminButton boolean the menu item already used, so this is
+// a negative-authorization-style UI-visibility check, not a server route
+// test, but the same discipline CLAUDE.md asks for elsewhere.
+test.describe('persistent Admin sidebar trigger', () => {
+  test('visible for a system admin', async ({ page }) => {
+    const admin = await seedUserWithChannel('adminicon');
+    await promoteToSystemAdmin(admin.userId);
+
+    await loginViaUi(page, admin.username, admin.password);
+    await expect(page.locator('button[aria-label="Admin"]')).toBeVisible({ timeout: 10_000 });
+  });
+
+  // seedPlainUser (not seedUserWithChannel, which would make this account
+  // the OWNER of its own workspace — itself enough to satisfy
+  // canManageWorkspaceUsers) — a genuinely capability-free ORG_MEMBER with
+  // no workspace at all, the actual negative case.
+  test('hidden for a plain member with no workspace/org admin capability', async ({ page }) => {
+    const member = await seedPlainUser('noadminicon');
+    await loginViaUi(page, member.username, member.password);
+    await page.waitForSelector('button[aria-label="User menu"]', { timeout: 15_000 });
+    await expect(page.locator('button[aria-label="Admin"]')).toHaveCount(0);
   });
 });
 

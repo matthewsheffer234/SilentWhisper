@@ -3,7 +3,7 @@ import Sheet from './Sheet.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import CreateOrganizationModal from './CreateOrganizationModal.jsx';
 import Pager from './Pager.jsx';
-import WorkspaceSettingsSheet from './WorkspaceSettingsSheet.jsx';
+import { WorkspaceSettingsContent } from './WorkspaceSettingsSheet.jsx';
 import {
   createAdminUser,
   listAdminUsers,
@@ -49,6 +49,33 @@ import { useAuth } from '../context/AuthContext.jsx';
 // enforcement boundary, same as every other admin panel in this app.
 
 const styles = {
+  // FEATURE_REQUEST.md's "Consolidate the admin surface" entry: identical to
+  // AdminAnalyticsPanel.jsx's own tabBar/tab — this panel adopts that exact
+  // pattern rather than a second, competing one, so the two most complex
+  // panels in the admin hub look and behave the same way.
+  tabBar: { display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' },
+  tab: (active) => ({
+    minHeight: 40,
+    padding: '0 14px',
+    border: 'none',
+    borderBottom: active ? '2px solid var(--brg)' : '2px solid transparent',
+    background: 'none',
+    color: active ? 'var(--text-1)' : 'var(--text-3)',
+    fontWeight: active ? 700 : 500,
+    fontSize: 'var(--text-sm)',
+    cursor: 'pointer',
+  }),
+  backRow: { marginBottom: 12 },
+  backButton: {
+    minHeight: 36,
+    padding: '0 10px',
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'none',
+    color: 'var(--text-2)',
+    fontSize: 'var(--text-xs)',
+    cursor: 'pointer',
+  },
   field: { marginBottom: 14 },
   label: {
     display: 'block',
@@ -135,6 +162,20 @@ const styles = {
 };
 
 const PAGE_SIZE = 50;
+
+// FEATURE_REQUEST.md's "Consolidate the admin surface" entry: three
+// previously-un-tabbed, continuously-scrolling sections become three tabs,
+// same tab-bar pattern as AdminAnalyticsPanel.jsx. Unlike that panel's tabs,
+// each of these closes over this component's own local state/handlers
+// directly rather than receiving fetched data as props — there's no shared
+// data shape across Accounts/Organizations/Workspaces the way there is
+// across Analytics' three tabs, so this array only drives the tab bar's
+// labels/order; the body for each is rendered inline below by key.
+const TABS = [
+  { key: 'accounts', label: 'Accounts' },
+  { key: 'organizations', label: 'Organizations' },
+  { key: 'workspaces', label: 'Workspaces' },
+];
 
 function CreateAccountForm({ organizations, onSubmit }) {
   const [username, setUsername] = useState('');
@@ -480,6 +521,7 @@ function OrganizationRow({ org, onRename, onArchive, onUnarchive }) {
 
 export default function SystemAdminPanel({ onClose }) {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState(TABS[0].key);
   const [organizations, setOrganizations] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [accountsTotal, setAccountsTotal] = useState(0);
@@ -674,165 +716,161 @@ export default function SystemAdminPanel({ onClose }) {
       width={760}
       maxHeight="86vh"
     >
-        <div style={styles.sectionTitle}>Create account</div>
-        <CreateAccountForm organizations={organizations} onSubmit={handleCreateAccount} />
-
-        <div style={styles.sectionTitle}>All accounts</div>
-        {accountsError && <div style={styles.error}>{accountsError}</div>}
-        {accountsLoading ? (
-          <div style={styles.empty}>Loading…</div>
-        ) : accounts.length === 0 ? (
-          <div style={styles.empty}>No accounts yet.</div>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Member</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}>System admin</th>
-                <th style={styles.th}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {accounts.map((a) => {
-                const isSelf = a.userId === user?.id;
-                return (
-                  <Fragment key={a.userId}>
-                    <tr>
-                      <td style={styles.td}>
-                        {a.displayName || a.username}
-                        {a.displayName && a.displayName !== a.username && (
-                          <span style={styles.secondaryUsername}>@{a.username}</span>
-                        )}
-                      </td>
-                      <td style={styles.td}>{a.email}</td>
-                      <td style={styles.td}>
-                        <span style={{ ...styles.statusBadge, color: a.status === 'DISABLED' ? '#c0392b' : 'var(--brg)' }}>
-                          {a.status}
-                        </span>
-                      </td>
-                      <td style={styles.td}>{a.isSystemAdmin ? 'Yes' : ''}</td>
-                      <td style={styles.td}>
-                        <div style={styles.actionRow}>
-                          {/* Disabled for the caller's own row, mirroring the
-                              backend's self-disable/self-demote 400s —
-                              avoids a guaranteed-failing click. */}
-                          {a.status === 'DISABLED' ? (
-                            <button type="button" style={styles.rowButton} onClick={() => handleEnable(a.userId)}>
-                              Enable
-                            </button>
-                          ) : (
-                            <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => setConfirmDisable(a)}>
-                              Disable
-                            </button>
-                          )}
-                          {a.isSystemAdmin ? (
-                            <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => handleDemote(a.userId)}>
-                              Demote
-                            </button>
-                          ) : (
-                            <button type="button" style={styles.rowButton} onClick={() => handlePromote(a.userId)}>
-                              Promote
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            style={styles.rowButton}
-                            onClick={() => setManagingUserId(managingUserId === a.userId ? null : a.userId)}
-                          >
-                            {managingUserId === a.userId ? 'Close' : 'Manage'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {managingUserId === a.userId && (
-                      <ManageUserRow
-                        key={`${a.userId}-manage`}
-                        targetUser={a}
-                        organizations={organizations}
-                        onResetPassword={handleGlobalResetPassword}
-                        onAddOrg={handleAddUserToOrg}
-                        onChangeOrgRole={handleChangeUserOrgRole}
-                        onRemoveFromOrg={handleRemoveUserFromOrg}
-                      />
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-        <Pager offset={accountsOffset} limit={PAGE_SIZE} total={accountsTotal} onPageChange={loadAccounts} />
-
-        <div style={{ ...styles.row, alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={styles.sectionTitle}>Organizations</div>
-          <button type="button" style={styles.rowButton} onClick={() => setCreateOrgOpen(true)}>
-            Create organization…
+      <div style={styles.tabBar}>
+        {TABS.map((tab) => (
+          <button key={tab.key} type="button" style={styles.tab(tab.key === activeTab)} onClick={() => setActiveTab(tab.key)}>
+            {tab.label}
           </button>
-        </div>
-        {orgsError && <div style={styles.error}>{orgsError}</div>}
-        {organizations.length === 0 ? (
-          <div style={styles.empty}>No organizations yet.</div>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {organizations.map((org) => (
-                <OrganizationRow
-                  key={org.id}
-                  org={org}
-                  onRename={handleRenameOrg}
-                  onArchive={handleArchiveOrg}
-                  onUnarchive={handleUnarchiveOrg}
-                />
-              ))}
-            </tbody>
-          </table>
-        )}
+        ))}
+      </div>
 
-        <div style={styles.sectionTitle}>All workspaces</div>
-        {allWorkspaces.length === 0 ? (
-          <div style={styles.empty}>No workspaces yet.</div>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Owner</th>
-                <th style={styles.th}>Organization</th>
-                <th style={styles.th}>Visibility</th>
-                <th style={styles.th}>Archived</th>
-                <th style={styles.th}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {allWorkspaces.map((ws) => (
-                <tr key={ws.id}>
-                  <td style={styles.td}>{ws.name}</td>
-                  <td style={styles.td}>{ws.ownerDisplayName || ws.ownerUsername}</td>
-                  <td style={styles.td}>{ws.organizationName}</td>
-                  <td style={styles.td}>{ws.visibility}</td>
-                  <td style={styles.td}>{ws.archivedAt ? 'Yes' : ''}</td>
-                  <td style={styles.td}>
-                    <button type="button" style={styles.rowButton} onClick={() => setManagingWorkspace(ws)}>
-                      Manage
-                    </button>
-                  </td>
+      {activeTab === 'accounts' && (
+        <>
+          <div style={styles.sectionTitle}>Create account</div>
+          <CreateAccountForm organizations={organizations} onSubmit={handleCreateAccount} />
+
+          <div style={styles.sectionTitle}>All accounts</div>
+          {accountsError && <div style={styles.error}>{accountsError}</div>}
+          {accountsLoading ? (
+            <div style={styles.empty}>Loading…</div>
+          ) : accounts.length === 0 ? (
+            <div style={styles.empty}>No accounts yet.</div>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Member</th>
+                  <th style={styles.th}>Email</th>
+                  <th style={styles.th}>Status</th>
+                  <th style={styles.th}>System admin</th>
+                  <th style={styles.th}></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <Pager offset={workspacesOffset} limit={PAGE_SIZE} total={workspacesTotal} onPageChange={loadWorkspaces} />
-        {managingWorkspace && (
-          <WorkspaceSettingsSheet
+              </thead>
+              <tbody>
+                {accounts.map((a) => {
+                  const isSelf = a.userId === user?.id;
+                  return (
+                    <Fragment key={a.userId}>
+                      <tr>
+                        <td style={styles.td}>
+                          {a.displayName || a.username}
+                          {a.displayName && a.displayName !== a.username && (
+                            <span style={styles.secondaryUsername}>@{a.username}</span>
+                          )}
+                        </td>
+                        <td style={styles.td}>{a.email}</td>
+                        <td style={styles.td}>
+                          <span style={{ ...styles.statusBadge, color: a.status === 'DISABLED' ? '#c0392b' : 'var(--brg)' }}>
+                            {a.status}
+                          </span>
+                        </td>
+                        <td style={styles.td}>{a.isSystemAdmin ? 'Yes' : ''}</td>
+                        <td style={styles.td}>
+                          <div style={styles.actionRow}>
+                            {/* Disabled for the caller's own row, mirroring the
+                                backend's self-disable/self-demote 400s —
+                                avoids a guaranteed-failing click. */}
+                            {a.status === 'DISABLED' ? (
+                              <button type="button" style={styles.rowButton} onClick={() => handleEnable(a.userId)}>
+                                Enable
+                              </button>
+                            ) : (
+                              <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => setConfirmDisable(a)}>
+                                Disable
+                              </button>
+                            )}
+                            {a.isSystemAdmin ? (
+                              <button type="button" style={styles.rowButton} disabled={isSelf} onClick={() => handleDemote(a.userId)}>
+                                Demote
+                              </button>
+                            ) : (
+                              <button type="button" style={styles.rowButton} onClick={() => handlePromote(a.userId)}>
+                                Promote
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              style={styles.rowButton}
+                              onClick={() => setManagingUserId(managingUserId === a.userId ? null : a.userId)}
+                            >
+                              {managingUserId === a.userId ? 'Close' : 'Manage'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {managingUserId === a.userId && (
+                        <ManageUserRow
+                          key={`${a.userId}-manage`}
+                          targetUser={a}
+                          organizations={organizations}
+                          onResetPassword={handleGlobalResetPassword}
+                          onAddOrg={handleAddUserToOrg}
+                          onChangeOrgRole={handleChangeUserOrgRole}
+                          onRemoveFromOrg={handleRemoveUserFromOrg}
+                        />
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          <Pager offset={accountsOffset} limit={PAGE_SIZE} total={accountsTotal} onPageChange={loadAccounts} />
+        </>
+      )}
+
+      {activeTab === 'organizations' && (
+        <>
+          <div style={{ ...styles.row, alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={styles.sectionTitle}>Organizations</div>
+            <button type="button" style={styles.rowButton} onClick={() => setCreateOrgOpen(true)}>
+              Create organization…
+            </button>
+          </div>
+          {orgsError && <div style={styles.error}>{orgsError}</div>}
+          {organizations.length === 0 ? (
+            <div style={styles.empty}>No organizations yet.</div>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Name</th>
+                  <th style={styles.th}>Status</th>
+                  <th style={styles.th}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {organizations.map((org) => (
+                  <OrganizationRow
+                    key={org.id}
+                    org={org}
+                    onRename={handleRenameOrg}
+                    onArchive={handleArchiveOrg}
+                    onUnarchive={handleUnarchiveOrg}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+
+      {activeTab === 'workspaces' && (managingWorkspace ? (
+        // FEATURE_REQUEST.md's "Consolidate the admin surface" entry: this
+        // used to be a second, stacked `WorkspaceSettingsSheet` — a second
+        // fixed backdrop opened on top of this already-open one. Swapping
+        // this tab's own body in place (with a Back control) instead is
+        // exactly the master-detail-not-stacked-sheet fix that entry calls
+        // for; `WorkspaceSettingsContent` is the same content
+        // `WorkspaceSettingsSheet.jsx`'s own default export wraps in a
+        // `Sheet` for the ordinary single-workspace entry point, unwrapped.
+        <>
+          <div style={styles.backRow}>
+            <button type="button" style={styles.backButton} onClick={() => setManagingWorkspace(null)}>
+              ← Back to All Workspaces
+            </button>
+          </div>
+          <WorkspaceSettingsContent
             workspace={managingWorkspace}
             isSystemAdminOverride
             onClose={() => setManagingWorkspace(null)}
@@ -845,19 +883,58 @@ export default function SystemAdminPanel({ onClose }) {
             onRenameWorkspace={(name) => handleAdminRenameWorkspace(managingWorkspace.id, name)}
             onArchiveWorkspace={() => handleAdminArchiveWorkspace(managingWorkspace.id)}
           />
-        )}
-        {confirmDisable && (
-          <ConfirmDialog
-            title="Disable Account"
-            message={`Disable ${confirmDisable.displayName || confirmDisable.username}'s account? They'll be signed out of every session immediately and won't be able to sign in again until re-enabled.`}
-            confirmLabel="Disable"
-            onConfirm={() => handleDisable(confirmDisable.userId)}
-            onClose={() => setConfirmDisable(null)}
-          />
-        )}
-        {createOrgOpen && (
-          <CreateOrganizationModal onClose={() => setCreateOrgOpen(false)} onCreate={handleCreateOrg} />
-        )}
+        </>
+      ) : (
+        <>
+          <div style={styles.sectionTitle}>All workspaces</div>
+          {allWorkspaces.length === 0 ? (
+            <div style={styles.empty}>No workspaces yet.</div>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Name</th>
+                  <th style={styles.th}>Owner</th>
+                  <th style={styles.th}>Organization</th>
+                  <th style={styles.th}>Visibility</th>
+                  <th style={styles.th}>Archived</th>
+                  <th style={styles.th}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {allWorkspaces.map((ws) => (
+                  <tr key={ws.id}>
+                    <td style={styles.td}>{ws.name}</td>
+                    <td style={styles.td}>{ws.ownerDisplayName || ws.ownerUsername}</td>
+                    <td style={styles.td}>{ws.organizationName}</td>
+                    <td style={styles.td}>{ws.visibility}</td>
+                    <td style={styles.td}>{ws.archivedAt ? 'Yes' : ''}</td>
+                    <td style={styles.td}>
+                      <button type="button" style={styles.rowButton} onClick={() => setManagingWorkspace(ws)}>
+                        Manage
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <Pager offset={workspacesOffset} limit={PAGE_SIZE} total={workspacesTotal} onPageChange={loadWorkspaces} />
+        </>
+      ))}
+
+      {confirmDisable && (
+        <ConfirmDialog
+          title="Disable Account"
+          message={`Disable ${confirmDisable.displayName || confirmDisable.username}'s account? They'll be signed out of every session immediately and won't be able to sign in again until re-enabled.`}
+          confirmLabel="Disable"
+          onConfirm={() => handleDisable(confirmDisable.userId)}
+          onClose={() => setConfirmDisable(null)}
+        />
+      )}
+      {createOrgOpen && (
+        <CreateOrganizationModal onClose={() => setCreateOrgOpen(false)} onCreate={handleCreateOrg} />
+      )}
     </Sheet>
   );
 }

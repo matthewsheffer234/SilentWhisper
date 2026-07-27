@@ -144,6 +144,27 @@ const styles = {
     cursor: 'pointer',
     fontSize: 'var(--text-md)',
   },
+  // FEATURE_REQUEST.md's "Consolidate the admin surface" entry: a persistent
+  // trigger for the same AdminPanel.jsx hub the user-menu's "Admin" row
+  // already opens (kept, not replaced, as that entry's own explicit
+  // transition-period recommendation calls for) — this is a second path to
+  // the same destination, not a new one. Gated on the same showAdminButton
+  // boolean the menu item below already computes, so it costs a plain
+  // member (for whom that boolean is already false today) nothing. Sized
+  // like userMenuTrigger, not overflowTrigger's smaller 28px — this sits in
+  // the primary user row as its own tap target, not inside an
+  // already-44px-tall row the way the per-workspace overflow icons are.
+  adminTrigger: {
+    minWidth: 44,
+    minHeight: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-3)',
+    cursor: 'pointer',
+  },
   adminToolsRow: {
     display: 'flex',
     padding: '8px 10px',
@@ -510,6 +531,11 @@ function WorkspaceSidebar({
       <div style={styles.userRow}>
         <span style={styles.username}>{user?.displayName || user?.username}</span>
         <UserPresenceBadge userId={user?.id} fallback="online" />
+        {showAdminButton && (
+          <button type="button" style={styles.adminTrigger} aria-label="Admin" onClick={onOpenAdminPanel}>
+            <Settings size={18} aria-hidden="true" />
+          </button>
+        )}
         <div style={styles.userMenuWrap}>
           <Menu
             ariaLabel="User menu"
