@@ -1,0 +1,399 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Silent Whisper — Administrator Guide</title>
+<link rel="stylesheet" href="design.css">
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="page">
+  <div class="card cover-card front">
+    <div class="cover-eyebrow">SILENT LATTICE</div>
+    <img class="cover-logo" src="../SW_Logo_transparent.png" alt="">
+    <div class="cover-title">Silent Whisper</div>
+    <hr class="cover-rule">
+    <div class="cover-meta">
+      <span class="edition">Administrator Guide</span><span class="sep">·</span><span>Edition 1.0</span><span class="sep">·</span><span class="version">Built from v1.11.0</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ TOC ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head" style="border-bottom:none;padding-bottom:0;">
+      <div class="section-titles"><div class="section-title" style="font-size:16pt;">Contents</div></div>
+    </div>
+    <table style="margin-top:8pt;">
+      <tbody>
+        <tr><td style="width:24pt;color:var(--gold);font-weight:700;background:none;padding:6pt 0;">1</td><td style="background:none;padding:6pt 0;">Who This Guide Is For</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">2</td><td style="background:none;padding:6pt 0;">Roles &amp; Permissions</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">3</td><td style="background:none;padding:6pt 0;">System Administration</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">4</td><td style="background:none;padding:6pt 0;">Organization Management</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">5</td><td style="background:none;padding:6pt 0;">Workspace Management</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">6</td><td style="background:none;padding:6pt 0;">Channel Management</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">7</td><td style="background:none;padding:6pt 0;">Member Lifecycle &amp; Invitations</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">8</td><td style="background:none;padding:6pt 0;">AI Settings</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">9</td><td style="background:none;padding:6pt 0;">Admin Analytics Dashboard</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">10</td><td style="background:none;padding:6pt 0;">Audit Log &amp; Compliance</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">11</td><td style="background:none;padding:6pt 0;">Security &amp; Privacy Principles</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">12</td><td style="background:none;padding:6pt 0;">Best Practices Checklist</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">13</td><td style="background:none;padding:6pt 0;">Role Capability Matrix</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>2 / 16</span></div>
+</div>
+
+<!-- ============ 1 WHO THIS GUIDE IS FOR ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">1</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">INTRODUCTION</div>
+        <div class="section-title">Who This Guide Is For</div>
+      </div>
+    </div>
+    <p>This guide is for anyone with administrative responsibility in Silent Whisper: a System Administrator overseeing the whole deployment, an Organization Administrator managing membership across an organization, or a Workspace Owner or Manager running a team's day-to-day workspace. It covers what each of these roles can do, how membership and invitations work, and the trust and audit model underpinning the platform.</p>
+    <p>For everyday messaging features, see the companion User Guide — this guide focuses strictly on administrative capability.</p>
+    <div class="box">
+      <div class="label">CORE PRINCIPLE</div>
+      <p>Silent Whisper separates structural administration from content access. Administering a workspace's membership and settings never, by itself, grants access to the private conversations inside it. This distinction shapes almost every rule in this guide, and is explained fully in Chapter 11.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>3 / 16</span></div>
+</div>
+
+<!-- ============ 2 ROLES & PERMISSIONS ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">2</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">FOUNDATIONS</div>
+        <div class="section-title">Roles &amp; Permissions</div>
+      </div>
+    </div>
+    <p>Administrative authority in Silent Whisper is layered, and each layer's authority stops at its own boundary: <strong>System Admin</strong> (global, every organization and workspace) contains <strong>Org Admin / Org Member</strong> (one organization) contains <strong>Owner / Manager / Member</strong> (one workspace) contains <strong>Channel member</strong> (one channel).</p>
+    <table style="font-size:8.4pt;">
+      <thead><tr><th>ROLE</th><th>SCOPE</th><th>PRIMARY RESPONSIBILITIES</th></tr></thead>
+      <tbody>
+        <tr><td><strong>System Administrator</strong></td><td>Entire deployment</td><td>Create organizations; create and manage user accounts; oversee every workspace structurally; configure AI settings; review analytics and the audit log.</td></tr>
+        <tr><td><strong>Organization Administrator</strong></td><td>One organization</td><td>Invite, remove, and change the role of organization members.</td></tr>
+        <tr><td><strong>Organization Member</strong></td><td>One organization</td><td>No administrative permissions.</td></tr>
+        <tr><td><strong>Workspace Owner</strong></td><td>One workspace (exactly one Owner at a time)</td><td>Full control of the workspace: settings, visibility, membership, roles, ownership transfer.</td></tr>
+        <tr><td><strong>Workspace Manager</strong></td><td>One workspace</td><td>Manages plain members (invite, roster, password reset, removal); may archive the workspace only if the Owner has granted that specifically.</td></tr>
+        <tr><td><strong>Workspace Member</strong></td><td>One workspace</td><td>Ordinary participant; no administrative permissions.</td></tr>
+        <tr><td><strong>Channel member</strong></td><td>One channel</td><td>Any member may rename the channel, add or remove other members of a private channel, or leave.</td></tr>
+      </tbody>
+    </table>
+    <div class="box">
+      <div class="label">NOTE</div>
+      <p>Organization membership has no "last admin" safeguard by design — an organization can end up with zero Org Administrators if the last one is removed or leaves. Keep this in mind when restructuring org-level access.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>4 / 16</span></div>
+</div>
+
+<!-- ============ 3 SYSTEM ADMINISTRATION ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">3</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">GLOBAL OVERSIGHT</div>
+        <div class="section-title">System Administration</div>
+      </div>
+    </div>
+    <h3>Creating organizations</h3>
+    <p>Only a System Administrator can create a new organization. Its creator becomes that organization's first Organization Administrator.</p>
+    <h3>Creating and managing user accounts</h3>
+    <p>Silent Whisper has no public sign-up — every account is created directly by a System Administrator, or arrives through an invitation (Chapter 7). System Administrators can:</p>
+    <ul>
+      <li>Create a new user account.</li>
+      <li>Disable or re-enable an account — disabling takes effect immediately, ending any active session and blocking further sign-in right away, not just once a session naturally expires.</li>
+      <li>Promote or demote System Administrator status for any user.</li>
+      <li>Reset any user's password.</li>
+      <li>See which organizations a given user belongs to.</li>
+    </ul>
+    <h3>Cross-workspace oversight</h3>
+    <p>A System Administrator can view every workspace across every organization, and manage a workspace's structure — settings, archiving, visibility, membership and roles, channels, and ownership — even without being a member of it. This is the "structural override" referenced throughout this guide.</p>
+    <div class="box">
+      <div class="label">IMPORTANT</div>
+      <p>Using the structural override to manage a workspace does not grant a System Administrator access to its private channels or direct messages, and it does not add them as a member of any channel. To actually read conversation content, a System Administrator must take a further, separate, and audited step — the same one any other outsider would need.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>5 / 16</span></div>
+</div>
+
+<!-- ============ 4 ORGANIZATION MANAGEMENT ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">4</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">ORGANIZATIONS</div>
+        <div class="section-title">Organization Management</div>
+      </div>
+    </div>
+    <p>Organization Administrators manage who belongs to the organization and what role they hold there:</p>
+    <ul>
+      <li>Invite or add members to the organization.</li>
+      <li>Remove members from the organization.</li>
+      <li>Change a member's role between Organization Administrator and Organization Member.</li>
+      <li>Rename the organization.</li>
+      <li>Archive the organization when it's no longer active — archiving blocks new members, invitations, and workspaces from being added underneath it, while keeping it browsable for historical reference. Archiving can be reversed.</li>
+    </ul>
+    <p>Any organization member — administrator or not — can leave the organization on their own at any time, without needing anyone's approval.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>6 / 16</span></div>
+</div>
+
+<!-- ============ 5 WORKSPACE MANAGEMENT ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">5</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">WORKSPACES</div>
+        <div class="section-title">Workspace Management</div>
+      </div>
+    </div>
+    <h3>Creating a workspace</h3>
+    <p>Any authenticated user may create a workspace for themselves — this is self-service and doesn't require administrator approval. The creator automatically becomes its Owner.</p>
+    <h3>Visibility</h3>
+    <p>A workspace can be discoverable (visible in a browsable list that any user can search and request to join) or kept private (findable only by direct invitation). The Owner can change this at any time.</p>
+    <h3>Membership &amp; roles</h3>
+    <p>Owners and Managers can invite or add members. Owners additionally control promotion and demotion between Manager and plain Member. Only an Owner can promote someone to Manager or remove Manager status.</p>
+    <h3>Delegating archive rights, and transferring ownership</h3>
+    <p>By default, only the Owner can archive or unarchive a workspace; an Owner can delegate that ability to Managers explicitly. Ownership can be transferred to another member — this is the only way an Owner can leave their own workspace, since Silent Whisper requires exactly one Owner at all times.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>7 / 16</span></div>
+</div>
+
+<!-- ============ 6 CHANNEL MANAGEMENT ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">6</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">CHANNELS</div>
+        <div class="section-title">Channel Management</div>
+      </div>
+    </div>
+    <p>Channel management is deliberately lightweight — treated as ordinary participation rather than a special privilege, on the reasoning that anyone trusted enough to be in a channel is trusted enough to help run it:</p>
+    <ul>
+      <li><strong>Creating a channel</strong> — any workspace member can create a new channel, public or private.</li>
+      <li><strong>Renaming</strong> — any current member of a channel can rename it.</li>
+      <li><strong>Adding members to a private channel</strong> — any current member can add another workspace member.</li>
+      <li><strong>Removing a member from a channel</strong> — removes them from that channel only, without affecting their workspace membership.</li>
+      <li><strong>Leaving</strong> — any member can leave a channel at any time, independent of their workspace membership.</li>
+    </ul>
+    <div class="box">
+      <div class="label">NOTE</div>
+      <p>Public channels are self-joinable by any workspace member — no one needs to add them. Private channels require an existing member to add the person; the channel is invisible to everyone else, including in search and browsing.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>8 / 16</span></div>
+</div>
+
+<!-- ============ 7 MEMBER LIFECYCLE & INVITATIONS ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">7</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">PEOPLE</div>
+        <div class="section-title">Member Lifecycle &amp; Invitations</div>
+      </div>
+    </div>
+    <h3>Two ways to invite</h3>
+    <table style="font-size:9pt;">
+      <thead><tr><th>METHOD</th><th>HOW IT WORKS</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Invitation link</strong></td><td>A shareable link created by an inviter. Whoever redeems it supplies their own details at that time. The inviter can revoke the link before it's used.</td></tr>
+        <tr><td><strong>In-app invitation</strong></td><td>Sent to a specific, already-registered user by name. It appears to them as a notification they can Accept or Decline — no link required.</td></tr>
+      </tbody>
+    </table>
+    <h3>Resetting a member's password</h3>
+    <p>A workspace administrator (Owner or Manager) can reset the password of a member within their workspace; a System Administrator can reset any user's password organization-wide. There is no self-service, email-based password reset — this is by design. Usernames are matched case-insensitively at sign-in, so a casing mismatch is never the reason someone can't log in.</p>
+    <h3>Removing a member</h3>
+    <p>Workspace administrators can remove a member from the workspace; members can also always remove themselves (Chapter 5). Removal from a workspace does not automatically remove someone from their parent organization, and vice versa — each layer is managed independently.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>9 / 16</span></div>
+</div>
+
+<!-- ============ 8 AI SETTINGS ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">8</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">CONFIGURATION</div>
+        <div class="section-title">AI Settings</div>
+      </div>
+    </div>
+    <p>The AI features described in the User Guide (channel summaries, task extraction, workspace digests, semantic search, and per-entity "What we know" summaries) are configured centrally, and only a System Administrator can change that configuration — no workspace-level role can. Configurable settings include:</p>
+    <ul>
+      <li>Which AI provider and model are in use.</li>
+      <li>The endpoint the platform connects to for AI processing.</li>
+      <li>Request timeouts and response length limits.</li>
+      <li>Whether responses stream incrementally or arrive all at once.</li>
+      <li>The prompt version in use.</li>
+    </ul>
+    <div class="box">
+      <div class="label">WHY THIS IS CENTRALIZED</div>
+      <p>AI configuration was tightened to System-Administrator-only after a review found that certain workspace-level roles could otherwise reach settings with broader security implications than intended (including where AI requests are allowed to be sent). Keeping this single-purpose and centrally owned closes that gap.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>10 / 16</span></div>
+</div>
+
+<!-- ============ 9 ADMIN ANALYTICS DASHBOARD (NEW) ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">9</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">USAGE &amp; COORDINATION METADATA</div>
+        <div class="section-title">Admin Analytics Dashboard</div>
+      </div>
+    </div>
+    <p>Reachable from the Admin hub as <strong>Admin Analytics</strong>, this is a System-Administrator-only dashboard of usage and coordination metadata — never message content. It has three tabs:</p>
+    <ul>
+      <li><strong>Activity</strong> — message and active-user counts bucketed by day or week, scoped to an organization, workspace, or channel, plus a Dormant Channels list of channels with no top-level message in a configurable number of days.</li>
+      <li><strong>Collaboration</strong> — a structural membership-overlap graph between users who share more than a configurable number of channels (2, by default), and an interaction-trend chart of reply-based activity between people over time.</li>
+      <li><strong>Sentiment Trends</strong> — an approximate, bucketed tone trend derived from the same embeddings already computed for semantic search — never a second AI call, and never the message text itself.</li>
+    </ul>
+    <div class="box">
+      <div class="label">NOTE</div>
+      <p>Every tab structurally excludes direct messages and group DMs, the same way ordinary analytics reads do. Scoping Sentiment Trends to a single user — the one variant that's individual tone-monitoring rather than a many-person average — is itself an audited action; every other view here is a plain metadata read, unaudited like the rest of this dashboard.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>11 / 16</span></div>
+</div>
+
+<!-- ============ 10 AUDIT LOG & COMPLIANCE ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">10</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">ACCOUNTABILITY</div>
+        <div class="section-title">Audit Log &amp; Compliance</div>
+      </div>
+    </div>
+    <p>Silent Whisper keeps a standing audit log of administrative and security-relevant actions — account creation and changes, role and ownership changes, workspace and organization lifecycle events, authentication events, and access to the audit log itself.</p>
+    <h3>Reviewing the log</h3>
+    <p>System Administrators can browse recent audit events from the administration area, in reverse-chronological order.</p>
+    <h3>Verifying integrity</h3>
+    <p>Each entry in the audit log is cryptographically linked to the one before it, so any attempt to alter or remove a past entry breaks the chain in a detectable way. A one-click Verify Integrity action re-checks the entire chain on demand. The underlying database also enforces that log entries can never be updated, deleted, or bulk-erased — even by the application itself — so the log's append-only guarantee doesn't depend on any one piece of code behaving correctly.</p>
+    <div class="box">
+      <div class="label">NOTE</div>
+      <p>Viewing the audit log and running an integrity check are themselves logged — reviewing the log leaves a record of the review.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>12 / 16</span></div>
+</div>
+
+<!-- ============ 11 SECURITY & PRIVACY PRINCIPLES ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">11</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">TRUST MODEL</div>
+        <div class="section-title">Security &amp; Privacy Principles</div>
+      </div>
+    </div>
+    <h3>Structural management is not content access</h3>
+    <p>This is the single most important idea in this guide. Being able to administer a workspace's settings, membership, or channel list never by itself grants the ability to read the messages inside its private channels or direct messages. Anyone — including a System Administrator — who wants to read content they aren't already a participant in must take a further, explicit, and audited step to do so. The same boundary applies to entity AI summaries, Knowledge Explorer trending, and the Analytics dashboard: each is scoped to what the viewer could already see, never more.</p>
+    <h3>Private resources are invisible, not just restricted</h3>
+    <p>If you're not a member of a private workspace or channel, Silent Whisper treats it as though it doesn't exist for you, rather than showing it and refusing access.</p>
+    <h3>Account security</h3>
+    <ul>
+      <li>Disabling an account takes effect immediately — any live connection is closed at once, and re-authentication is blocked, rather than waiting for a session to expire naturally.</li>
+      <li>Session hijacking protection — if a previously used sign-in credential is ever replayed after it should have expired, Silent Whisper treats this as a sign of compromise and signs out every other active session for that user automatically.</li>
+      <li>Password requirements — new passwords must meet a minimum length and are checked against a list of known-compromised passwords.</li>
+    </ul>
+    <h3>Rate limiting</h3>
+    <p>Sign-in attempts, message sending, invitation redemption, and AI feature requests are all automatically rate-limited to protect the platform from abuse and overload, with no administrator configuration or monitoring required.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>13 / 16</span></div>
+</div>
+
+<!-- ============ 12 BEST PRACTICES CHECKLIST ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">12</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">DISCIPLINE</div>
+        <div class="section-title">Best Practices Checklist</div>
+      </div>
+    </div>
+    <ul>
+      <li>Assign a second Organization Administrator wherever possible — there's no built-in safeguard against an organization ending up with zero.</li>
+      <li>Transfer workspace ownership deliberately, and confirm the new Owner is who you intend before an existing Owner steps away — ownership is unique and consequential.</li>
+      <li>Prefer in-app invitations for people who already have an account, and reserve invitation links for genuinely new people — links can be shared further than intended before they're redeemed.</li>
+      <li>Revoke an invitation link as soon as it's no longer needed.</li>
+      <li>Review the audit log periodically, not only when investigating something specific — a quiet regular habit catches more than a reactive one.</li>
+      <li>Remember that structural oversight of a workspace is not the same as reading its content — don't rely on administrative access as a substitute for actually being a member of a channel you need visibility into.</li>
+      <li>Archive organizations and workspaces that are no longer active rather than leaving them live and unmonitored — archiving is reversible and keeps active membership lists meaningful. The Analytics dashboard's Dormant Channels view (Chapter 9) is a good prompt for when it's time.</li>
+    </ul>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>14 / 16</span></div>
+</div>
+
+<!-- ============ 13 ROLE CAPABILITY MATRIX ============ -->
+<div class="page">
+  <div class="card content-card" style="padding:24pt 34pt 18pt 34pt;">
+    <div class="section-head" style="margin-bottom:12pt;">
+      <div class="section-num">13</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">APPENDIX</div>
+        <div class="section-title">Role Capability Matrix</div>
+      </div>
+    </div>
+    <table style="font-size:7.9pt;">
+      <thead><tr><th>CAPABILITY</th><th>SYS ADMIN</th><th>ORG ADMIN</th><th>WS OWNER</th><th>WS MANAGER</th><th>MEMBER</th></tr></thead>
+      <tbody>
+        <tr><td>Create organization</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>Create user account</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>Disable / enable account</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>Invite / remove org members</td><td>Yes</td><td>Yes</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>Create workspace</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Change workspace visibility</td><td>Yes*</td><td>—</td><td>Yes</td><td>—</td><td>—</td></tr>
+        <tr><td>Invite / add workspace members</td><td>Yes*</td><td>—</td><td>Yes</td><td>Yes</td><td>—</td></tr>
+        <tr><td>Promote / demote Manager</td><td>Yes*</td><td>—</td><td>Yes</td><td>—</td><td>—</td></tr>
+        <tr><td>Transfer workspace ownership</td><td>Yes*</td><td>—</td><td>Yes</td><td>—</td><td>—</td></tr>
+        <tr><td>Archive workspace</td><td>Yes*</td><td>—</td><td>Yes</td><td>If delegated</td><td>—</td></tr>
+        <tr><td>Create / rename channel</td><td>Yes*</td><td>—</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Add/remove private channel members</td><td>Yes*</td><td>—</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Leave workspace / org / channel</td><td>Yes</td><td>Yes</td><td>After ownership transfer</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Read private channel / DM content</td><td>Only if a member</td><td>Only if a member</td><td>Only if a member</td><td>Only if a member</td><td>Only if a member</td></tr>
+        <tr><td>Configure AI settings</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>View Admin Analytics</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>View / verify audit log</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <p class="table-footnote">* Via the structural override, without becoming a member and without gaining content access — see Chapter 11.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>15 / 16</span></div>
+</div>
+
+<!-- ============ BACK COVER ============ -->
+<div class="page">
+  <div class="card cover-card back">
+    <img class="cover-logo" src="../SW_Logo_transparent.png" alt="">
+    <div class="cover-title">SILENT WHISPER</div>
+    <hr class="cover-rule">
+  </div>
+  <div class="footer"><span>Silent Whisper — Administrator Guide</span><span>16 / 16</span></div>
+</div>
+
+</body>
+</html>

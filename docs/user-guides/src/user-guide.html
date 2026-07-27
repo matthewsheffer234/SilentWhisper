@@ -1,0 +1,423 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Silent Whisper — User Guide</title>
+<link rel="stylesheet" href="design.css">
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="page">
+  <div class="card cover-card front">
+    <div class="cover-eyebrow">SILENT LATTICE</div>
+    <img class="cover-logo" src="../SW_Logo_transparent.png" alt="">
+    <div class="cover-title">Silent Whisper</div>
+    <hr class="cover-rule">
+    <div class="cover-meta">
+      <span class="edition">User Guide</span><span class="sep">·</span><span>Edition 1.0</span><span class="sep">·</span><span class="version">Built from v1.11.0</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ TOC ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head" style="border-bottom:none;padding-bottom:0;">
+      <div class="section-titles"><div class="section-title" style="font-size:16pt;">Contents</div></div>
+    </div>
+    <table style="margin-top:8pt;">
+      <tbody>
+        <tr><td style="width:24pt;color:var(--gold);font-weight:700;background:none;padding:6pt 0;">1</td><td style="background:none;padding:6pt 0;">Welcome to Silent Whisper</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">2</td><td style="background:none;padding:6pt 0;">Getting Started</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">3</td><td style="background:none;padding:6pt 0;">Organizations, Workspaces &amp; Channels</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">4</td><td style="background:none;padding:6pt 0;">Sending &amp; Editing Messages</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">5</td><td style="background:none;padding:6pt 0;">Threads, Direct Messages &amp; Group DMs</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">6</td><td style="background:none;padding:6pt 0;">Inline Tasks</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">7</td><td style="background:none;padding:6pt 0;">Notifications &amp; Presence</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">8</td><td style="background:none;padding:6pt 0;">Search</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">9</td><td style="background:none;padding:6pt 0;">Entities &amp; the Knowledge Explorer</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">10</td><td style="background:none;padding:6pt 0;">AI-Assisted Features</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">11</td><td style="background:none;padding:6pt 0;">Your Account</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">12</td><td style="background:none;padding:6pt 0;">Joining &amp; Leaving</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">13</td><td style="background:none;padding:6pt 0;">Good Practices &amp; Current Limitations</td></tr>
+        <tr><td style="color:var(--gold);font-weight:700;background:none;padding:6pt 0;">14</td><td style="background:none;padding:6pt 0;">Quick Reference &amp; Glossary</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>2 / 19</span></div>
+</div>
+
+<!-- ============ 1 WELCOME ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">1</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">INTRODUCTION</div>
+        <div class="section-title">Welcome to Silent Whisper</div>
+      </div>
+    </div>
+    <p>Silent Whisper is a private, workspace-based messaging platform built for teams who want a calm, considered place to communicate — without depending on the open internet, and without their conversations leaving a boundary they control. It brings together the everyday rhythm of channels and direct messages with a few quieter ideas: threads that stay tidy, tasks that live inside the conversation itself, a lightweight knowledge base that builds itself as you talk, and an assistant that summarizes rather than chats.</p>
+    <p>This guide covers everything you need as a member of a workspace — sending and editing messages, working with channels and direct messages, tracking tasks, exploring the entities your team references, searching your history, and using the built-in AI features. It does not cover administration of workspaces or organizations; if you manage a workspace, see the companion Administrator Guide.</p>
+    <div class="box">
+      <div class="label">DESIGN PRINCIPLE</div>
+      <p>Silent Whisper is deliberately restrained. It favors clarity and permanence over novelty — every message you send is meant to be something you're comfortable standing behind, and every feature is built to keep your attention on the conversation, not the interface.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>3 / 19</span></div>
+</div>
+
+<!-- ============ 2 GETTING STARTED ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">2</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">ONBOARDING</div>
+        <div class="section-title">Getting Started</div>
+      </div>
+    </div>
+    <h3>Getting an account</h3>
+    <p>Silent Whisper does not have open, public sign-up. Every account is created for you — either directly by an administrator, or through an invitation you redeem. You'll receive your account, or an invitation to join a specific workspace, through one of two paths:</p>
+    <ul>
+      <li>An invitation link — sent to you by someone who wants you to join their workspace. Opening it lets you set up your account (or sign in, if you already have one) and joins you to that workspace automatically.</li>
+      <li>An in-app invitation — if you already have an account, an administrator or workspace owner can invite you directly by name. You'll see this as a notification with Accept and Decline options.</li>
+    </ul>
+    <h3>Signing in</h3>
+    <p>Sign in with the username and password your administrator gave you — usernames aren't case-sensitive at login, so it doesn't matter whether you type, or autocapitalize, it differently than it was created. If you ever forget your password, Silent Whisper does not offer a self-service email reset — ask a workspace administrator or your system administrator to reset it for you.</p>
+    <h3>Setting your display name</h3>
+    <p>Your display name is how you appear to teammates throughout the app. You can update it at any time from your account settings without needing anyone's approval.</p>
+    <h3>Choosing an appearance</h3>
+    <p>Silent Whisper offers Light, Dark, and System-matched appearance themes. This is purely a personal preference and can be changed at any time; it has no effect on what others see.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>4 / 19</span></div>
+</div>
+
+<!-- ============ 3 ORG/WORKSPACE/CHANNEL ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">3</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">STRUCTURE</div>
+        <div class="section-title">Organizations, Workspaces &amp; Channels</div>
+      </div>
+    </div>
+    <p>Silent Whisper is organized in three layers. Understanding them makes it much easier to find your way around: an <strong>Organization</strong> is the outermost boundary, typically one per company or institution; a <strong>Workspace</strong> is a team or project space inside it, your day-to-day home; a <strong>Channel</strong> is a topic or team room inside a workspace, public or private; and a <strong>Direct or Group Message</strong> is a private conversation between specific people, outside any channel.</p>
+    <h3>Finding and joining a workspace</h3>
+    <p>Workspaces that have been made discoverable will appear in a browsable list, which you can search and request to join yourself. Workspaces that are kept private require someone already inside — typically an owner or manager — to invite you.</p>
+    <h3>Public and private channels</h3>
+    <p>Within a workspace, channels come in two flavors: public channels can be joined by any member of the workspace at any time, no invitation needed. Private channels are visible only to their members; joining requires an existing member to add you. If you're not a member of a private channel, Silent Whisper won't even reveal that it exists to you — this is intentional, and protects sensitive conversations from being discovered by people who aren't part of them.</p>
+    <div class="box">
+      <div class="label">NOTE</div>
+      <p>Any member of a channel can rename it, add other workspace members to it (if it's private), remove members, or leave — these are treated as ordinary participation, not special administrative power.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>5 / 19</span></div>
+</div>
+
+<!-- ============ 4 SENDING & EDITING MESSAGES (p1) ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">4</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">COMMUNICATING</div>
+        <div class="section-title">Sending &amp; Editing Messages</div>
+      </div>
+    </div>
+    <h3>Basic formatting</h3>
+    <p>Messages support lightweight markdown, recognized automatically as you type: <strong>**bold**</strong>, <em>*italic*</em>, and <strong><em>***bold-italic***</em></strong>, plus <mark>==highlighted text==</mark> for something that should jump out. Markdown-style <span class="pill">[label](url)</span> links and plain https:// addresses both become clickable. Formatting is kept intentionally simple — the emphasis is on writing clearly, not decorating.</p>
+    <h3>Composing a longer message</h3>
+    <p>The composer grows with you: press <strong>Shift+Enter</strong> to start a new line without sending, and <strong>Enter</strong> to send when you're ready. It expands to fit roughly six lines before scrolling internally, in both the main composer and a thread reply.</p>
+    <h3>@Mentions</h3>
+    <p>Type @ followed by a name to mention a teammate. As you type, Silent Whisper suggests matching members so you can pick the right person quickly — this works the same way in a thread reply as it does in the main channel. A mentioned person receives a notification even if they're not currently looking at the channel.</p>
+    <h3>Double-bracket entity references</h3>
+    <p>Typing a name or term inside double brackets — for example <span class="pill">[[Project Meridian]]</span> — creates a reference to a shared, workspace-wide entity. As you type inside the brackets, Silent Whisper suggests existing entities so your team converges on the same names for the same things over time. Chapter 9 covers what you can do once you're on an entity's page: editing its details, tracking relationships to other entities, and generating an AI summary of everything your team knows about it.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>6 / 19</span></div>
+</div>
+
+<!-- ============ 4 SENDING & EDITING MESSAGES (p2) ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">4</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">COMMUNICATING, CONTINUED</div>
+        <div class="section-title">Editing a Sent Message</div>
+      </div>
+    </div>
+    <p>You can edit your own message for <strong>15 minutes</strong> after sending it — look for the Edit action on any message that's yours. Past that window the action is still offered, but saving will tell you plainly that the window has closed rather than silently failing.</p>
+    <p>Every edit is kept, never overwritten in place: click the <strong>(edited)</strong> tag that appears next to an edited message to expand its full revision history, oldest version first. Anyone in the conversation can see it — there's no quiet rewriting of what you said.</p>
+    <div class="box">
+      <div class="label">GOOD TO KNOW</div>
+      <p>Messages still can't be deleted, and no one — not even a workspace owner or system administrator — can edit a message on another person's behalf. Read a message over before sending it; editing is for fixing a typo or an unclear line minutes later, not for erasing something you said.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>7 / 19</span></div>
+</div>
+
+<!-- ============ 5 THREADS/DM/GROUP DM ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">5</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">CONVERSATIONS</div>
+        <div class="section-title">Threads, Direct Messages &amp; Group DMs</div>
+      </div>
+    </div>
+    <h3>Threads</h3>
+    <p>Reply to any message to start a thread, keeping a side discussion attached to its original context instead of scattering it down the main channel. Threads in Silent Whisper are intentionally flat — you can reply to a message, but you can't reply to a reply. This keeps side conversations easy to scan rather than turning into their own nested maze.</p>
+    <h3>Direct Messages</h3>
+    <p>Start a private, one-to-one conversation with any teammate you share a workspace with. Direct messages sit outside any channel and are only ever visible to the two people in them.</p>
+    <h3>Group Direct Messages</h3>
+    <p>For a private conversation with more than one other person, start a group direct message. Group DMs support up to 20 participants and, unlike a one-to-one DM, a new group is created each time rather than reusing an older one — useful when you want a clean, distinct thread of conversation with a particular set of people.</p>
+    <h3>Auto-archiving quiet DMs</h3>
+    <p>A direct message or group DM you haven't touched in a while quietly drops out of your DM list — never deleted, and unaffected on anyone else's side. By default that happens after 90 days without a new message; you can change your own threshold, or turn it off entirely with 0, from Your Account (Chapter 11). A new message brings a dormant conversation right back with no manual restore step.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>8 / 19</span></div>
+</div>
+
+<!-- ============ 6 INLINE TASKS ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">6</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">GETTING THINGS DONE</div>
+        <div class="section-title">Inline Tasks</div>
+      </div>
+    </div>
+    <p>Silent Whisper lets you turn an ordinary message into an action item without leaving the conversation or reaching for a separate tool. Anywhere in a message, write a line like:</p>
+    <div class="box">
+      <div class="label">SYNTAX</div>
+      <p class="code" style="margin-top:4pt;">- [ ] Draft the quarterly summary [owner:: @jordan]</p>
+    </div>
+    <p>This is recognized as a task the moment the message is sent — no AI involved, just a consistent, predictable pattern you can rely on. The checkbox can be ticked off by anyone with access to that conversation, and it updates live everywhere it's shown — in the channel, in the thread, and on the workspace's Task Dashboard.</p>
+    <h3>The Task Dashboard</h3>
+    <p>Every workspace has a Task Dashboard that gathers open and completed items across your conversations, split into two views:</p>
+    <ul>
+      <li><strong>Tasks for Me</strong> — items assigned to you, wherever they were written.</li>
+      <li><strong>Tasks for Everyone Else</strong> — items you've assigned or that belong to teammates, so you can see what's in flight without digging back through channels.</li>
+    </ul>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>9 / 19</span></div>
+</div>
+
+<!-- ============ 7 NOTIFICATIONS & PRESENCE ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">7</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">STAYING AWARE</div>
+        <div class="section-title">Notifications &amp; Presence</div>
+      </div>
+    </div>
+    <h3>Notifications</h3>
+    <p>You're notified when you're mentioned and when you receive an invitation — to a workspace or to a specific channel. A running notification summary keeps count of what you haven't yet seen, and you can mark individual notifications, or all of them, as read.</p>
+    <h3>Presence</h3>
+    <p>Teammates appear as Online, Away, or Offline. This status is derived by the server from your actual connection, not from anything your device reports about itself — so it stays honest even if a device's clock or settings are off.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>10 / 19</span></div>
+</div>
+
+<!-- ============ 8 SEARCH ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">8</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">FINDING THINGS</div>
+        <div class="section-title">Search</div>
+      </div>
+    </div>
+    <p>Silent Whisper's search understands meaning, not just matching words. Rather than requiring the exact phrase someone used, you can search for the idea you remember — for example, searching "who's covering the release" can surface a message that never used any of those exact words, if it's discussing the same thing.</p>
+    <p>Search only ever looks across channels you're actually a member of. Because it works conceptually, results can take a short time to catch up on very recently sent messages — if something you just sent doesn't appear immediately, give it a moment.</p>
+    <div class="box">
+      <div class="label">TIP</div>
+      <p>Search in plain, natural phrases the way you'd describe the topic to a colleague, rather than trying to guess the exact wording of the original message.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>11 / 19</span></div>
+</div>
+
+<!-- ============ 9 ENTITIES & KNOWLEDGE EXPLORER (p1) ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">9</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">A LIGHTWEIGHT KNOWLEDGE BASE</div>
+        <div class="section-title">Entities &amp; the Knowledge Explorer</div>
+      </div>
+    </div>
+    <p>Every <span class="pill">[[double-bracket]]</span> reference points to a shared entity page — a workspace-wide record of a person, project, or term that accumulates context every time someone mentions it. This chapter covers what lives on that page, and how to find what's trending across a workspace.</p>
+    <h3>Editing an entity's details</h3>
+    <p>Any workspace member can open an entity's page and fill in its description, set a status (<strong>Active</strong>, <strong>Deprecated</strong>, or <strong>Archived</strong>), assign an owner from the workspace, and add free-form tags or a reference URL. Aliases — alternate names that resolve to the same entity — are shown on the page but aren't editable from this form.</p>
+    <h3>Relationships</h3>
+    <p>Entities can be connected to each other using a small, fixed vocabulary: <strong>Depends on</strong>, <strong>Owned by</strong>, <strong>Related to</strong>, <strong>Blocks</strong>, and <strong>Part of</strong>. A relationship you add from one entity's page shows up from the other side too.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>12 / 19</span></div>
+</div>
+
+<!-- ============ 9 ENTITIES & KNOWLEDGE EXPLORER (p2) ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">9</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">A LIGHTWEIGHT KNOWLEDGE BASE, CONTINUED</div>
+        <div class="section-title">The Knowledge Explorer</div>
+      </div>
+    </div>
+    <h3>"What we know" (AI-generated)</h3>
+    <p>Click <strong>Generate summary</strong> on an entity's page to have the AI assistant read every reference to it that you personally have access to and produce a short summary, citing how many references it drew from. Click <strong>Regenerate summary</strong> any time to fold in newer context. Only the reader's own accessible channels are ever used, so a summary never surfaces something you couldn't otherwise see.</p>
+    <h3>Trending, and Subject Matter Experts</h3>
+    <p>The compass icon in a workspace's sidebar opens the <strong>Knowledge Explorer</strong>: a Trending list of that workspace's most-referenced entities over the last 30 days. Opening an entity from this list also shows its <strong>Subject Matter Experts</strong> — the people who've referenced it most — and, next to each individual reference, a <strong>View context</strong> action that jumps straight to the message or thread it came from.</p>
+    <div class="box">
+      <div class="label">NOTE</div>
+      <p>Trending, experts, and every reference list are all computed the same privacy-respecting way as search and AI summaries: an entity mentioned only in a channel you can't read never appears for you, not even as an uncredited count.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>13 / 19</span></div>
+</div>
+
+<!-- ============ 10 AI-ASSISTED FEATURES ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">10</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">WORKING SMARTER</div>
+        <div class="section-title">AI-Assisted Features</div>
+      </div>
+    </div>
+    <p>Silent Whisper includes a small set of focused, task-scoped AI features — not an open-ended chatbot. Each one takes real conversation content you already have access to and turns it into something faster to read. All processing happens through infrastructure your organization controls.</p>
+    <table style="margin:14pt 0;">
+      <tbody>
+        <tr>
+          <td style="background:#ece8db;width:50%;vertical-align:top;padding:10pt 12pt;"><strong>Summarize Channel</strong><br>Available from a channel's AI actions menu. Produces a concise summary of recent activity, so you can catch up on a busy channel in seconds rather than scrolling.</td>
+          <td style="background:var(--cream);width:50%;vertical-align:top;padding:10pt 12pt;"><strong>Extract Tasks</strong><br>Run on any thread to pull out a checklist of action items discussed in the conversation — useful after a long planning discussion that wasn't written with inline task syntax.</td>
+        </tr>
+        <tr>
+          <td style="background:#ece8db;vertical-align:top;padding:10pt 12pt;"><strong>Catch Me Up</strong><br>A cross-channel digest, reachable from the sparkle icon beside your active workspace. It organizes what you've missed into Urgent Mentions, Action Items, Unresolved Questions, and Decisions Made.</td>
+          <td style="background:var(--cream);vertical-align:top;padding:10pt 12pt;"><strong>Semantic Search</strong><br>The same conceptual search described in Chapter 8. An entity's "What we know" summary (Chapter 9) draws on the same infrastructure, scoped to that one entity.</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="box">
+      <div class="label">GOOD TO KNOW</div>
+      <p>These features share a limited processing queue. If it's busy, you'll see a "Queued" indicator with your position — this is normal and resolves quickly. If AI features are turned off for your organization, you'll see a clear message rather than a silent failure.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>14 / 19</span></div>
+</div>
+
+<!-- ============ 11 YOUR ACCOUNT ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">11</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">SETTINGS</div>
+        <div class="section-title">Your Account</div>
+      </div>
+    </div>
+    <h3>Changing your password</h3>
+    <p>You can change your own password at any time from account settings, provided you know your current one. Doing so signs every other active session of yours out automatically, while keeping the device you're using signed in — a simple way to shut the door on any session you don't recognize.</p>
+    <h3>Display name</h3>
+    <p>Update how your name appears to others at any time — no approval required.</p>
+    <h3>Appearance</h3>
+    <p>Switch between Light, Dark, and System themes whenever you like.</p>
+    <h3>Direct message auto-archive</h3>
+    <p>On the same panel, set how long an inactive DM or group DM stays in your list before quietly archiving — 90 days by default, or 0 to never archive. See Chapter 5 for what "archived" actually means.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>15 / 19</span></div>
+</div>
+
+<!-- ============ 12 JOINING & LEAVING ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">12</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">MEMBERSHIP</div>
+        <div class="section-title">Joining &amp; Leaving</div>
+      </div>
+    </div>
+    <h3>Accepting invitations</h3>
+    <p>Invitation links let you join a workspace directly. In-app invitations arrive as a notification you can accept or decline at your own pace.</p>
+    <h3>Leaving a channel, workspace, or organization</h3>
+    <p>You can leave any channel, workspace, or organization yourself at any time — there's no need to ask an administrator to remove you. A couple of sensible guardrails apply:</p>
+    <ul>
+      <li>If you own a workspace, you'll need to transfer ownership to someone else before you can leave it.</li>
+      <li>Leaving a channel or workspace only removes you from that layer — leaving a channel doesn't remove you from the workspace it belongs to, and leaving a workspace doesn't remove you from its parent organization.</li>
+    </ul>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>16 / 19</span></div>
+</div>
+
+<!-- ============ 13 GOOD PRACTICES & LIMITATIONS ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">13</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">WORKING WELL</div>
+        <div class="section-title">Good Practices &amp; Current Limitations</div>
+      </div>
+    </div>
+    <p>Silent Whisper is intentionally spare in places where many chat tools have become cluttered. Knowing what isn't there helps you work with the grain of the tool rather than against it:</p>
+    <ul>
+      <li><strong>Edits are visible, never silent.</strong> You can fix your own message within 15 minutes of sending it, but the original is kept in a permanent, visible history — there's no way to quietly rewrite what you said, and messages still can't be deleted.</li>
+      <li><strong>No emoji reactions, file attachments, or read receipts (yet).</strong> Say what you mean in words, and assume a message has been seen once someone has responded to it.</li>
+      <li><strong>No message pinning (yet).</strong> If something needs to stay easy to find, consider making it (or linking it from) an entity's description instead.</li>
+      <li><strong>Threads are one level deep.</strong> If a side discussion needs its own side discussion, that's usually a sign it deserves its own message or channel topic.</li>
+    </ul>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>17 / 19</span></div>
+</div>
+
+<!-- ============ 14 QUICK REFERENCE & GLOSSARY ============ -->
+<div class="page">
+  <div class="card content-card">
+    <div class="section-head">
+      <div class="section-num">14</div>
+      <div class="section-titles">
+        <div class="section-eyebrow">REFERENCE</div>
+        <div class="section-title">Quick Reference &amp; Glossary</div>
+      </div>
+    </div>
+    <p style="margin-bottom:6pt;"><strong>Organization</strong> — The top-level boundary containing one or more workspaces.</p>
+    <p style="margin-bottom:6pt;"><strong>Workspace</strong> — A team or project space within an organization, containing channels and members.</p>
+    <p style="margin-bottom:6pt;"><strong>Channel</strong> — A topic-based room within a workspace; public (open to all workspace members) or private (invite-only and invisible to non-members).</p>
+    <p style="margin-bottom:6pt;"><strong>Thread</strong> — A flat set of replies attached to a single message.</p>
+    <p style="margin-bottom:6pt;"><strong>Direct Message (DM)</strong> — A private one-to-one conversation outside any channel; auto-archives from your list after 90 days idle by default.</p>
+    <p style="margin-bottom:6pt;"><strong>Group Direct Message</strong> — A private conversation among several specific people (up to 20), outside any channel.</p>
+    <p style="margin-bottom:6pt;"><strong>Entity reference [[Like This]]</strong> — A shared, workspace-wide tag linking every mention of a person, project, or term across the channels you can see, with its own editable page and AI summary.</p>
+    <p style="margin-bottom:6pt;"><strong>Entity relationship</strong> — A typed connection between two entities: Depends on, Owned by, Related to, Blocks, or Part of.</p>
+    <p style="margin-bottom:6pt;"><strong>Knowledge Explorer</strong> — The per-workspace panel (compass icon) showing trending entities and their Subject Matter Experts.</p>
+    <p style="margin-bottom:6pt;"><strong>Inline task - [ ] ... [owner:: @name]</strong> — A checkbox action item embedded directly in a message, tracked on the workspace Task Dashboard.</p>
+    <p style="margin-bottom:6pt;"><strong>(edited) tag</strong> — Appears on a message edited within its 15-minute window; click it to see the full revision history.</p>
+    <p style="margin-bottom:6pt;"><strong>Presence</strong> — A teammate's live status: Online, Away, or Offline.</p>
+    <p style="margin-bottom:0;"><strong>Semantic search</strong> — Search that matches by meaning rather than exact keywords.</p>
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>18 / 19</span></div>
+</div>
+
+<!-- ============ BACK COVER ============ -->
+<div class="page">
+  <div class="card cover-card back">
+    <img class="cover-logo" src="../SW_Logo_transparent.png" alt="">
+    <div class="cover-title">SILENT WHISPER</div>
+    <hr class="cover-rule">
+  </div>
+  <div class="footer"><span>Silent Whisper — User Guide</span><span>19 / 19</span></div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Silent Whisper — Quick-Start Cheat Sheet</title>
+<link rel="stylesheet" href="design.css">
+</head>
+<body>
+
+<div class="page">
+  <div class="cs-header">
+    <div class="brand">
+      <img class="brand-logo" src="../SW_Logo_transparent.png" alt="">
+      <div class="brand-text">
+        <div class="eyebrow">SILENT LATTICE</div>
+        <div class="title">Silent Whisper</div>
+      </div>
+    </div>
+    <div class="doc-label">Quick-Start Cheat Sheet</div>
+  </div>
+
+  <div class="cs-body">
+    <div class="cs-col">
+      <h3>The Structure</h3>
+      <p><span class="cs-tag">Org</span> contains <span class="cs-tag">Workspaces</span> contains <span class="cs-tag">Channels</span></p>
+      <ul>
+        <li><strong>Public channel</strong> — join yourself, anytime.</li>
+        <li><strong>Private channel</strong> — a member must add you; invisible to everyone else.</li>
+        <li><strong>DM</strong> — private, 1-to-1. <strong>Group DM</strong> — up to 20 people, private.</li>
+      </ul>
+
+      <h3 class="repeat">Messaging</h3>
+      <ul>
+        <li><span class="cs-tag">@name</span> — mention a teammate (they're notified). Works in threads too.</li>
+        <li><span class="cs-tag">[[Term]]</span> — link to a shared entity; click to see every mention across your channels.</li>
+        <li><strong>Bold</strong>, <em>italic</em>, <strong><em>bold-italic</em></strong>, <mark>highlight</mark>, and links are recognized automatically as you type.</li>
+        <li>Reply to a message to start a <strong>thread</strong> (one level deep — no replies-to-replies).</li>
+        <li><strong>Enter</strong> sends; <strong>Shift+Enter</strong> starts a new line in the same message.</li>
+      </ul>
+      <div class="cs-dashed">
+        You can edit your own message for <strong>15 minutes</strong> after sending. Edits are marked
+        <strong>(edited)</strong>, with the full revision history visible to anyone in the conversation — nothing quietly changes.
+      </div>
+
+      <h3 class="repeat">Inline Tasks</h3>
+      <p>Type anywhere in a message:</p>
+      <p class="pill">- [ ] Do the thing [owner:: @name]</p>
+      <ul>
+        <li>Becomes a live, tickable checkbox — no AI, just recognized instantly.</li>
+        <li>Tracked on the workspace <strong>Task Dashboard</strong>: "Tasks for Me" / "Tasks for Everyone Else."</li>
+      </ul>
+    </div>
+
+    <div class="cs-col">
+      <div class="cs-dark-box">
+        <div style="font-family:var(--serif);font-weight:700;font-size:10.5pt;color:#fff;border-bottom:1pt solid var(--gold);padding-bottom:4pt;margin-bottom:6pt;">AI Actions</div>
+        <p><strong>Summarize Channel</strong> — catch up on recent activity fast.</p>
+        <p><strong>Extract Tasks</strong> — pull a checklist from any thread.</p>
+        <p><strong>Catch Me Up</strong> — cross-channel digest: mentions, action items, open questions, decisions.</p>
+        <p><strong>Semantic Search</strong> — search by meaning, not exact words.</p>
+        <p style="margin-bottom:0;">Busy? You'll see <span class="cs-tag">Queued (position N)</span> — normal, resolves shortly.</p>
+      </div>
+
+      <h3 class="repeat">Presence</h3>
+      <p>Online · Away · Offline — server-verified, not device-reported.</p>
+
+      <h3 class="repeat">Notifications</h3>
+      <p>You're notified on @mentions and invitations. Mark individually or all-as-read from the summary.</p>
+
+      <h3 class="repeat">Your Account</h3>
+      <ul>
+        <li>Change password anytime (needs current one) — signs out every <em>other</em> session, keeps this one.</li>
+        <li>Update display name anytime, no approval needed.</li>
+        <li>Appearance: Light / Dark / System.</li>
+        <li>DMs auto-archive after 90 days idle by default (configurable, 0 = never) — never deleted; a new message brings one right back.</li>
+        <li>No self-service signup or email password reset — ask an admin.</li>
+      </ul>
+
+      <h3 class="repeat">Joining &amp; Leaving</h3>
+      <ul>
+        <li>Discoverable workspaces: browse and self-join.</li>
+        <li>Private workspaces/channels: an existing member adds you.</li>
+        <li>Leave any channel, workspace, or org yourself, anytime.</li>
+        <li>Own a workspace? Transfer ownership before you can leave it.</li>
+      </ul>
+    </div>
+
+    <div class="cs-col">
+      <h3>Roles at a Glance</h3>
+      <table class="cs-table">
+        <thead><tr><th>ROLE</th><th>SCOPE</th></tr></thead>
+        <tbody>
+          <tr><td>System Admin</td><td>Whole deployment</td></tr>
+          <tr><td>Org Admin</td><td>One organization</td></tr>
+          <tr><td>Workspace Owner</td><td>One workspace (unique)</td></tr>
+          <tr><td>Workspace Manager</td><td>One workspace</td></tr>
+          <tr><td>Member</td><td>Ordinary participant</td></tr>
+        </tbody>
+      </table>
+      <p class="cs-note">Administering a workspace never grants access to its private message content — see the Administrator Guide, Ch. 10.</p>
+
+      <h3 class="repeat">What's Not Here (Yet)</h3>
+      <ul>
+        <li><strong>No</strong> emoji reactions</li>
+        <li><strong>No</strong> file/image attachments</li>
+        <li><strong>No</strong> read receipts</li>
+        <li><strong>No</strong> message pinning</li>
+      </ul>
+
+      <h3 class="repeat">Glossary</h3>
+      <ul>
+        <li><strong>Entity</strong> — a shared <span class="cs-tag">[[tag]]</span> for a person, project, or term. Editable metadata, relationships, and an AI "What we know" summary live on its detail page.</li>
+        <li><strong>Thread</strong> — flat replies on one message.</li>
+        <li><strong>Semantic search</strong> — meaning-based, not keyword.</li>
+        <li><strong>Knowledge Explorer</strong> — per-workspace panel showing trending entities and their subject-matter experts.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="cs-footer">
+    <div class="brand">SILENT WHISPER · v1.11.0</div>
+    <div>Full detail in the User Guide &amp; Administrator Guide</div>
+  </div>
+</div>
+
+</body>
+</html>

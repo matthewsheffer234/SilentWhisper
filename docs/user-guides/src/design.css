@@ -1,0 +1,301 @@
+/* Silent Whisper documentation — shared design system.
+   Page geometry mirrors the original hand-built PDFs: US Letter (612x792pt),
+   a 54pt side margin, 57.75pt top / 50.25pt bottom margin around a content
+   "card", with a thin footer rule sitting in the bottom margin itself. */
+
+:root {
+  --cream: #f4f1e8;
+  --green-front: #004225;
+  --green-back: #0f2b22;
+  --gold: #c8a46e;
+  --stripe: #d9d6c8;
+  --eyebrow: #6f8a79;
+  --ink: #16251f;
+  --ink-bold: #0e2a21;
+  --footer-grey: #2a362e;
+  --cream-text: #d9d5c7;
+
+  --serif: Georgia, "Liberation Serif", serif;
+  --sans: "Liberation Sans", Arial, Helvetica, sans-serif;
+  --mono: "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: #ffffff;
+}
+
+.page {
+  position: relative;
+  width: 612pt;
+  height: 792pt;
+  background: #ffffff;
+  page-break-after: always;
+  overflow: hidden;
+}
+.page:last-child { page-break-after: auto; }
+
+.card {
+  position: absolute;
+  left: 54pt;
+  right: 54pt;
+  top: 57.75pt;
+  bottom: 50.25pt;
+}
+
+/* ---- footer, shared by every page ---- */
+.footer {
+  position: absolute;
+  left: 54pt;
+  right: 54pt;
+  bottom: 15.3pt;
+  border-top: 0.75pt solid var(--stripe);
+  padding-top: 5.5pt;
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--sans);
+  font-size: 7.3pt;
+  color: var(--footer-grey);
+}
+
+/* ==================== COVER PAGES ==================== */
+.cover-card {
+  padding: 60pt 56pt;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+}
+.cover-card.front { background: var(--green-front); }
+.cover-card.back {
+  background: var(--green-back);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.cover-eyebrow {
+  font-size: 10.5pt;
+  letter-spacing: 4pt;
+  color: var(--gold);
+  margin: 0 0 44pt 0;
+}
+.cover-logo { width: 137pt; height: 137pt; display: block; }
+.cover-card.back .cover-logo { width: 97pt; height: 97pt; margin-bottom: 18pt; }
+.cover-title {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 40pt;
+  margin: 32pt 0 20pt 0;
+}
+.cover-card.back .cover-title { font-size: 15pt; letter-spacing: 3pt; margin: 0; }
+.cover-rule {
+  width: 48pt;
+  height: 1.5pt;
+  background: var(--gold);
+  border: none;
+  margin: 0 0 0 0;
+}
+.cover-card.back .cover-rule { margin-top: 14pt; }
+.cover-meta {
+  margin-top: auto;
+  font-size: 9pt;
+}
+.cover-meta .edition { font-weight: 700; }
+.cover-meta .sep { color: var(--gold); margin: 0 6pt; }
+.cover-meta .version { color: #b9d2c3; letter-spacing: 0.5pt; }
+
+/* ==================== CONTENT PAGES ==================== */
+.content-card {
+  background: var(--cream);
+  padding: 30pt 34pt 24pt 34pt;
+}
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14pt;
+  border-bottom: 1.5pt solid var(--green-front);
+  padding-bottom: 12pt;
+  margin-bottom: 20pt;
+}
+.section-num {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 28pt;
+  color: var(--gold);
+  line-height: 1;
+}
+.section-titles { display: flex; flex-direction: column; gap: 3pt; }
+.section-eyebrow {
+  font-size: 8.5pt;
+  letter-spacing: 2.2pt;
+  color: var(--eyebrow);
+}
+.section-title {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 20pt;
+  color: var(--green-front);
+}
+
+.content-card p {
+  font-size: 10.4pt;
+  line-height: 1.6;
+  margin: 0 0 12pt 0;
+}
+.content-card h3 {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 12.5pt;
+  color: var(--green-front);
+  border-left: 3pt solid var(--gold);
+  padding-left: 9pt;
+  margin: 18pt 0 8pt 0;
+}
+.content-card ul, .content-card ol {
+  margin: 0 0 12pt 0;
+  padding-left: 16pt;
+  font-size: 10.4pt;
+  line-height: 1.55;
+}
+.content-card li { margin-bottom: 6pt; }
+.content-card li::marker { color: var(--ink); }
+.content-card strong { color: var(--ink-bold); }
+
+.box {
+  border-radius: 1pt;
+  padding: 14pt 16pt;
+  margin: 14pt 0;
+  border-left: 3pt solid var(--gold);
+  background: var(--green-back);
+  color: var(--cream-text);
+}
+.box .label {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 8pt;
+  letter-spacing: 2pt;
+  color: var(--gold);
+  margin-bottom: 6pt;
+}
+.box p { font-size: 10pt; color: var(--cream-text); margin: 0; }
+.box code, .code-chip {
+  font-family: var(--mono);
+  font-size: 9.5pt;
+  background: var(--stripe);
+  color: var(--ink-bold);
+  padding: 3pt 7pt;
+  border-radius: 2pt;
+  display: inline-block;
+}
+
+table { border-collapse: collapse; width: 100%; font-size: 9.3pt; }
+thead th {
+  background: var(--green-front);
+  color: #ffffff;
+  text-align: left;
+  padding: 7pt 10pt;
+  font-size: 8.6pt;
+  letter-spacing: 0.3pt;
+}
+tbody td { padding: 8pt 10pt; color: var(--ink); }
+tbody tr:nth-child(odd) { background: #ece8db; }
+tbody tr:nth-child(even) { background: var(--cream); }
+.table-footnote { font-size: 8pt; color: var(--eyebrow); margin-top: 8pt; }
+
+.pill {
+  display: inline-block;
+  background: var(--stripe);
+  color: var(--ink-bold);
+  font-family: var(--mono);
+  font-size: 9pt;
+  padding: 2pt 6pt;
+  border-radius: 2pt;
+}
+
+/* ==================== CHEAT SHEET ==================== */
+.cs-header {
+  background: var(--green-front);
+  color: #ffffff;
+  height: 71.25pt;
+  padding: 0 28.5pt;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cs-header .brand { display: flex; align-items: center; gap: 18pt; }
+.cs-header .brand-logo { width: 51pt; height: 51pt; }
+.cs-header .brand-text .eyebrow { font-size: 7.3pt; letter-spacing: 2.5pt; color: var(--gold); }
+.cs-header .brand-text .title { font-family: var(--serif); font-weight: 700; font-size: 18pt; }
+.cs-header .doc-label { font-family: var(--serif); font-style: italic; font-size: 10pt; }
+
+.cs-body {
+  position: absolute;
+  top: 71.25pt;
+  left: 0; right: 0; bottom: 27pt;
+  background: var(--cream);
+  padding: 18pt 28.5pt 10pt 28.5pt;
+  display: flex;
+  gap: 18pt;
+}
+.cs-col { flex: 1; min-width: 0; }
+.cs-col h3 {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 11pt;
+  color: var(--green-front);
+  border-bottom: 1pt solid var(--gold);
+  padding-bottom: 4pt;
+  margin: 0 0 8pt 0;
+}
+.cs-col h3.repeat { margin-top: 11pt; }
+.cs-col p, .cs-col ul { font-size: 8pt; line-height: 1.36; margin: 0 0 7pt 0; }
+.cs-col ul { padding-left: 12pt; }
+.cs-col li { margin-bottom: 4pt; }
+.cs-tag {
+  background: var(--stripe);
+  color: var(--ink-bold);
+  font-family: var(--mono);
+  font-size: 7.6pt;
+  padding: 1pt 5pt;
+  border-radius: 2pt;
+}
+.cs-dark-box {
+  background: var(--green-back);
+  color: var(--cream-text);
+  border-left: 2.25pt solid var(--gold);
+  padding: 10pt 12pt;
+  margin: 10pt 0;
+}
+.cs-dark-box p { color: var(--cream-text); font-size: 8.3pt; margin:0 0 6pt 0;}
+.cs-dashed {
+  border: 1pt dashed var(--gold);
+  background: #ece8db;
+  padding: 8pt 10pt;
+  margin: 8pt 0;
+  font-size: 8.3pt;
+}
+.cs-table { width:100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 8pt;}
+.cs-table thead th { background: var(--green-front); color:#fff; padding: 4pt 6pt; font-size: 7.6pt; }
+.cs-table tbody td { padding: 5pt 6pt; }
+.cs-table tbody tr:nth-child(odd) { background:#ece8db; }
+.cs-table tbody tr:nth-child(even) { background: var(--cream); }
+.cs-note { font-size: 8pt; color: var(--eyebrow); }
+
+.cs-footer {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 27pt;
+  background: #ffffff;
+  border-top: 1.5pt solid var(--green-front);
+  padding: 0 28.5pt;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 8pt;
+}
+.cs-footer .brand { font-family: var(--serif); font-weight: 700; color: var(--eyebrow); letter-spacing: 1pt; }
