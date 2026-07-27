@@ -20,11 +20,18 @@
 # re-running database/migrations/0007_grants.js — verify this rather than
 # assuming it (see RUNBOOK.md's Enclave section / docs/plans/active/SHIPMENT_PLAN.md Section
 # 2.7 for the expected per-table grant matrix to check against).
+#
+# Respects ENV_FILE (default .env), same as scripts/backup-db.sh's own fix
+# (2026-07-27 enclave upgrade rehearsal) and scripts/airgap-upgrade.sh —
+# without this, a rehearsal/throwaway ENV_FILE would restore into whatever
+# Postgres the plain `.env`/default project resolves to instead of the
+# intended one.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.enclave.yml)
+ENV_FILE="${ENV_FILE:-.env}"
+COMPOSE=(docker compose --env-file "$ENV_FILE" -f docker-compose.yml -f docker-compose.enclave.yml)
 
 log()  { echo "==> $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }

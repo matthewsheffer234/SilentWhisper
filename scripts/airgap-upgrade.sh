@@ -197,11 +197,24 @@ phase_preflight() {
   [ -f images/CHECKSUMS.sha256 ] || fail "images/CHECKSUMS.sha256 not found"
   pass "offline image tars for ${SILENTWHISPER_VERSION} + checksum manifest present"
 
-  if [ -n "${LLM_BASE_URL:-}" ]; then
+  # Gated on LLM_PROVIDER=vllm specifically, not just "LLM_BASE_URL is set" —
+  # found during a full-range (v1.0.0->v1.12.0) upgrade rehearsal
+  # (2026-07-27): LLM_PROVIDER=disabled is a real, code-supported value
+  # (backend/src/llm/settingsService.js's own LLM_PROVIDERS list; the
+  # original v1.0.0->v1.1.0 rehearsal used it deliberately, per this
+  # script's own precedent, "to exercise upgrade mechanics and data
+  # preservation, not AI functionality"), and a real enclave operator who
+  # has deliberately disabled AI still sets LLM_BASE_URL to a placeholder
+  # (or leaves an old value in place) rather than blanking it — this check
+  # was failing preflight for that legitimate case, not just a
+  # never-actually-happens misconfiguration.
+  if [ "${LLM_PROVIDER:-vllm}" = "vllm" ] && [ -n "${LLM_BASE_URL:-}" ]; then
     log "Checking vLLM host reachability: ${LLM_BASE_URL} (lightweight — full round-trip/streaming checks are airgap-install.sh's job, not a routine upgrade's)"
     curl -sf --max-time 5 "${LLM_BASE_URL}/v1/models" -H "Authorization: Bearer ${LLM_API_KEY:-}" >/dev/null \
       || fail "vLLM host ${LLM_BASE_URL} is not reachable on /v1/models — this upgrade doesn't change vLLM configuration, so if it was working before this upgrade, confirm nothing else changed"
     pass "vLLM host reachable"
+  elif [ "${LLM_PROVIDER:-vllm}" != "vllm" ]; then
+    log "LLM_PROVIDER=${LLM_PROVIDER} (not vllm) — skipping vLLM reachability check"
   fi
 }
 
@@ -272,9 +285,18 @@ phase_grants() {
   while IFS=: read -r table privs; do
     [ -z "$table" ] && continue
     case "$table" in
-      audit_logs)
+      # message_edits (migration 0027, v1.6.0) added a second deliberately
+      # append-only table — same GRANT SELECT, INSERT shape as audit_logs,
+      # for the same reason (message_edits.js's own comment: "deliberately
+      # gets no UPDATE or DELETE grant"). Missing here until a full-range
+      # upgrade rehearsal (2026-07-27) reached a v1.6.0+ target for the
+      # first time and found this script would hard-fail Phase E against
+      # every one of those releases, even though the grant itself was
+      # always correct — the check just never learned about the second
+      # append-only table.
+      audit_logs|message_edits)
         [ "$privs" = "INSERT,SELECT" ] \
-          || fail "audit_logs privileges are '$privs', expected 'INSERT,SELECT' only — append-only guarantee is broken"
+          || fail "$table privileges are '$privs', expected 'INSERT,SELECT' only — append-only guarantee is broken"
         ;;
       organizations|users|workspaces|channels|messages)
         [ "$privs" = "INSERT,SELECT,UPDATE" ] \

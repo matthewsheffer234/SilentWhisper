@@ -16,11 +16,28 @@
 #
 # Requires the postgres service already up (docker compose up -d postgres).
 # Read-only — never touches the live database's data, only reads it.
+#
+# Respects ENV_FILE (default .env), same as scripts/airgap-upgrade.sh and
+# scripts/airgap-install.sh — found missing during a full-range enclave
+# upgrade rehearsal (2026-07-27): scripts/airgap-upgrade.sh's own
+# phase_backup calls this script with no arguments, and without an
+# --env-file flag here, `docker compose ps`/`exec` fall back to whatever
+# plain `.env` happens to be in this directory (and its
+# directory-name-derived default project) rather than the caller's actual
+# ENV_FILE/COMPOSE_PROJECT_NAME — on a host that also runs a real
+# deployment (this repo's own dev/staging host doubles as
+# whisper.silentlattice.dev's real production, per PROJECT_PLAN.md Section
+# 11's "air-gapped enclave shipment" entry), that means a rehearsal backup
+# silently targets the *real* database instead of the throwaway one. Not
+# destructive on its own (this script is read-only), but exactly the kind
+# of silent-wrong-target risk the upgrade script's own BACKEND_HOST_PORT
+# fix (CHANGELOG.md v1.1.1) was written to eliminate elsewhere.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.enclave.yml)
+ENV_FILE="${ENV_FILE:-.env}"
+COMPOSE=(docker compose --env-file "$ENV_FILE" -f docker-compose.yml -f docker-compose.enclave.yml)
 
 log()  { echo "==> $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }

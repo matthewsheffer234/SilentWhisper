@@ -16,6 +16,20 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.12.1] — 2026-07-27
+
+**Migrations**: none. **New env vars**: none.
+
+Three real bugs in `scripts/airgap-upgrade.sh` (and its sibling `scripts/backup-db.sh`/`scripts/restore-db.sh`) found by rehearsing a full-range enclave upgrade end-to-end — `v1.0.0` straight to `v1.12.0`, not just the single-hop rehearsal `v1.1.1` did — before any real enclave has to make that exact jump:
+
+- `backup-db.sh`/`restore-db.sh` never respected `ENV_FILE`, so `airgap-upgrade.sh`'s mandatory pre-upgrade backup silently targeted the *real* deployment's database instead of a rehearsal one on a host running more than one install — confirmed directly, not assumed, before fixing. Both now resolve `ENV_FILE="${ENV_FILE:-.env}"` and pass `--env-file`, matching `airgap-upgrade.sh`'s own existing pattern.
+- The vLLM-reachability preflight check ran whenever `LLM_BASE_URL` was merely set, regardless of `LLM_PROVIDER` — failing preflight for the legitimate, code-supported `LLM_PROVIDER=disabled` case. Now gated on `LLM_PROVIDER=vllm` specifically.
+- `phase_grants`'s per-table matrix only knew about `audit_logs`'s deliberately-restricted (no `UPDATE`/`DELETE`) grant shape — `message_edits` (migration `0027`, `v1.6.0`) uses the identical shape for the identical reason, but the check never learned about it, so upgrading past `v1.6.0` always hard-failed Phase E against a grant that was always correct. Fixed by adding it to the same case.
+
+See `PROJECT_PLAN.md` Section 11, "Rehearsing a full-range enclave upgrade, v1.0.0 straight to v1.12.0" (2026-07-27), for the full rehearsal — including proof that message editing, DM auto-archive, entity trending, and case-insensitive login all work correctly against data seeded under `v1.0.0`, several releases before each feature existed.
+
+Full diff: `git diff v1.12.0..v1.12.1`.
+
 ## [1.12.0] — 2026-07-27
 
 **Migrations**: none. **New env vars**: none.
