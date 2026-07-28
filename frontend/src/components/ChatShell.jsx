@@ -36,8 +36,20 @@ import KnowledgeExplorerPanel from './KnowledgeExplorerPanel.jsx';
 import CreateWorkspaceSheet from './CreateWorkspaceSheet.jsx';
 import CreateChannelSheet from './CreateChannelSheet.jsx';
 import NewMessageSheet from './NewMessageSheet.jsx';
+import Splitter from './Splitter.jsx';
 import { directMessageLabel } from '../directMessages.js';
 import mentionIcon from '../assets/mention-icon.svg';
+import {
+  resolveSidebarWidth,
+  WORKSPACE_SIDEBAR_WIDTH_KEY,
+  WORKSPACE_SIDEBAR_DEFAULT_WIDTH,
+  WORKSPACE_SIDEBAR_MIN_WIDTH,
+  WORKSPACE_SIDEBAR_MAX_WIDTH,
+  THREAD_SIDEBAR_WIDTH_KEY,
+  THREAD_SIDEBAR_DEFAULT_WIDTH,
+  THREAD_SIDEBAR_MIN_WIDTH,
+  THREAD_SIDEBAR_MAX_WIDTH,
+} from '../sidebarResize.js';
 
 const styles = {
   shell: { display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' },
@@ -118,6 +130,36 @@ function ChatShellInner() {
   const [taskOverrides, setTaskOverrides] = useState({});
   const [threadRoot, setThreadRoot] = useState(null);
   const [threadReplies, setThreadReplies] = useState([]);
+
+  // FEATURE_REQUEST.md's "resizable and collapsible sidebars" entry.
+  // Initialized once from whatever was last persisted (resolveSidebarWidth
+  // clamps/falls back — never trusts a stored value verbatim); persisted
+  // back on every change via the effects below, same
+  // read-raw-value/write-raw-value split ThemeContext.jsx's own
+  // resolveTheme/applyTheme already uses for this app's other localStorage
+  // preference.
+  const [workspaceSidebarWidth, setWorkspaceSidebarWidth] = useState(() =>
+    resolveSidebarWidth(localStorage.getItem(WORKSPACE_SIDEBAR_WIDTH_KEY), {
+      min: WORKSPACE_SIDEBAR_MIN_WIDTH,
+      max: WORKSPACE_SIDEBAR_MAX_WIDTH,
+      fallback: WORKSPACE_SIDEBAR_DEFAULT_WIDTH,
+    }),
+  );
+  const [threadSidebarWidth, setThreadSidebarWidth] = useState(() =>
+    resolveSidebarWidth(localStorage.getItem(THREAD_SIDEBAR_WIDTH_KEY), {
+      min: THREAD_SIDEBAR_MIN_WIDTH,
+      max: THREAD_SIDEBAR_MAX_WIDTH,
+      fallback: THREAD_SIDEBAR_DEFAULT_WIDTH,
+    }),
+  );
+
+  useEffect(() => {
+    localStorage.setItem(WORKSPACE_SIDEBAR_WIDTH_KEY, String(workspaceSidebarWidth));
+  }, [workspaceSidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(THREAD_SIDEBAR_WIDTH_KEY, String(threadSidebarWidth));
+  }, [threadSidebarWidth]);
   // Resolved at the moment a thread is opened (see openThread below), not
   // re-derived from whatever's currently selected — a thread can be opened
   // for a channel other than the one presently selected (search-result and
@@ -1026,6 +1068,7 @@ function ChatShellInner() {
   return (
     <div style={styles.shell}>
       <WorkspaceSidebar
+        width={workspaceSidebarWidth}
         user={user}
         workspaces={workspaces}
         selectedWorkspaceId={selectedWorkspaceId}
@@ -1057,6 +1100,13 @@ function ChatShellInner() {
         directMessages={directMessages}
         onOpenNewMessage={() => setNewMessageOpen(true)}
         onLeaveOrganization={handleLeaveOrganization}
+      />
+      <Splitter
+        ariaLabel="Resize workspace sidebar"
+        value={workspaceSidebarWidth}
+        min={WORKSPACE_SIDEBAR_MIN_WIDTH}
+        max={WORKSPACE_SIDEBAR_MAX_WIDTH}
+        onChange={setWorkspaceSidebarWidth}
       />
       {/* PROJECT_PLAN.md Section 7 (Apple HIG Alignment) / Section 8 Phase 5
           accessibility pass: index.html's static skip link (present on
@@ -1113,7 +1163,18 @@ function ChatShellInner() {
           onOpenEntity={selectedDirectMessage ? undefined : handleOpenEntity}
         />
       )}
+      {threadRoot && (
+        <Splitter
+          ariaLabel="Resize thread panel"
+          value={threadSidebarWidth}
+          min={THREAD_SIDEBAR_MIN_WIDTH}
+          max={THREAD_SIDEBAR_MAX_WIDTH}
+          invert
+          onChange={setThreadSidebarWidth}
+        />
+      )}
       <ThreadSidebar
+        width={threadSidebarWidth}
         channelId={selectedChannelId}
         rootMessage={threadRoot}
         replies={threadReplies}

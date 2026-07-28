@@ -21,9 +21,16 @@ const COMPOSER_MIN_HEIGHT = 40;
 const COMPOSER_MAX_HEIGHT = 150;
 
 const styles = {
+  // `width` is overridden per-instance by the `width` prop below (default
+  // here only covers the rare direct-render case, e.g. this file's own
+  // tests, that don't pass one) — FEATURE_REQUEST.md's "resizable and
+  // collapsible sidebars" entry. `minWidth: 0` (not `width`'s own value)
+  // stops this flex child from refusing to shrink below its intrinsic
+  // content width when a drag briefly puts it near the resize floor.
   sidebar: {
     width: 320,
-    minWidth: 320,
+    minWidth: 0,
+    flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
     borderLeft: '1px solid var(--border)',
@@ -211,6 +218,7 @@ const styles = {
 // Finding 7, docs/reviews/security-performance-review-2026-07-20.md:
 // React.memo, no `presence` prop (see UserPresenceBadge above).
 function ThreadSidebar({
+  width = 320,
   channelId,
   rootMessage,
   replies,
@@ -399,7 +407,7 @@ function ThreadSidebar({
   ];
 
   return (
-    <aside style={styles.sidebar}>
+    <aside style={{ ...styles.sidebar, width }}>
       <div style={styles.header}>
         Thread
         <div style={styles.headerActions}>

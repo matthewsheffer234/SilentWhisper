@@ -343,25 +343,7 @@ Extending this codebase's existing test conventions (`backend/tests/*.test.js`, 
 - **Structured AI output.** Every existing AI route in this codebase streams free-text to the client with no server-side parsing or persistence. Phase 4 needs individually addressable, storable suggestion items. The concrete prompt/parsing/validation design for that (JSON-mode prompting? a delimiter-based structured format compatible with both Ollama and vLLM? how truncation/injection-resistance rules apply to a structured response instead of free text?) is real, non-trivial design work this entry has flagged but not solved.
 - **Manager scope for channel health.** `WORKSPACE_ROLE_PERMISSIONS` governs workspace-level structural permissions today; this entry assumes a manager sees channel health for any channel their existing role already lets them administer, with no new permission. If the product wants a narrower or broader manager-visibility rule for health specifically, that's a permissions-model decision beyond this entry's scope to make unilaterally.
 
-### 3. Resizable and collapsible workspace/thread sidebars, with persisted widths
-
-**Status**: Proposed
-**Utility**: The workspace sidebar (260px) and thread sidebar (320px) are hardcoded and non-resizable today — verified still true in `WorkspaceSidebar.jsx:107` and `ThreadSidebar.jsx:25`. On a narrow window, a small laptop screen, or side-by-side with another app, that fixed width either wastes space or crowds the message pane, and a user who wants more room for either the channel list or a long thread has no way to get it.
-**Origin**: `docs/reviews/2026-07-27-ui-ux-hig-review.md`, Issue 1 and priority checklist item 1. Reframed here from that review's "macOS window ergonomics" framing (Stage Manager, title-bar safe regions) — this app is a browser-hosted Vite/React frontend with no Electron/Tauri shell (the review's own executive summary concedes this), so those specific macOS-native concerns don't apply; the underlying "sidebars should be adjustable" finding does, for any desktop browser window regardless of OS.
-
-Design:
-
-- Add a draggable splitter between `WorkspaceSidebar` and the main content, and between the main content and `ThreadSidebar`, using `pointerdown`/`pointermove`/`pointerup` (not a drag library — this app has no drag dependency today and the interaction is one axis, one element each). Clamp to `220–420px` for the workspace sidebar and `280–520px` for the thread sidebar (the review's own suggested bounds, which are reasonable defaults).
-- Splitter is keyboard-accessible: `role="separator" aria-orientation="vertical" tabIndex={0}`, Left/Right arrow keys adjust by a fixed step (e.g. 16px), matching the accessibility bar `Menu.jsx` already sets for this app's other custom controls.
-- Persist both widths in `localStorage` (`sw:workspaceSidebarWidth`, `sw:threadSidebarWidth`) — this is a client-only layout preference, not user data or a security-relevant token, so `localStorage` is the correct place for it (the same reasoning `ThemeContext.jsx`'s `THEME_STORAGE_KEY` already uses); it is not in tension with this codebase's "never `localStorage` for tokens" rule, which is about auth material specifically.
-- Collapse: split into two phases, since they're genuinely different-sized problems.
-  - **Thread sidebar** already has a working close affordance (`ThreadSidebar.jsx:417`, wired to `handleCloseThread`) — "collapsible" here is already solved; this entry only adds resize.
-  - **Workspace sidebar** has no equivalent — collapsing it to an icon-only rail needs a second, narrower render mode for the channel list, not just a CSS width change, which is real, separate work. Phase 1 (this entry) ships resize only; a follow-up entry can add the icon-rail collapse mode if it's still wanted once resize alone is in use.
-- No backend, authorization, or audit surface — pure client-side layout state.
-
-**Tests**: a frontend unit test for the resize-clamp math and localStorage read/write round-trip; an e2e test dragging each splitter and confirming the width survives a reload.
-
-### 4. A minimal Cmd/Ctrl keyboard shortcut layer: search, new message, close thread
+### 3. A minimal Cmd/Ctrl keyboard shortcut layer: search, new message, close thread
 
 **Status**: Proposed
 **Utility**: Confirmed zero `metaKey`/`ctrlKey` usage anywhere in `frontend/src/components`. Every keyboard-shortcut-shaped action here (focus search, start a new message, close the open thread) requires reaching for the mouse today. A small, deliberately narrow set of shortcuts for the highest-frequency of these actions is a real, low-risk productivity win.
@@ -379,7 +361,7 @@ Design:
 
 **Tests**: a `ChatShell` interaction test (`fireEvent.keyDown`) for each of the three shortcuts; a regression test confirming the handler ignores the bare key without a modifier (so typing "k" or "n" in a message composer is never intercepted).
 
-### 5. UI polish and consistency fixes from the 2026-07-27 HIG review
+### 4. UI polish and consistency fixes from the 2026-07-27 HIG review
 
 **Status**: Proposed
 **Utility**: A set of small, independent, low-risk fixes from the same review, each verified against current source rather than taken on the review's word. Bundled together because each is a one-file, few-line change not worth its own backlog slot individually — except the last item, which is meaningfully larger and called out as such.
@@ -400,7 +382,7 @@ Design — larger addition bundled into this same entry by explicit request, siz
 
 **Tests**: unit test for the inline discard-confirm replacing `window.confirm`; a visual/contrast check (or manual verification) confirming dark-mode error text now uses `--error-text` everywhere the grep above found; no new tests needed for the `title`/`aria-hidden` changes beyond existing accessibility test coverage, if any exists.
 
-### 6. Replace the entity/channel detail modals with persistent inspector panels
+### 5. Replace the entity/channel detail modals with persistent inspector panels
 
 **Status**: Proposed
 **Utility**: Continues the direction of the just-shipped "Consolidate the admin surface" work (`PROJECT_PLAN.md` Section 11, 2026-07-27) — replacing a stacked, dimmed-overlay modal with an in-place panel for content a user consults *while* still working in the channel, not instead of it. `EntityDetailsPanel` and `ChannelDetailsPanel` are exactly that kind of content (reference material glanced at mid-conversation) and are still full `Sheet` overlays today.
@@ -410,7 +392,7 @@ Design:
 
 - **In scope**: `EntityDetailsPanel.jsx` (`Sheet`, width 620, opened at `ChatShell.jsx:1165-1173`) and `ChannelDetailsPanel.jsx` (`Sheet`, width 420, opened at `ChatShell.jsx:1151-1164`) — both dimmed, centered overlays for content a user typically wants open *alongside* the conversation.
 - **Explicitly out of scope, correcting the review's own location list**: `ThreadSidebar.jsx` is cited in the review's Issue 3 location list alongside the two panels above, but it isn't one of the offenders — verified it's already a persistent, non-modal, border-left panel with no backdrop (`ThreadSidebar.jsx:23-31`). Nothing about it needs to change for this entry.
-- Convert both to a shared right-hand inspector rail (border-left, `var(--surface-alt)`, `min(420px, 32vw)` per the review's own reasonable sizing suggestion), reusing the sidebar-resize entry's splitter/persisted-width mechanism if that ships first.
+- Convert both to a shared right-hand inspector rail (border-left, `var(--surface-alt)`, `min(420px, 32vw)` per the review's own reasonable sizing suggestion), reusing the now-shipped resizable-sidebars entry's `Splitter.jsx`/`sidebarResize.js` (`frontend/src/components/Splitter.jsx`, `frontend/src/sidebarResize.js`) rather than a second, parallel resize mechanism.
 - **A real layout question the review doesn't address**: `ChatShell` can have `ThreadSidebar` open and `entityDetails`/`channelDetailsOpen` open at the same time today (independent, non-exclusive boolean state) — two right-rail panels would collide. Recommended resolution: make the inspector and the thread panel mutually exclusive in the same right-hand slot (opening one replaces the other; the replaced one's state, e.g. `threadRoot`, is preserved and restored when the inspector closes), matching how Slack itself only ever shows one right-rail panel. This needs a small piece of shared "what's in the right rail right now" state in `ChatShell`, not just a CSS change.
 - Add `aria-label` to both new `<aside>` elements — and, while touching this area, fix the same gap on the two `<aside>` elements that already exist and already lack one: `WorkspaceSidebar.jsx:530` and `ThreadSidebar.jsx:402`. Both are currently unlabeled landmarks, a real, currently-true VoiceOver/NVDA gap the review correctly flags (Issue 5 / Medium findings), cheap enough to fold in here rather than opening a separate entry for two lines.
 - Keep `Sheet` for everything else — create/confirm/password flows stay as-is, matching the review's own recommendation.
@@ -420,9 +402,9 @@ Design:
 
 **Risk note**: the largest of this batch of entries — a real state-coordination change in `ChatShell`, not a drop-in visual swap. Ranked below the sidebar-resize and shortcut entries for that reason.
 
-### 7. Encrypted Workspace: application-managed encryption at rest for a workspace's message content
+### 6. Encrypted Workspace: application-managed encryption at rest for a workspace's message content
 
-**Status**: Proposed. Re-ranked (2026-07-28) from #3 to #7, below the four UI/UX entries above — a deliberate call, not an oversight. This remains the single largest, highest-uncertainty entry in the backlog (new KMS/break-glass infrastructure, an entire Phase 3 left intentionally undesigned, several open implementation questions below), while entries 3-6 are broadly-felt, comparatively low-risk improvements to a surface every user touches every session; this one is opt-in and narrow to whichever workspaces need it. No dependency runs either direction between this entry and entries 1-2 or 3-6 — this reordering is a utility/risk call, not a prerequisite one.
+**Status**: Proposed. Re-ranked (2026-07-28) below the UI/UX entries above — a deliberate call, not an oversight. This remains the single largest, highest-uncertainty entry in the backlog (new KMS/break-glass infrastructure, an entire Phase 3 left intentionally undesigned, several open implementation questions below), while entries 3-5 are broadly-felt, comparatively low-risk improvements to a surface every user touches every session; this one is opt-in and narrow to whichever workspaces need it. No dependency runs either direction between this entry and entries 1-2 or 3-5 — this reordering is a utility/risk call, not a prerequisite one. (Entry 3, "Resizable and collapsible sidebars," has since shipped — see the Done section — and is no longer part of that comparison.)
 **Utility**: Today, every message in every workspace is stored as plaintext `TEXT` in `messages.content` — readable by anyone with direct Postgres access (a DBA, a stolen `pg_dump` backup file, a disk snapshot, a misconfigured replica), regardless of application-level authorization. An "Encrypted Workspace" is a workspace where that's no longer true: message content is encrypted before it ever reaches a database row, so the confidentiality of a workspace's conversations no longer depends entirely on trusting every process and person with database or backup access. For a subset of workspaces holding especially sensitive material (legal, HR, incident response, executive), this is a materially stronger guarantee than "the application enforces channel membership," which is all any workspace has today.
 **Origin**: User request (2026-07-24): "a special category of workspace where all of the messages in any channel within the workspace were encrypted before being written to the database," with an explicit requirement to retain the ability to decrypt for audit purposes via "a keystore solution," accepting "even more friction" to that process as the price of stronger at-rest confidentiality, and an open question about whether vectorizing (embedding) encrypted content for semantic search/sentiment scoring is workable.
 
@@ -559,7 +541,7 @@ This is the question asked directly, so the recommendation is stated directly: *
 - **Whether DMs/group DMs can ever be encrypted workspaces** — out of scope for this entry by construction: `DIRECT`/`GROUP_DM` channels have `workspace_id = NULL` (the same existing convention every other workspace-scoped feature in this codebase already excludes them by), so "encrypted workspace" as specified here structurally cannot reach them. A 1:1/group-DM encryption feature is a legitimately different, arguably even more sensitive design (no workspace-level DEK to anchor to) and would need its own entry if ever wanted — not folded into this one.
 - **Whether an org owner or only a system admin should be able to initiate break-glass** — this entry recommends system-admin-only (the same actor who already holds every other structural-override capability in this codebase), but an org-scoped variant (an org owner break-glassing into an encrypted workspace within their own organization) is a plausible alternative this entry doesn't rule out, just doesn't design — worth a deliberate decision before implementation, not an assumption either way.
 
-### 8. Minimal CI workflow
+### 7. Minimal CI workflow
 
 **Status**: Proposed — deprioritized below the other entries above (2026-07-26). Reassessed against how this repo actually operates today: a single `main` branch, direct pushes, no PRs, no branch protection. A push-triggered CI run can't *gate* anything in that model — it would only report `main` broken after the fact, which the existing per-commit `npm test`/e2e/live-smoke-test discipline (recorded in every `PROJECT_PLAN.md` Section 11 entry) already does synchronously and with broader coverage (that discipline includes e2e, which this entry explicitly excludes). Still worth having eventually as a backstop for the rare lapse and as groundwork for if PRs/collaborators are ever added, just not ahead of the other three.
 **Utility**: `ARCHITECTURE_REVIEW_(Claude).md` calls this "the single cheapest fix on this list" (P0 Recommendation 1) — nothing currently gates a broken build or a failing test from reaching `main`. Confirmed still true: no `.github/workflows` directory exists at all. This is the complementary half of "the deploy loop" entry (already shipped): that entry stops a *stale* container from being deployed; this stops a *broken* one from ever being deployable in the first place.
@@ -575,6 +557,16 @@ Design:
 - **Tests**: none needed for the workflow file itself; its "test" is that it actually goes green on the PR that introduces it, and red on a PR that deliberately breaks a test (worth confirming once during implementation, then reverting the deliberate break).
 
 ## Done
+
+### Resizable and collapsible workspace/thread sidebars, with persisted widths
+
+**Status**: Done — see `PROJECT_PLAN.md` Section 11, "Resizable workspace and thread sidebars" (2026-07-28). Originally ranked entry 3.
+
+Implemented as Phase 1 scoped it: resize only, both sidebars, no icon-rail collapse mode for the workspace sidebar (explicitly deferred in the original design as separate, real work — a follow-up entry if still wanted, not shipped here). New `frontend/src/sidebarResize.js` (pure clamp/parse helpers, mirroring `ThemeContext.jsx`'s own DOM-free split) and `frontend/src/components/Splitter.jsx` (shared drag/keyboard-resize handle, one `invert` prop covering both splitters' opposite geometry) back a `width` prop on both `WorkspaceSidebar.jsx` and `ThreadSidebar.jsx`, owned and persisted (`localStorage`) by `ChatShell.jsx`. One real bug caught before it shipped: both sidebars' old `minWidth` matched their hardcoded `width`, which would have silently blocked the resize at the CSS layer regardless of what the new JS state said — fixed to `minWidth: 0` alongside the new prop.
+
+**Tests**: `frontend/src/sidebarResize.test.js` (new, 10 cases) for the clamp/parse logic; two new e2e tests (`resizable sidebars` describe block, `frontend/e2e/workflows.spec.js`) dragging each splitter and confirming the resulting width survives a reload.
+
+**Verification**: full 157-test frontend unit suite and a clean production build. E2e verified against a locally-rebuilt frontend pointed at the local backend (not the real deployed site, which didn't have this change yet) — both new tests plus a 17-test regression sweep of layout-adjacent areas (core messaging, accessibility, menus, Sheet, virtual scrolling, theme toggle) all passed clean. The frontend container was rebuilt back to its normal real-domain-pointed image afterward.
 
 ### Consolidate the admin surface: tabbed panels instead of stacked modals, and a persistent entry point
 

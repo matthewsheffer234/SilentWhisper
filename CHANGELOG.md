@@ -16,6 +16,22 @@ Each entry lists the migrations and new env vars it introduces, so an operator c
 
 **Cadence, stated explicitly rather than left to guesswork**: in practice this means roughly one release per shipped commit that touches `backend/`, `frontend/`, `scripts/`, or `database/migrations/` — see `v1.1.0` and `v1.1.1` as the pattern, two releases the same day for two separate commits, not batched into a periodic drop. Small, tightly-scoped releases keep each individual upgrade's blast radius easy to reason about and roll back; batching several unrelated changes into one version number just makes `scripts/airgap-upgrade.sh`'s all-or-nothing bring-up riskier for no real benefit. `CLAUDE.md`'s Rules of Engagement (`PROJECT_PLAN.md` Section 9) makes this a standing requirement, not a one-off — every such commit gets its `CHANGELOG.md` entry and version bump in the same commit, not a follow-up step.
 
+## [1.13.0] — 2026-07-28
+
+**Migrations**: none. **New env vars**: none.
+
+Implemented `FEATURE_REQUEST.md` backlog entry 3, "Resizable and collapsible workspace/thread sidebars, with persisted widths" — Phase 1 as scoped there (resize only; the workspace sidebar's icon-rail collapse mode remains a deferred follow-up, not shipped here).
+
+- Both the workspace sidebar (`WorkspaceSidebar.jsx`) and the thread panel (`ThreadSidebar.jsx`), previously hardcoded to 260px/320px with no way to resize, now have a draggable, keyboard-accessible splitter (`frontend/src/components/Splitter.jsx`) between them and the main content, clamped to 220–420px and 280–520px respectively.
+- Widths persist across reloads via `localStorage`, read/clamped by new pure helpers in `frontend/src/sidebarResize.js`.
+- A real bug caught before shipping: both sidebars' old CSS `minWidth` matched their hardcoded width, which would have silently prevented the panel from actually shrinking below its original size regardless of the new resize state — fixed alongside the new `width` prop.
+
+Full 157-test frontend unit suite (10 new) and a clean production build pass. E2e verified against a locally-rebuilt frontend pointed at the local backend (this change wasn't deployed to the real site yet) — 2 new tests plus a 17-test layout-adjacent regression sweep, all clean.
+
+See `PROJECT_PLAN.md` Section 11, "Resizable workspace and thread sidebars" (2026-07-28), for full detail.
+
+Full diff: `git diff v1.12.1..v1.13.0`.
+
 ## [1.12.1] — 2026-07-27
 
 **Migrations**: none. **New env vars**: none.

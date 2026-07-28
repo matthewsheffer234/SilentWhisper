@@ -103,9 +103,16 @@ function KnowledgeExplorerTrigger({ onOpenKnowledgeExplorer }) {
 }
 
 const styles = {
+  // `width` is overridden per-instance by the `width` prop below (default
+  // here only covers the rare direct-render case, e.g. this file's own
+  // tests, that don't pass one) — FEATURE_REQUEST.md's "resizable and
+  // collapsible sidebars" entry. `minWidth: 0` (not `width`'s own value)
+  // stops this flex child from refusing to shrink below its intrinsic
+  // content width when a drag briefly puts it near the resize floor.
   sidebar: {
     width: 260,
-    minWidth: 260,
+    minWidth: 0,
+    flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
     background: 'var(--surface-alt)',
@@ -331,6 +338,7 @@ function activateOnKey(handler) {
 // this only re-renders when something it actually cares about changes, not
 // on every presence tick incidentally passed down from ChatShell.
 function WorkspaceSidebar({
+  width = 260,
   user,
   workspaces,
   selectedWorkspaceId,
@@ -527,7 +535,7 @@ function WorkspaceSidebar({
   ];
 
   return (
-    <aside style={styles.sidebar}>
+    <aside style={{ ...styles.sidebar, width }}>
       <div style={styles.userRow}>
         <span style={styles.username}>{user?.displayName || user?.username}</span>
         <UserPresenceBadge userId={user?.id} fallback="online" />

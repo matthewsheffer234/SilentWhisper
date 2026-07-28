@@ -460,6 +460,85 @@ test.describe('multi-line composer (Shift+Enter)', () => {
   });
 });
 
+test.describe('resizable sidebars', () => {
+  // FEATURE_REQUEST.md's "resizable and collapsible sidebars" entry:
+  // dragging each splitter resizes its sidebar, and the resulting width
+  // survives a reload (localStorage persistence, ChatShell.jsx). This app
+  // has exactly two `<aside>` elements — WorkspaceSidebar's (DOM-first) and
+  // ThreadSidebar's (DOM-last, and only present at all once a thread is
+  // open) — so `.first()`/`.last()` is unambiguous without needing an
+  // aria-label on either aside itself (a separate, already-flagged gap —
+  // see the "replace the entity/channel detail modals" backlog entry).
+  test('dragging the workspace-sidebar splitter resizes it, and the width survives a reload', async ({ page }) => {
+    const seeded = await seedUserWithChannel('resizews');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    const sidebar = page.locator('aside').first();
+    const splitter = page.locator('[role="separator"][aria-label="Resize workspace sidebar"]');
+    await expect(splitter).toBeVisible();
+
+    const initialBox = await sidebar.boundingBox();
+    const splitterBox = await splitter.boundingBox();
+
+    // Dragging the workspace sidebar's splitter right grows it (it sits on
+    // the sidebar's right edge) — invert=false in Splitter.jsx.
+    await page.mouse.move(splitterBox.x + splitterBox.width / 2, splitterBox.y + splitterBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(splitterBox.x + 60, splitterBox.y + splitterBox.height / 2);
+    await page.mouse.up();
+
+    const resizedBox = await sidebar.boundingBox();
+    expect(resizedBox.width).toBeGreaterThan(initialBox.width + 40);
+
+    await page.reload();
+    await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
+    const afterReloadBox = await page.locator('aside').first().boundingBox();
+    expect(Math.round(afterReloadBox.width)).toBe(Math.round(resizedBox.width));
+  });
+
+  test('dragging the thread-panel splitter resizes it (grows when dragged left), and the width survives a reload', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('resizethread');
+    await loginViaUi(page, seeded.username, seeded.password);
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
+
+    const composer = page.locator('textarea[placeholder^="Message #"]');
+    await composer.waitFor({ timeout: 10_000 });
+    await composer.fill('a message to thread from');
+    await composer.press('Enter');
+    await page.click('button:has-text("Reply in thread")');
+
+    const threadSidebar = page.locator('aside').last();
+    const splitter = page.locator('[role="separator"][aria-label="Resize thread panel"]');
+    await expect(splitter).toBeVisible();
+
+    const initialBox = await threadSidebar.boundingBox();
+    const splitterBox = await splitter.boundingBox();
+
+    // Thread panel's splitter is inverted (Splitter.jsx invert=true): it
+    // sits on the panel's left edge, so dragging left grows it.
+    await page.mouse.move(splitterBox.x + splitterBox.width / 2, splitterBox.y + splitterBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(splitterBox.x - 60, splitterBox.y + splitterBox.height / 2);
+    await page.mouse.up();
+
+    const resizedBox = await threadSidebar.boundingBox();
+    expect(resizedBox.width).toBeGreaterThan(initialBox.width + 40);
+
+    await page.reload();
+    await page.waitForSelector('text=Workspaces', { timeout: 15_000 });
+    // The thread panel itself doesn't reopen automatically on reload (only
+    // its width persists) — reopen it and confirm the persisted width.
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
+    await page.click('button:has-text("Reply in thread")');
+    const afterReloadBox = await page.locator('aside').last().boundingBox();
+    expect(Math.round(afterReloadBox.width)).toBe(Math.round(resizedBox.width));
+  });
+});
+
 test.describe('markdown formatting', () => {
   // FEATURE_REQUEST.md's Basic Markdown formatting entry. The tokenizer's
   // own logic is covered by frontend/src/markdown.test.jsx's unit tests
