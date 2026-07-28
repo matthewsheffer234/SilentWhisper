@@ -537,6 +537,66 @@ test.describe('resizable sidebars', () => {
     const afterReloadBox = await page.locator('aside').last().boundingBox();
     expect(Math.round(afterReloadBox.width)).toBe(Math.round(resizedBox.width));
   });
+
+  // Drag is covered above; these two cover the splitter's other input
+  // method (Splitter.jsx's handleKeyDown), previously untested — a plain
+  // .focus() + arrow-key press, no mouse involved at all.
+  test('the workspace-sidebar splitter is keyboard-resizable: ArrowRight grows it, ArrowLeft shrinks it, in 16px steps', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('resizewskbd');
+    await loginViaUi(page, seeded.username, seeded.password);
+
+    const sidebar = page.locator('aside').first();
+    const splitter = page.locator('[role="separator"][aria-label="Resize workspace sidebar"]');
+    await splitter.focus();
+    await expect(splitter).toBeFocused();
+
+    const initialBox = await sidebar.boundingBox();
+    expect(await splitter.getAttribute('aria-valuenow')).toBe(String(Math.round(initialBox.width)));
+
+    await page.keyboard.press('ArrowRight');
+    const afterRightBox = await sidebar.boundingBox();
+    expect(Math.round(afterRightBox.width)).toBe(Math.round(initialBox.width) + 16);
+    // aria-valuenow tracks the live value, not just the visual width.
+    expect(await splitter.getAttribute('aria-valuenow')).toBe(String(Math.round(afterRightBox.width)));
+
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    const afterLeftBox = await sidebar.boundingBox();
+    expect(Math.round(afterLeftBox.width)).toBe(Math.round(initialBox.width) - 16);
+  });
+
+  test('the thread-panel splitter is keyboard-resizable in the inverted direction: ArrowLeft grows it, ArrowRight shrinks it', async ({
+    page,
+  }) => {
+    const seeded = await seedUserWithChannel('resizethreadkbd');
+    await loginViaUi(page, seeded.username, seeded.password);
+    await selectWorkspaceRow(page, seeded.workspace.name);
+    await selectChannelRow(page, 'general');
+
+    const composer = page.locator('textarea[placeholder^="Message #"]');
+    await composer.waitFor({ timeout: 10_000 });
+    await composer.fill('a message to thread from, for keyboard resize');
+    await composer.press('Enter');
+    await page.click('button:has-text("Reply in thread")');
+
+    const threadSidebar = page.locator('aside').last();
+    const splitter = page.locator('[role="separator"][aria-label="Resize thread panel"]');
+    await splitter.focus();
+    await expect(splitter).toBeFocused();
+
+    const initialBox = await threadSidebar.boundingBox();
+
+    await page.keyboard.press('ArrowLeft');
+    const afterLeftBox = await threadSidebar.boundingBox();
+    expect(Math.round(afterLeftBox.width)).toBe(Math.round(initialBox.width) + 16);
+
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    const afterRightBox = await threadSidebar.boundingBox();
+    expect(Math.round(afterRightBox.width)).toBe(Math.round(initialBox.width) - 16);
+  });
 });
 
 test.describe('markdown formatting', () => {
